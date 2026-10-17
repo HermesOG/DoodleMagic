@@ -2,7 +2,7 @@ import { BoxGeometry, Mesh, Scene, Vector3, type BufferGeometry, type Material a
 import type { Material, RenderBox } from "@doodlemagic/sim";
 import "./canvas.css";
 import { buildArenaMeshes } from "./arenaMeshes";
-import { createFpsMeter } from "./fpsMeter";
+import { FPS_METER_MAX_FRAME_MS, createFpsMeter } from "./fpsMeter";
 import { createInkMaterial } from "./gbuffer";
 import { INK, SUN_DIR } from "./palette";
 import { createAutoQuality, isPresetId } from "./quality";
@@ -115,8 +115,7 @@ export function mountRenderTest(root: HTMLElement): () => void {
   const world = new Scene();
   world.add(buildArenaMeshes(pitch === null ? TEST_BOXES : [...TEST_BOXES, FAR_FLOOR]));
   const overlay = overlayProbe();
-  const onResize = (): void => renderer.resize();
-  window.addEventListener("resize", onResize);
+  const unwatchSize = renderer.watchSize();
 
   const auto = isPresetId(fixed) ? null : createAutoQuality();
   const meter = createFpsMeter();
@@ -141,7 +140,8 @@ export function mountRenderTest(root: HTMLElement): () => void {
       renderer.camera.lookAt(0, 0.5, 0);
     }
     renderer.render(world, overlay);
-    meter.push(raw);
+    // в счётчик — не длиннее 250 мс: после фоновой вкладки иначе полсекунды «FPS 0 · 13732 мс»
+    meter.push(Math.min(raw, FPS_METER_MAX_FRAME_MS));
     const next = auto?.push(raw);
     if (next) renderer.setPreset(next);
     corner.textContent =
@@ -163,7 +163,7 @@ export function mountRenderTest(root: HTMLElement): () => void {
   return () => {
     stopped = true;
     cancelAnimationFrame(raf);
-    window.removeEventListener("resize", onResize);
+    unwatchSize();
     disposeScene(world);
     disposeScene(overlay);
     renderer.dispose();

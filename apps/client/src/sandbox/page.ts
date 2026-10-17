@@ -6,14 +6,14 @@ import "./sandbox.css";
 import { createMittens } from "../hands/mittens";
 import { createHandRig, updateHandRig } from "../hands/motion";
 import { buildArenaMeshes } from "../render/arenaMeshes";
-import { createFpsMeter } from "../render/fpsMeter";
+import { FPS_METER_MAX_FRAME_MS, createFpsMeter } from "../render/fpsMeter";
 import { createAutoQuality, type AutoQuality } from "../render/quality";
 import { StyleRenderer } from "../render/styleRenderer";
 import { KEYS, applyLook, buildInput, type Look } from "./controls";
 import { advanceClock } from "./fixedStep";
-import { createHud } from "./hud";
+import { CONTEXT_LOST_MESSAGE, createHud } from "./hud";
 import { createInput } from "./input";
-import { nextSpawnIndex, shouldRespawn, spawnPlayer } from "./respawn";
+import { nextSpawnIndex, respawnPlayer, shouldRespawn, spawnPlayer } from "./respawn";
 import { loadSettings, saveSettings } from "./settings";
 
 /** Песочница: арена, FPS-контроллер на sim с тиком 60 Гц, рендер «Тушь и свет», руки-«варежки». */
@@ -52,15 +52,34 @@ export function mountSandbox(root: HTMLElement): void {
   let auto: AutoQuality | null = settings.quality === "auto" ? createAutoQuality("high") : null;
   const meter = createFpsMeter();
 
-  window.addEventListener("resize", () => renderer.resize());
+  // холст и буфер кадра — по ResizeObserver на холсте: размер окна без события resize тоже ловится
+  renderer.watchSize();
+  // видеокарта сбросила контекст (драйвер, сон ноутбука): preventDefault разрешает восстановление, мышь отпускаем
+  hud.canvas.addEventListener("webglcontextlost", (e) => {
+    e.preventDefault();
+    if (document.pointerLockElement) document.exitPointerLock();
+    hud.setLoading(true, CONTEXT_LOST_MESSAGE);
+  });
+  hud.canvas.addEventListener("webglcontextrestored", () => hud.setLoading(false));
   input.onLockChange((locked) => hud.setLocked(locked));
+  input.onLockError(() => hud.showLockRefused());
   input.onPress(KEYS.debug, () => hud.toggleDebug());
-  hud.onPlay(() => input.requestLock());
+  hud.onPlay(() => input.requestLock(settings.rawMouse));
   hud.onQuality((q) => {
     settings.quality = q;
     saveSettings(settings);
-    auto = q === "auto" ? createAutoQuality(renderer.preset.id) : null;
-    if (q !== "auto") renderer.setPreset(q);
+    if (q === "auto") {
+      // подбор умеет только спускаться: после ручного пресета начинаем снова с высокого
+      renderer.setPreset("high");
+      auto = createAutoQuality("high");
+    } else {
+      auto = null;
+      renderer.setPreset(q);
+    }
+  });
+  hud.onRawMouse((raw) => {
+    settings.rawMouse = raw;
+    saveSettings(settings);
   });
   hud.onSensitivity((x) => {
     settings.sensitivity = x;
@@ -74,7 +93,7 @@ export function mountSandbox(root: HTMLElement): void {
     last = now;
 
     const mouse = input.takeMouse();
-    look = applyLook(look, mouse.dx, mouse.dy, settings.sensitivity);
+    look = applyLook(look, mouse.dx, mouse.dy, settings.sensitivity, rawMs);
     const keys = input.locked ? input.down : new Set<string>();
 
     // после зависания advanceClock не догоняет: больше 5 тиков за кадр не делает
@@ -86,7 +105,8 @@ export function mountSandbox(root: HTMLElement): void {
       if (cur.landVel < 0) landVel = Math.min(landVel, cur.landVel);
       if (shouldRespawn(world, cur, arena)) {
         spawnIndex = nextSpawnIndex(spawnIndex, arena.spawns.length);
-        cur = spawnPlayer(arena, spawnIndex);
+        // зажатый с прыжка пробел не должен подбросить мага сразу после появления
+        cur = respawnPlayer(arena, spawnIndex, cur);
         prev = cur;
         look = { yaw: cur.yaw, pitch: 0 };
       }
@@ -119,8 +139,9 @@ export function mountSandbox(root: HTMLElement): void {
 
     renderer.render(scene, mittens.scene);
 
-    // сырое время кадра — в счётчик и автовыбор (длинные заминки он отбрасывает сам)
-    meter.push(rawMs);
+    // в счётчик — не длиннее 250 мс (иначе после фоновой вкладки «FPS 0 · 13732 мс»); в автовыбор — сырое
+    // время кадра, длинные заминки он отбрасывает сам
+    meter.push(Math.min(rawMs, FPS_METER_MAX_FRAME_MS));
     const next = auto?.push(rawMs);
     if (next) renderer.setPreset(next);
     if (hud.debugVisible) {

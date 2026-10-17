@@ -6,10 +6,15 @@ export type QualityChoice = "auto" | PresetId;
 export interface Settings {
   sensitivity: number;
   quality: QualityChoice;
+  /**
+   * Сырой ввод мыши (Pointer Lock с unadjustedMovement): без ускорения ОС. По умолчанию выключен — на тачпаде
+   * ноутбука взгляд без ускорения очень медленный, а часть платформ такой захват не даёт вовсе.
+   */
+  rawMouse: boolean;
 }
 
 const KEY = "doodlemagic_settings";
-export const DEFAULT_SETTINGS: Settings = { sensitivity: 1, quality: "auto" };
+export const DEFAULT_SETTINGS: Settings = { sensitivity: 1, quality: "auto", rawMouse: false };
 
 /** Настройки из localStorage: всё непонятное заменяется значением по умолчанию. */
 export function parseSettings(raw: string | null): Settings {
@@ -22,7 +27,8 @@ export function parseSettings(raw: string | null): Settings {
   const o = typeof x === "object" && x !== null ? (x as Record<string, unknown>) : {};
   const quality = o.quality === "auto" || isPresetId(o.quality) ? o.quality : DEFAULT_SETTINGS.quality;
   const sensitivity = typeof o.sensitivity === "number" ? clampSensitivity(o.sensitivity) : DEFAULT_SETTINGS.sensitivity;
-  return { sensitivity, quality };
+  const rawMouse = o.rawMouse === true;
+  return { sensitivity, quality, rawMouse };
 }
 
 export function loadSettings(): Settings {

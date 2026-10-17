@@ -15,3 +15,11 @@ export function spawnPlayer(arena: ArenaData, index: number): PlayerState {
   if (!s) throw new Error("arena has no spawns");
   return createPlayer(s.pos, s.yaw);
 }
+
+/**
+ * Появление после падения. jumpHeld переносится из прежнего состояния: пробел, зажатый с прыжка через всё
+ * падение, иначе считался бы новым нажатием, и маг подпрыгнул бы сразу после приземления на точке появления.
+ */
+export function respawnPlayer(arena: ArenaData, index: number, prev: PlayerState): PlayerState {
+  return { ...spawnPlayer(arena, index), jumpHeld: prev.jumpHeld };
+}

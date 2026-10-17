@@ -82,6 +82,23 @@ describe.each(arenas)("gallery with the real physics (%s)", (_name, arena) => {
     for (const a of arena.spawns) for (const b of arena.spawns) if (a !== b) expect(lineOfSight(world, eye(a.pos), eye(b.pos))).toBe(false);
   });
 
+  // положительный контроль: тот же луч видит там, где между точками пусто, — иначе тест выше прошёл бы и
+  // у луча, который не видит никогда
+  it("lets the grid raycast see where nothing is in between", () => {
+    const eye = (p: Vec3) => ({ x: p.x, y: p.y + EYE_HEIGHT, z: p.z });
+    for (const sp of arena.spawns) {
+      // в своей келье: на 0,9 м ближе к двору, на высоте глаз
+      const inCell = { ...eye(sp.pos), z: sp.pos.z - Math.sign(sp.pos.z) * 0.9 };
+      expect(isFree(world, { min: { ...inCell, y: inCell.y - 0.1 }, max: { ...inCell, y: inCell.y + 0.1 } })).toBe(true);
+      expect(lineOfSight(world, eye(sp.pos), inCell)).toBe(true);
+    }
+    // вдоль дорожки галереи на высоте глаз: 20 м без единой преграды
+    const deckEye = GALLERY.deckY + EYE_HEIGHT;
+    expect(lineOfSight(world, { x: -10, y: deckEye, z: 0 }, { x: 10, y: deckEye, z: 0 })).toBe(true);
+    // и та же линия, опущенная в толщу стены галереи, — закрыта
+    expect(lineOfSight(world, { x: -10, y: GALLERY.deckY - 0.5, z: 0 }, { x: 10, y: GALLERY.deckY - 0.5, z: 0 })).toBe(false);
+  });
+
   it("connects every spawn on foot with the rune platform and the gallery deck", () => {
     const deck = (p: Vec3) => Math.abs(p.y - GALLERY.deckY) < 1e-6 && Math.abs(p.z) < 1.5;
     const rune = (p: Vec3) => Math.abs(p.y) < 1e-6 && Math.abs(p.x) <= 1.5 && Math.abs(p.z) <= 1.5;
@@ -92,14 +109,30 @@ describe.each(arenas)("gallery with the real physics (%s)", (_name, arena) => {
     for (const sp of arena.spawns) expect(keys.has(`${Math.round(sp.pos.x * 2) / 2},${Math.round(sp.pos.z * 2) / 2}`)).toBe(true);
   });
 
-  it("climbs the stairs to the gallery", () => {
-    const from = { x: -13, y: 0, z: -8 };
-    let maxY = 0;
-    run(world, createPlayer(from), { ...NO_INPUT, moveZ: 1, yaw: Math.PI }, 120, (s) => {
-      if (s.onGround) maxY = Math.max(maxY, s.body.pos.y);
+  // старт — из данных: лестницы ищутся по тегу, игрок встаёт на пол в 1,5 м перед нижней ступенью
+  // посередине её ширины и идёт к верхней; что точка свободна и это пол — проверяется
+  for (const side of [-1, 1] as const) {
+    it(`climbs the stairs to the gallery (z ${side < 0 ? "<" : ">"} 0)`, () => {
+      const steps = arena.colliders.filter((c) => c.tag === "stairs" && Math.sign(c.box.min.z + c.box.max.z) === side);
+      expect(steps.length).toBeGreaterThan(1);
+      const byTop = [...steps].sort((a, b) => a.box.max.y - b.box.max.y);
+      const centre = (c: (typeof steps)[number]): Vec3 => ({ x: (c.box.min.x + c.box.max.x) / 2, y: 0, z: (c.box.min.z + c.box.max.z) / 2 });
+      const low = centre(byTop[0]!);
+      const high = centre(byTop.at(-1)!);
+      const dir = Math.sign(high.z - low.z);
+      const bottomEdge = dir > 0 ? byTop[0]!.box.min.z : byTop[0]!.box.max.z;
+      const from = { x: low.x, y: 0, z: bottomEdge - dir * 1.5 };
+      const start = createPlayer(from);
+      expect(isFree(world, bodyBox(start.body))).toBe(true);
+      expect(groundBelow(world, { ...from, y: 0.5 }, 2)).toBeCloseTo(0, 6);
+
+      let maxY = 0;
+      run(world, start, { ...NO_INPUT, moveZ: 1, yaw: yawTowards(from, high) }, 120, (s) => {
+        if (s.onGround) maxY = Math.max(maxY, s.body.pos.y);
+      });
+      expect(maxY).toBeCloseTo(GALLERY.deckY, 6);
     });
-    expect(maxY).toBeCloseTo(GALLERY.deckY, 6);
-  });
+  }
 });
 
 describe("gallery traversal (full)", () => {

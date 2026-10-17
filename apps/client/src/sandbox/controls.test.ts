@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { BASE_SENSITIVITY, KEYS, MAX_MOUSE_STEP_PX, applyLook, buildInput, clampSensitivity, moveAxes } from "./controls";
+import {
+  BASE_SENSITIVITY,
+  KEYS,
+  MAX_MOUSE_SPEED_PX_PER_MS,
+  MAX_MOUSE_STEP_PX,
+  applyLook,
+  buildInput,
+  clampSensitivity,
+  lookRate,
+  moveAxes,
+} from "./controls";
 
 describe("moveAxes", () => {
   it("maps WASD by physical key codes", () => {
@@ -30,6 +40,49 @@ describe("applyLook", () => {
   it("drops pointer-lock spikes", () => {
     const l = { yaw: 0.3, pitch: 0.1 };
     expect(applyLook(l, MAX_MOUSE_STEP_PX + 1, 0, 1)).toBe(l);
+  });
+
+  // предел зависит от времени кадра: за долгий кадр рука честно проходит больше пикселей
+  it("keeps a fast real turn at a long frame and at 60 FPS", () => {
+    const l = { yaw: 0, pitch: 0 };
+    // 30 FPS, 18 px/мс: прежний предел в 300 px на кадр выбрасывал такой поворот целиком
+    expect(applyLook(l, 600, 0, 0.2, 1000 / 30).yaw).toBeCloseTo(-600 * BASE_SENSITIVITY * 0.2, 9);
+    // заминка 100 мс: быстрый поворот 15 px/мс не теряется
+    expect(applyLook(l, 1500, -400, 0.2, 100).yaw).toBeCloseTo(-1500 * BASE_SENSITIVITY * 0.2, 9);
+    // 60 FPS, 30 px/мс (тачпад с ускорением ОС, мышь 1000 DPI на 0,8 м/с)
+    expect(applyLook(l, 500, 0, 1, 1000 / 60).yaw).toBeCloseTo(-500 * BASE_SENSITIVITY, 9);
+  });
+
+  it("drops a jump faster than any hand at any frame time", () => {
+    const l = { yaw: 0.3, pitch: 0.1 };
+    const frames = [1000 / 144, 1000 / 60, 1000 / 30, 100];
+    for (const ms of frames) {
+      const px = Math.max(MAX_MOUSE_STEP_PX, MAX_MOUSE_SPEED_PX_PER_MS * ms) * 1.5;
+      expect(applyLook(l, px, 0, 1, ms)).toBe(l);
+      expect(applyLook(l, 0, -px, 1, ms)).toBe(l);
+    }
+    // чуть ниже предела — уже настоящее движение
+    expect(applyLook(l, MAX_MOUSE_SPEED_PX_PER_MS * 100 - 1, 0, 1, 100)).not.toBe(l);
+  });
+
+  it("falls back to the per-frame limit when the frame time is not a number", () => {
+    const l = { yaw: 0.3, pitch: 0.1 };
+    for (const ms of [Number.NaN, Number.POSITIVE_INFINITY, -50]) expect(applyLook(l, MAX_MOUSE_STEP_PX + 1, 0, 1, ms)).toBe(l);
+  });
+});
+
+describe("lookRate", () => {
+  it("is the applied look change per second, yaw across ±π included", () => {
+    const r = lookRate({ yaw: 0.1, pitch: 0 }, { yaw: 0.05, pitch: 0.02 }, 0.01);
+    expect(r.yaw).toBeCloseTo(-5, 9);
+    expect(r.pitch).toBeCloseTo(2, 9);
+    // через шов ±π: короткий путь, а не почти полный оборот
+    const wrap = lookRate({ yaw: Math.PI - 0.01, pitch: 0 }, { yaw: -Math.PI + 0.01, pitch: 0 }, 0.02);
+    expect(wrap.yaw).toBeCloseTo(1, 9);
+  });
+
+  it("is zero for an empty or broken frame time", () => {
+    for (const dt of [0, -1, Number.NaN]) expect(lookRate({ yaw: 0, pitch: 0 }, { yaw: 1, pitch: 1 }, dt)).toEqual({ yaw: 0, pitch: 0 });
   });
 });
 

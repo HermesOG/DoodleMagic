@@ -23,8 +23,18 @@
   background: rgba(242, 237, 224, 0.55);
   cursor: pointer;
 }
+/*
+ * Карточка меню всегда светлая (бумага). Глобальные стили style.css берут цвета из переменных :root, а в тёмной
+ * теме ОС они тёмные: здесь переменные переопределены светлыми, а ползунок и флажок сброшены от общего
+ * input { padding, border, background, width: 100% } — иначе в тёмной теме внутри светлой карточки тёмная рамка.
+ */
 .sb-card {
   color-scheme: light;
+  --bg: #f6f3ea;
+  --fg: #1d1b16;
+  --muted: #6b665a;
+  --card: #fffdf7;
+  --line: #d9d3c3;
   width: min(420px, calc(100vw - 32px));
   padding: 20px;
   border: 1px solid #d9d3c3;
@@ -53,6 +63,40 @@
   background: #f6f3ea;
   color: #1d1b16;
   border-color: #d9d3c3;
+}
+.sb-card input[type="range"] {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: #1d1b16;
+}
+.sb-card .sb-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.sb-card input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: #1d1b16;
+  cursor: pointer;
+}
+.sb-lock-hint {
+  margin: 8px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.sb-host-link {
+  margin-left: 6px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .sb-muted {
   color: #6b665a;
