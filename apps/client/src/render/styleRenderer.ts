@@ -42,8 +42,12 @@ export class StyleRenderer {
   private readonly postScene = new Scene();
   private readonly postCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private readonly size = new Vector2();
+  private readonly canvas: HTMLCanvasElement;
+  /** Последний применённый размер (CSS-пиксели) и pixelRatio: resize с теми же числами ничего не делает. */
+  private applied = { w: 0, h: 0, pixelRatio: 0 };
 
   constructor(canvas: HTMLCanvasElement, preset: PresetId) {
+    this.canvas = canvas;
     this.preset = PRESETS[preset];
     this.gl = new WebGLRenderer({ canvas, antialias: false, depth: false, stencil: false, powerPreference: "high-performance" });
     this.gl.autoClear = false;
@@ -75,13 +79,19 @@ export class StyleRenderer {
     this.resize();
   }
 
-  /** Подгоняет холст, G-буфер и камеры под окно и пресет. Вызывать на `resize`. */
-  resize(): void {
-    const w = Math.max(1, window.innerWidth);
-    const h = Math.max(1, window.innerHeight);
+  /**
+   * Подгоняет буфер кадра, G-буфер, камеры мира и рук и стилевой проход под размер холста на экране и пресет.
+   * Размер на экране задаёт CSS (холст во весь вьюпорт), а рендер стиль холста не трогает: так холст не может
+   * разойтись с окном и обрезать низ кадра. Без аргументов берёт размер холста (или окна, пока холст не размечен).
+   */
+  resize(cssWidth?: number, cssHeight?: number): void {
+    const w = Math.max(1, Math.round(cssWidth ?? (this.canvas.clientWidth || window.innerWidth)));
+    const h = Math.max(1, Math.round(cssHeight ?? (this.canvas.clientHeight || window.innerHeight)));
     const pixelRatio = pixelRatioFor(this.preset, window.devicePixelRatio);
+    if (w === this.applied.w && h === this.applied.h && pixelRatio === this.applied.pixelRatio) return;
+    this.applied = { w, h, pixelRatio };
     this.gl.setPixelRatio(pixelRatio);
-    this.gl.setSize(w, h, true);
+    this.gl.setSize(w, h, false);
     this.gl.getDrawingBufferSize(this.size);
     this.target.setSize(this.size.x, this.size.y);
     for (const cam of [this.camera, this.overlayCamera]) {
@@ -93,6 +103,41 @@ export class StyleRenderer {
     // узоры бумаги и сухой кисти — в CSS-пикселях; радиус контура — целые тексели по высоте кадра
     u.uCssPerTexel!.value = 1 / pixelRatio;
     u.uLineRadius!.value = lineRadiusFor(this.size.y);
+  }
+
+  /**
+   * Следит за размером холста (ResizeObserver: окно, панель, масштаб страницы), за окном и за devicePixelRatio
+   * (перенос окна на монитор с другим масштабом) и подгоняет под них всё, что делает resize. Возвращает отписку.
+   */
+  watchSize(): () => void {
+    const onResize = (): void => this.resize();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver((entries) => {
+            const box = entries[entries.length - 1]?.contentRect;
+            if (box) this.resize(box.width, box.height);
+          });
+    observer?.observe(this.canvas);
+    window.addEventListener("resize", onResize);
+    // смена devicePixelRatio при том же CSS-размере не вызывает ни resize, ни ResizeObserver
+    let dprQuery: MediaQueryList | null = null;
+    const onDpr = (): void => {
+      this.resize();
+      watchDpr();
+    };
+    const watchDpr = (): void => {
+      dprQuery?.removeEventListener("change", onDpr);
+      dprQuery = typeof window.matchMedia === "function" ? window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`) : null;
+      dprQuery?.addEventListener("change", onDpr);
+    };
+    watchDpr();
+    this.resize();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", onResize);
+      dprQuery?.removeEventListener("change", onDpr);
+    };
   }
 
   /** Кадр: мир и (необязательно) руки в G-буфер, потом стилевой проход на экран. */

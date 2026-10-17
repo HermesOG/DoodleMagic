@@ -6,9 +6,15 @@ export interface InputDevice {
   readonly locked: boolean;
   /** Сдвиг мыши с прошлого вызова, пиксели. */
   takeMouse(): { dx: number; dy: number };
-  requestLock(): void;
+  /**
+   * Захват мыши. По умолчанию обычный (с ускорением ОС, как у курсора: на тачпаде иначе взгляд очень медленный);
+   * raw — сырой ввод (unadjustedMovement), а где браузер его не даёт — снова обычный захват.
+   */
+  requestLock(raw: boolean): void;
   onLockChange(cb: (locked: boolean) => void): void;
-  /** Нажатие клавиши-переключателя (работает и без захвата мыши). */
+  /** Браузер отказал в захвате (Chrome — около секунды после выхода по Esc). */
+  onLockError(cb: () => void): void;
+  /** Нажатие клавиши-переключателя (работает и без захвата мыши), без автоповтора. */
   onPress(code: string, cb: () => void): void;
   dispose(): void;
 }
@@ -19,15 +25,17 @@ export function createInput(canvas: HTMLCanvasElement): InputDevice {
   let dy = 0;
   let locked = false;
   const lockListeners: ((locked: boolean) => void)[] = [];
+  const errorListeners: (() => void)[] = [];
   const pressListeners = new Map<string, () => void>();
 
   const onKeyDown = (e: KeyboardEvent): void => {
     // Ctrl, Alt и Cmd оставляем браузеру и системе: ни одна игровая клавиша с ними не работает
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (locked && GAME_KEYS.has(e.code)) e.preventDefault();
-    if (e.repeat) return;
+    // автоповтор тоже кладёт клавишу: зажатая до захвата мыши или до возврата фокуса W иначе не вела бы мага,
+    // пока её не нажмут заново
     if (locked) down.add(e.code);
-    pressListeners.get(e.code)?.();
+    if (!e.repeat) pressListeners.get(e.code)?.();
   };
   const onKeyUp = (e: KeyboardEvent): void => {
     down.delete(e.code);
@@ -40,15 +48,32 @@ export function createInput(canvas: HTMLCanvasElement): InputDevice {
   const onLockChange = (): void => {
     locked = document.pointerLockElement === canvas;
     if (!locked) down.clear();
+    // сдвиг, накопленный вокруг смены захвата (возврат курсора в центр), взгляду не нужен
+    dx = 0;
+    dy = 0;
     for (const cb of lockListeners) cb(locked);
   };
+  const onLockError = (): void => {
+    for (const cb of errorListeners) cb();
+  };
   const onBlur = (): void => down.clear();
+
+  /** Обычный захват; отказ приходит событием pointerlockerror, промис гасим, чтобы не было необработанной ошибки. */
+  const plainLock = (): void => {
+    try {
+      // Firefox и старые браузеры возвращают undefined, Chrome — промис
+      (canvas.requestPointerLock() as Promise<void> | undefined)?.catch(() => undefined);
+    } catch {
+      // старые браузеры бросают сразу; об отказе всё равно скажет pointerlockerror
+    }
+  };
 
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", onBlur);
   document.addEventListener("mousemove", onMouseMove);
   document.addEventListener("pointerlockchange", onLockChange);
+  document.addEventListener("pointerlockerror", onLockError);
 
   return {
     down,
@@ -61,17 +86,28 @@ export function createInput(canvas: HTMLCanvasElement): InputDevice {
       dy = 0;
       return m;
     },
-    requestLock() {
-      // unadjustedMovement — сырая мышь без ускорения ОС; где его нет, просим обычный захват.
-      // Firefox возвращает undefined, Chrome — промис, который отклоняется при слишком частом повторе.
-      const p = canvas.requestPointerLock({ unadjustedMovement: true }) as Promise<void> | undefined;
+    requestLock(raw) {
+      if (!raw) {
+        plainLock();
+        return;
+      }
+      let p: Promise<void> | undefined;
+      try {
+        p = canvas.requestPointerLock({ unadjustedMovement: true }) as Promise<void> | undefined;
+      } catch {
+        plainLock();
+        return;
+      }
+      // отказ в сыром вводе (NotSupportedError и т. п.) — просим обычный захват; если уже захвачено, ничего не делаем
       p?.catch(() => {
-        const again = canvas.requestPointerLock() as Promise<void> | undefined;
-        again?.catch(() => undefined);
+        if (document.pointerLockElement !== canvas) plainLock();
       });
     },
     onLockChange(cb) {
       lockListeners.push(cb);
+    },
+    onLockError(cb) {
+      errorListeners.push(cb);
     },
     onPress(code, cb) {
       pressListeners.set(code, cb);
@@ -82,6 +118,7 @@ export function createInput(canvas: HTMLCanvasElement): InputDevice {
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("pointerlockchange", onLockChange);
+      document.removeEventListener("pointerlockerror", onLockError);
     },
   };
 }
