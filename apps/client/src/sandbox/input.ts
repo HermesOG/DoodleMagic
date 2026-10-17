@@ -1,6 +1,9 @@
-import { GAME_KEYS } from "./controls";
+import { GAME_KEYS, KEYS } from "./controls";
 
-/** Клавиатура и мышь песочницы. Движение принимается только при захваченной мыши. */
+/**
+ * Клавиатура и мышь песочницы. Движение принимается только при захваченной мыши. Левая кнопка при захвате —
+ * KEYS.primary ("Mouse0") в down: первый клик (захват) не стреляет, отпускание и потеря захвата или фокуса её гасят.
+ */
 export interface InputDevice {
   readonly down: ReadonlySet<string>;
   readonly locked: boolean;
@@ -45,6 +48,15 @@ export function createInput(canvas: HTMLCanvasElement): InputDevice {
     dx += e.movementX;
     dy += e.movementY;
   };
+  // ЛКМ стреляет только при захваченной мыши: клик, который захват просит, магу не достаётся. Как и у клавиш,
+  // с Ctrl, Alt и Cmd кнопка ни на что не назначена (на macOS Ctrl + клик — это правая кнопка)
+  const onMouseDown = (e: MouseEvent): void => {
+    if (!locked || e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
+    down.add(KEYS.primary);
+  };
+  const onMouseUp = (e: MouseEvent): void => {
+    if (e.button === 0) down.delete(KEYS.primary);
+  };
   const onLockChange = (): void => {
     locked = document.pointerLockElement === canvas;
     if (!locked) down.clear();
@@ -72,6 +84,8 @@ export function createInput(canvas: HTMLCanvasElement): InputDevice {
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", onBlur);
   document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mousedown", onMouseDown);
+  document.addEventListener("mouseup", onMouseUp);
   document.addEventListener("pointerlockchange", onLockChange);
   document.addEventListener("pointerlockerror", onLockError);
 
@@ -117,6 +131,8 @@ export function createInput(canvas: HTMLCanvasElement): InputDevice {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("mouseup", onMouseUp);
       document.removeEventListener("pointerlockchange", onLockChange);
       document.removeEventListener("pointerlockerror", onLockError);
     },

@@ -1,6 +1,9 @@
-import type { PlayerInput } from "@doodlemagic/sim";
+import type { MatchInput, PlayerInput } from "@doodlemagic/sim";
 
-/** Клавиши по event.code: на русской раскладке W остаётся KeyW. Ctrl ни на что не назначен (Ctrl+W закрывает вкладку). */
+/**
+ * Клавиши по event.code: на русской раскладке W остаётся KeyW, а Q — KeyQ, а не «Й». Ctrl, Alt и Cmd ни на что
+ * не назначены (Ctrl+W закрывает вкладку). Левая кнопка мыши — "Mouse0": её кладёт в down только захваченная мышь.
+ */
 export const KEYS = {
   forward: "KeyW",
   back: "KeyS",
@@ -8,6 +11,11 @@ export const KEYS = {
   right: "KeyD",
   jump: "Space",
   debug: "Backquote",
+  primary: "Mouse0",
+  q: "KeyQ",
+  e: "KeyE",
+  c: "KeyC",
+  ult: "KeyX",
 } as const;
 
 /** Клавиши, у которых гасим действие браузера (прокрутка пробелом). */
@@ -80,6 +88,11 @@ export function lookRate(before: Look, after: Look, dtS: number): Look {
 
 export function buildInput(down: ReadonlySet<string>, look: Look): PlayerInput {
   return { ...moveAxes(down), jump: down.has(KEYS.jump), yaw: look.yaw, pitch: look.pitch };
+}
+
+/** Ввод мага на тик: движение и взгляд фазы 1 плюс ЛКМ, Q, E, C (зажаты сейчас; нажатие из них выделяет sim). */
+export function buildMatchInput(down: ReadonlySet<string>, look: Look): MatchInput {
+  return { ...buildInput(down, look), primary: down.has(KEYS.primary), q: down.has(KEYS.q), e: down.has(KEYS.e), c: down.has(KEYS.c) };
 }
 
 export function clampSensitivity(x: number): number {
