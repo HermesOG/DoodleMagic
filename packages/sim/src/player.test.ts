@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aabb } from "./aabb";
+import { GROUND_PROBE_M } from "./body";
 import { DEFAULT_MOVE, NO_INPUT, createPlayer, eyePosition, stepPlayer } from "./player";
 import {
   PLAYER_HALF_W,
@@ -40,6 +41,24 @@ function allFinite(v: unknown): boolean {
   if (typeof v === "number") return Number.isFinite(v);
   if (v !== null && typeof v === "object") return Object.values(v).every(allFinite);
   return true;
+}
+
+/** Детерминированный ГПСЧ для тестов (mulberry32). */
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Где кончится тик в воздухе без опоры: та же трапеция, что в stepPlayer. */
+function freeFallEnd(s: PlayerState, p: MoveParams = DEFAULT_MOVE): number {
+  const vy1 = Math.max(-p.maxFallSpeed, s.body.vel.y - p.gravity * TICK_DT);
+  return s.body.pos.y + ((s.body.vel.y + vy1) / 2) * TICK_DT;
 }
 
 function deepFreeze<T>(v: T): T {
@@ -124,6 +143,47 @@ describe("falling and landing", () => {
     expect(s.landVel).toBeLessThan(0);
     expect(Math.abs(s.landVel - ballistic)).toBeLessThanOrEqual((DEFAULT_MOVE.gravity * TICK_DT) / 2 + 1e-9);
     expect(stepPlayer(s, NO_INPUT, TICK_DT, flat).landVel).toBe(0);
+  });
+
+  it("reports a landing that ends inside the ground probe and puts the feet exactly on the floor", () => {
+    // с 2,505 м 30-й тик падения кончается примерно в 5 мм над полом, не касаясь его
+    const s = runTicks(createPlayer(vec3(0, 2.505, 0)), NO_INPUT, 29);
+    expect(s.onGround).toBe(false);
+    expect(freeFallEnd(s)).toBeGreaterThan(0);
+    expect(freeFallEnd(s)).toBeLessThan(GROUND_PROBE_M);
+    const landing = stepPlayer(s, NO_INPUT, TICK_DT, flat);
+    expect(landing.onGround).toBe(true);
+    expect(landing.landVel).toBeLessThan(-9);
+    expect(landing.body.pos.y).toBe(0);
+    expect(landing.body.vel.y).toBe(0);
+    // и дальше не проседает
+    expect(runTicks(landing, NO_INPUT, 10).body.pos.y).toBe(0);
+  });
+
+  it("reports every landing with landVel < 0 and the feet exactly on the support, for many heights and speeds", () => {
+    const rand = rng(11);
+    let landings = 0;
+    let insideProbe = 0;
+    for (const top of [0, 0.3, 1.2345678]) {
+      const w = createWorld([col(-100, top - 1, -100, 100, top, 100)]);
+      for (let k = 0; k < 150; k++) {
+        const start = createPlayer(vec3(rand() * 10 - 5, top + 0.01 + rand() * 6, rand() * 10 - 5));
+        let s: PlayerState = { ...start, body: { ...start.body, vel: vec3(rand() * 16 - 8, rand() * 14 - 10, rand() * 16 - 8) } };
+        for (let t = 0; t < 240; t++) {
+          const next = stepPlayer(s, NO_INPUT, TICK_DT, w);
+          if (!s.onGround && next.onGround) {
+            landings++;
+            if (freeFallEnd(s) > top) insideProbe++;
+            expect(next.landVel, `top ${top}, drop ${k}`).toBeLessThan(0);
+            expect(next.body.pos.y, `top ${top}, drop ${k}`).toBe(top);
+          }
+          s = next;
+        }
+      }
+    }
+    expect(landings).toBe(450);
+    // часть приземлений — именно случай «кончили тик в пределах щупа, не коснувшись»
+    expect(insideProbe).toBeGreaterThan(10);
   });
 
   it("reports a small landVel of −g·dt/2 on the first tick after createPlayer on a floor", () => {

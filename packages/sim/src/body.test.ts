@@ -42,6 +42,20 @@ describe("moveBody", () => {
     expect(b.vel.y).toBe(0);
   });
 
+  it("lands, snapping onto the floor, when a fall ends a few mm above it without touching", () => {
+    const w = createWorld([FLOOR]);
+    // −6 м/с за 1/60 с — ровно 0,1 м за один подшаг: из 0,105 подшаг кончается в 5 мм над полом
+    const b = body(0, 0.105, 0, 0, -6, 0);
+    const res = moveBody(w, b, DT, false);
+    expect(res.onGround).toBe(true);
+    expect(res.landVel).toBe(-6);
+    expect(b.pos.y).toBe(0);
+    expect(b.vel.y).toBe(0);
+    // уже стоящее тело так не «приземляется»
+    const standing = body(0, 0, 0);
+    expect(moveBody(w, standing, DT, true).landVel).toBe(0);
+  });
+
   it("stops at a wall and keeps sliding along it", () => {
     const w = createWorld([FLOOR, col(2, 0, -10, 3, 3, 10)]);
     const b = body(0, 0, 0);
