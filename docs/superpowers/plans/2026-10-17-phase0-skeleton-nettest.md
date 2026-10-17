@@ -1,207 +1,110 @@
-# Фаза 0: каркас и тест связи. План реализации
+# Фаза 0: каркас и P2P-тест связи. План реализации (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** До игрового кода проверить, держит ли связь у владельца и его друзей (Узбекистан и Европа), и поднять весь конвейер: монорепо, тесты, сервер на Cloudflare, клиент на Vercel.
+> **v2, 17.10.2026.** Владелец решил: бюджет $0, своих серверов нет, сеть как в Doodle District. Сервер на Cloudflare из v1 убран, тест связи стал P2P-тестом «хост — участники». Задача 1 выполнена по v1 и остаётся в силе.
 
-**Architecture:** pnpm-монорепо из трёх пакетов.
-- `packages/protocol` — общие типы сообщений и чистые функции; одинаково работает на клиенте и сервере.
-- `apps/server` — Cloudflare Worker с двумя Durable Objects:
-  - `RoomDO` отвечает на пинги и шлёт поток «снапшотов» 20 раз/с, как будущая игра;
-  - `ReportsDO` хранит отправленные результаты.
-- `apps/client` — Vite-страница `/nettest`. Она 10 минут гоняет игровой трафик, считает пинг, зависания, обрывы и потери, параллельно проверяет P2P через PeerJS, выносит вердикт и отправляет отчёт.
+**Goal:** До игрового кода проверить, держит ли P2P-связь с хостом у владельца и его друзей (Узбекистан и Европа), и поднять конвейер: монорепо, тесты, сайт на Vercel.
 
-**Tech Stack:** Node 24, pnpm 12.14, TypeScript 7, Vitest 5, Vite 8, wrangler 4.151 (Workers + Durable Objects на SQLite), PeerJS 1.5.5.
+**Architecture:** pnpm-монорепо без серверной части.
+- `packages/protocol` — общие сообщения теста и чистые функции.
+- `apps/client` — Vite-страница `/nettest` с двумя ролями:
+  - **хост** (`/nettest?host=1`) занимает PeerJS-ID комнаты, отвечает на пинги, шлёт «снапшоты» 20 раз/с, как будущая игра, и собирает отчёты участников в сводку;
+  - **участник** (`/nettest`) 10 минут шлёт хосту 30 пакетов/с, считает пинг, зависания, обрывы, потери и путь соединения (напрямую или через TURN), в конце отправляет отчёт хосту.
+
+**Tech Stack:** Node 24, pnpm 12.14, TypeScript 7, Vitest 5, Vite 8, PeerJS 1.5.5 (WebRTC).
 
 ## Global Constraints
-- Фронтенд — Vercel (тариф Hobby, некоммерческий); сервер — Cloudflare Workers + Durable Objects (SQLite-классы, бесплатный тариф).
+- Фронтенд — статика на Vercel (тариф Hobby, некоммерческий). Своих серверов нет, бюджет $0.
+- Сеть — P2P через PeerJS 1.5.5:
+  - сигналинг — облако PeerJS;
+  - ICE — STUN Google и Cloudflare плюс публичный TURN `openrelay.metered.ca` (логин и пароль `openrelayproject`), как в Doodle District.
+- PeerJS-ID хоста комнаты: `doodlemagic-nt-<код комнаты в нижнем регистре>-host`.
 - Язык — TypeScript (strict); монорепо pnpm: `apps/*`, `packages/*`; область имён пакетов `@doodlemagic/*`.
 - Критерий теста связи: 9 из 10 играют 10 минут без зависаний, пинг p95 ≤ 120 мс.
 - Интерфейс на русском языке.
 - Исходники Doodle District в репозиторий не попадают: `research/doodle-district/source/` в `.gitignore`. Сырые результаты теста (имена друзей) тоже не публикуются: `design/nettest/` в `.gitignore`.
 - Код комнаты — символы `[A-Z0-9_-]`, до 32 знаков.
-- Сервер ограничивает одну сессию 15 минутами.
-- Ключ `REPORTS_KEY` никогда не попадает в репозиторий.
 - Коммиты заканчиваются строкой `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- Шаги с пометкой **👤 Владелец** требуют действий человека: вход в аккаунты, браузер, подтверждение `git push`.
+- Шаги с пометкой **👤 Владелец** требуют действий человека: аккаунты, браузер, подтверждение `git push`.
 
 ## Карта файлов
 
 | Файл | Отвечает за |
 |---|---|
-| `.gitignore`, `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.config.ts` | Корень монорепо: зависимости, общие настройки TS, запуск всех тестов |
-| `packages/protocol/src/nettest.ts` | Сообщения теста связи, разбор входящих, ответы `pong` / `welcome`, снапшот, разбор `colo` |
+| `.gitignore`, `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.config.ts` | Корень монорепо (сделано в задаче 1) |
+| `packages/protocol/src/nettest.ts` | Сообщения теста: разбор входящих, `pong` / `welcome`, снапшот |
 | `packages/protocol/src/index.ts` | Публичный вход пакета |
-| `apps/server/wrangler.jsonc` | Worker, привязки DO, миграция SQLite-классов |
-| `apps/server/src/index.ts` | Роутер: `/room/:code` (WebSocket), `/report`, `/reports`, `/health` |
-| `apps/server/src/RoomDO.ts` | Одна комната: эхо-пинги, поток снапшотов 20 Гц, лимит 15 минут |
-| `apps/server/src/ReportsDO.ts` | Хранение отчётов |
-| `apps/server/src/env.ts` | Тип окружения Worker |
-| `apps/server/scripts/smoke.mjs` | Дымовой тест сервера (локально и в проде) |
-| `apps/client/src/config.ts` | Адрес сервера, преобразование `ws`→`http`, очистка кода комнаты |
-| `apps/client/src/nettest/stats.ts` | Чистая статистика: перцентили, зависания, потери, вердикт, текст отчёта |
-| `apps/client/src/nettest/runner.ts` | Сессия WebSocket: пинги, приём, переподключение, учёт скрытой вкладки |
-| `apps/client/src/nettest/webrtc.ts` | Проверка P2P через PeerJS |
-| `apps/client/src/nettest/page.ts` | Интерфейс страницы теста |
+| `apps/client/src/config.ts` | Очистка кода комнаты |
+| `apps/client/src/nettest/stats.ts` | Чистая статистика: перцентили, зависания, потери, вердикт, текст отчёта, сводка хоста, проверка формы отчёта |
+| `apps/client/src/nettest/route.ts` | Определение пути соединения (напрямую или TURN) по `RTCStatsReport` |
+| `apps/client/src/nettest/p2p.ts` | PeerJS: хост комнаты и сессия участника |
+| `apps/client/src/nettest/page.ts` | Интерфейс страницы: режимы хоста и участника |
 | `apps/client/src/main.ts`, `index.html`, `src/style.css`, `vercel.json` | Точка входа, маршрут `/nettest`, стили, SPA-перезапись на Vercel |
-| `tools/summarize-nettest.ts` | Сводка собранных отчётов в терминале |
-| `design/nettest-results.md` | Итог теста и решение: Cloudflare или P2P |
+| `.claude/launch.json` | Запуск dev-сервера клиента для проверки в браузере |
+| `design/nettest-results.md` | Итог теста и решение |
 
 ---
 
-### Task 1: Монорепо, git и протокол теста связи
+### Task 1: Монорепо, git и протокол теста связи — ВЫПОЛНЕНО
+
+Сделано коммитом `ae5a115` по плану v1:
+- корень монорепо (`.gitignore`, `package.json` с `packageManager: pnpm@12.14.0`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.config.ts`);
+- dev-зависимости `typescript` 7.0.2 и `vitest` 5.0.5;
+- пакет `packages/protocol` с `src/nettest.ts`, `src/nettest.test.ts`, `src/index.ts` — 16 тестов зелёные.
+
+В v2 протокол меняется в задаче 2.
+
+---
+
+### Task 2: Протокол под P2P
 
 **Files:**
-- Create: `.gitignore`, `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.config.ts`
-- Create: `packages/protocol/package.json`, `packages/protocol/tsconfig.json`, `packages/protocol/src/index.ts`, `packages/protocol/src/nettest.ts`
-- Test: `packages/protocol/src/nettest.test.ts`
+- Modify: `packages/protocol/src/nettest.ts` (заменить целиком)
+- Test: `packages/protocol/src/nettest.test.ts` (заменить целиком)
 
 **Interfaces:**
-- Consumes: ничего.
+- Consumes: существующий пакет `@doodlemagic/protocol` из задачи 1.
 - Produces (импорт из `@doodlemagic/protocol`):
-  - константы `NETTEST_VERSION = 1`, `SNAPSHOT_HZ = 20`, `SNAPSHOT_PAD_BYTES = 800`, `MAX_NAME_LEN = 24`;
-  - типы `ClientMsg`, `PingMsg`, `HelloMsg`, `ServerMsg`, `RoomInfo { room; edge; roomColo; peers }`;
+  - константы `NETTEST_VERSION = 2`, `SNAPSHOT_HZ = 20`, `SNAPSHOT_PAD_BYTES = 800`, `MAX_NAME_LEN = 24`, `MAX_MSG_CHARS = 8192`;
+  - типы `PingMsg`, `HelloMsg`, `ReportMsg { t: "report"; data: Record<string, unknown> }`, `ClientMsg`;
+  - тип `HostMsg` — сообщения хоста, замена `ServerMsg`: `welcome { v; room; host; peers }`, `pong`, `snap`, `error`;
+  - тип `RoomInfo { room; host; peers }`;
   - `parseClientMsg(raw: string | null): ClientMsg | null`;
-  - `pong(msg: PingMsg, now: number): ServerMsg`;
-  - `welcome(msg: HelloMsg, info: RoomInfo): ServerMsg`;
-  - `makeSnapshot(n: number, now: number): ServerMsg`;
-  - `parseTraceColo(trace: string): string`.
+  - `pong(msg, now): PongMsg`, `welcome(msg, info): WelcomeMsg | ErrorMsg`, `makeSnapshot(n, now): SnapMsg` — с узкими типами возврата;
+  - `parseTraceColo` удаляется: Cloudflare больше не используется.
 
-- [ ] **Step 1: Установить pnpm**
+Что меняется и почему:
+- **Новое сообщение `report`:** участник отправляет хосту итог теста.
+- **Лимит длины:** 8192 символа вместо 1024 — отчёт длиннее килобайта. Константа называется `MAX_MSG_CHARS`, потому что `length` считает символы, а не байты.
+- **`ServerMsg` → `HostMsg`:** в P2P «сервер» — это браузер хоста.
+- **`welcome`** сообщает имя хоста вместо дата-центров Cloudflare.
+- **Тест «слишком длинное сообщение»** теперь проверяет именно ограничение длины: вход — валидный JSON длиннее лимита. Раньше тест проходил за счёт ошибки разбора JSON.
+- **Узкие типы возврата** делают сужение в тестах ненужным.
 
-Run: `npm install -g pnpm@12.14.0` и затем `pnpm -v`
-Expected: `12.14.0`
-
-- [ ] **Step 2: Создать git-репозиторий и привязать GitHub**
-
-В папке `D:\Claude Code\MagicGG`:
-```bash
-git init -b main
-git remote add origin https://github.com/HermesOG/DoodleMagic.git
-```
-Expected: `git remote -v` показывает `origin https://github.com/HermesOG/DoodleMagic.git`.
-
-- [ ] **Step 3: Создать корневые файлы**
-
-`.gitignore`:
-```gitignore
-node_modules/
-dist/
-.wrangler/
-.dev.vars
-.vercel/
-*.log
-.DS_Store
-# чужой исходник только для локального изучения — не публикуем
-research/doodle-district/source/
-# сырые результаты теста связи с именами друзей — не публикуем
-design/nettest/
-```
-
-`package.json`:
-```json
-{
-  "name": "doodlemagic",
-  "private": true,
-  "type": "module",
-  "packageManager": "pnpm@12.14.0",
-  "scripts": {
-    "test": "vitest run",
-    "typecheck": "pnpm -r --if-present typecheck",
-    "dev:client": "pnpm --filter @doodlemagic/client dev",
-    "dev:server": "pnpm --filter @doodlemagic/server dev",
-    "build:client": "pnpm --filter @doodlemagic/client build",
-    "smoke": "node apps/server/scripts/smoke.mjs"
-  }
-}
-```
-
-`pnpm-workspace.yaml`:
-```yaml
-packages:
-  - "apps/*"
-  - "packages/*"
-```
-
-`tsconfig.base.json`:
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022"],
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "noEmit": true
-  }
-}
-```
-
-`vitest.config.ts`:
-```ts
-import { defineConfig } from "vitest/config";
-
-export default defineConfig({
-  test: {
-    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
-    environment: "node",
-  },
-});
-```
-
-- [ ] **Step 4: Поставить общие dev-зависимости**
-
-Run: `pnpm add -D -w typescript vitest`
-Expected: в `package.json` появились `devDependencies` с `typescript` 7.x и `vitest` 5.x, создан `pnpm-lock.yaml`. Если pnpm пишет «Ignored build scripts», выполнить `pnpm approve-builds` и одобрить перечисленные пакеты.
-
-- [ ] **Step 5: Создать пакет `protocol`**
-
-`packages/protocol/package.json`:
-```json
-{
-  "name": "@doodlemagic/protocol",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc --noEmit -p ." }
-}
-```
-
-`packages/protocol/tsconfig.json`:
-```json
-{
-  "extends": "../../tsconfig.base.json",
-  "include": ["src"]
-}
-```
-
-`packages/protocol/src/index.ts`:
-```ts
-export * from "./nettest";
-```
-
-- [ ] **Step 6: Написать падающий тест**
+- [ ] **Step 1: Заменить тест**
 
 `packages/protocol/src/nettest.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
 import {
+  MAX_MSG_CHARS,
   MAX_NAME_LEN,
   NETTEST_VERSION,
   SNAPSHOT_PAD_BYTES,
   makeSnapshot,
   parseClientMsg,
-  parseTraceColo,
   pong,
   welcome,
 } from "./nettest";
 
-const info = { room: "FRIENDS", edge: "TAS", roomColo: "FRA", peers: 2 };
+const info = { room: "FRIENDS", host: "Хост", peers: 2 };
+
+/** Валидный ping, раздутый лишним полем до нужной длины. */
+function pingOfLength(length: number): string {
+  const base = JSON.stringify({ t: "ping", seq: 1, ct: 1, pad: "" });
+  return JSON.stringify({ t: "ping", seq: 1, ct: 1, pad: "x".repeat(length - base.length) });
+}
 
 describe("parseClientMsg", () => {
   it("accepts a valid ping", () => {
@@ -209,8 +112,15 @@ describe("parseClientMsg", () => {
   });
 
   it("trims and truncates the hello name", () => {
-    const raw = JSON.stringify({ t: "hello", v: 1, name: `  ${"a".repeat(40)}  ` });
-    expect(parseClientMsg(raw)).toEqual({ t: "hello", v: 1, name: "a".repeat(MAX_NAME_LEN) });
+    const raw = JSON.stringify({ t: "hello", v: 2, name: `  ${"a".repeat(40)}  ` });
+    expect(parseClientMsg(raw)).toEqual({ t: "hello", v: 2, name: "a".repeat(MAX_NAME_LEN) });
+  });
+
+  it("accepts a report with an object payload", () => {
+    expect(parseClientMsg('{"t":"report","data":{"v":2,"name":"Аня"}}')).toEqual({
+      t: "report",
+      data: { v: 2, name: "Аня" },
+    });
   });
 
   it.each([
@@ -219,20 +129,29 @@ describe("parseClientMsg", () => {
     ["unknown type", '{"t":"boom"}'],
     ["negative seq", '{"t":"ping","seq":-1,"ct":1}'],
     ["fractional seq", '{"t":"ping","seq":1.5,"ct":1}'],
+    ["unsafe seq", `{"t":"ping","seq":${2 ** 60},"ct":1}`],
     ["string ct", '{"t":"ping","seq":1,"ct":"1"}'],
-    ["hello without name", '{"t":"hello","v":1}'],
+    ["ping without ct", '{"t":"ping","seq":1}'],
+    ["hello without name", '{"t":"hello","v":2}'],
+    ["hello with string version", '{"t":"hello","v":"2","name":"x"}'],
+    ["report with array data", '{"t":"report","data":[1,2]}'],
+    ["report with null data", '{"t":"report","data":null}'],
   ])("rejects %s", (_label, raw) => {
     expect(parseClientMsg(raw)).toBeNull();
   });
 
-  it("rejects null and oversized input", () => {
+  it("rejects null input", () => {
     expect(parseClientMsg(null)).toBeNull();
-    expect(parseClientMsg("x".repeat(2000))).toBeNull();
+  });
+
+  it("enforces the length limit on otherwise valid messages", () => {
+    expect(parseClientMsg(pingOfLength(MAX_MSG_CHARS))).toMatchObject({ t: "ping", seq: 1 });
+    expect(parseClientMsg(pingOfLength(MAX_MSG_CHARS + 1))).toBeNull();
   });
 });
 
 describe("pong", () => {
-  it("echoes seq and client time and adds server time", () => {
+  it("echoes seq and client time and adds host time", () => {
     expect(pong({ t: "ping", seq: 3, ct: 99 }, 5000)).toEqual({ t: "pong", seq: 3, ct: 99, st: 5000 });
   });
 });
@@ -246,8 +165,8 @@ describe("welcome", () => {
     });
   });
 
-  it("asks an outdated client to reload", () => {
-    expect(welcome({ t: "hello", v: 999, name: "x" }, info)).toEqual({ t: "error", reason: "обновите страницу" });
+  it("asks an outdated participant to reload", () => {
+    expect(welcome({ t: "hello", v: 1, name: "x" }, info)).toEqual({ t: "error", reason: "обновите страницу" });
   });
 });
 
@@ -255,58 +174,49 @@ describe("makeSnapshot", () => {
   it("pads the snapshot to emulate game traffic", () => {
     const snap = makeSnapshot(4, 1000);
     expect(snap).toMatchObject({ t: "snap", n: 4, st: 1000 });
-    expect(snap.t === "snap" && snap.pad.length).toBe(SNAPSHOT_PAD_BYTES);
-  });
-});
-
-describe("parseTraceColo", () => {
-  it("reads the colo line", () => {
-    expect(parseTraceColo("fl=1\nh=x\ncolo=FRA\nhttp=http/2\n")).toBe("FRA");
-  });
-
-  it("returns ? when the line is missing", () => {
-    expect(parseTraceColo("fl=1\n")).toBe("?");
+    expect(snap.pad).toHaveLength(SNAPSHOT_PAD_BYTES);
   });
 });
 ```
 
-- [ ] **Step 7: Убедиться, что тест падает**
+- [ ] **Step 2: Убедиться, что тест падает**
 
-Run: `pnpm test`
-Expected: FAIL — `Failed to resolve import "./nettest"` (модуля ещё нет).
+Run: `pnpm test packages/protocol`
+Expected: FAIL. Нет экспорта `MAX_MSG_CHARS`, `report` отклоняется, `welcome` с полем `host` не совпадает.
 
-- [ ] **Step 8: Реализовать протокол**
+- [ ] **Step 3: Заменить протокол**
 
 `packages/protocol/src/nettest.ts`:
 ```ts
-/** Сообщения теста связи. Клиент и сервер используют один и тот же код. */
-export const NETTEST_VERSION = 1;
+/** Сообщения P2P-теста связи. Хост (браузер организатора) и участники используют один и тот же код. */
+export const NETTEST_VERSION = 2;
 export const SNAPSHOT_HZ = 20;
 export const SNAPSHOT_PAD_BYTES = 800;
 export const MAX_NAME_LEN = 24;
-const MAX_MSG_BYTES = 1024;
+/** Лимит длины строки сообщения в символах: отчёт участника весит около 1–2 тыс. символов. */
+export const MAX_MSG_CHARS = 8192;
 
 export type PingMsg = { t: "ping"; seq: number; ct: number };
 export type HelloMsg = { t: "hello"; v: number; name: string };
-export type ClientMsg = PingMsg | HelloMsg;
+export type ReportMsg = { t: "report"; data: Record<string, unknown> };
+export type ClientMsg = PingMsg | HelloMsg | ReportMsg;
 
-export type ServerMsg =
-  | { t: "welcome"; v: number; room: string; edge: string; roomColo: string; peers: number }
-  | { t: "pong"; seq: number; ct: number; st: number }
-  | { t: "snap"; n: number; st: number; pad: string }
-  | { t: "error"; reason: string };
+export type WelcomeMsg = { t: "welcome"; v: number; room: string; host: string; peers: number };
+export type PongMsg = { t: "pong"; seq: number; ct: number; st: number };
+export type SnapMsg = { t: "snap"; n: number; st: number; pad: string };
+export type ErrorMsg = { t: "error"; reason: string };
+export type HostMsg = WelcomeMsg | PongMsg | SnapMsg | ErrorMsg;
 
 export interface RoomInfo {
   room: string;
-  edge: string;
-  roomColo: string;
+  host: string;
   peers: number;
 }
 
 const isFiniteNumber = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
 
 export function parseClientMsg(raw: string | null): ClientMsg | null {
-  if (raw === null || raw.length > MAX_MSG_BYTES) return null;
+  if (raw === null || raw.length > MAX_MSG_CHARS) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -323,70 +233,61 @@ export function parseClientMsg(raw: string | null): ClientMsg | null {
     if (!isFiniteNumber(m.v) || typeof m.name !== "string") return null;
     return { t: "hello", v: m.v, name: m.name.trim().slice(0, MAX_NAME_LEN) };
   }
+  if (m.t === "report") {
+    if (typeof m.data !== "object" || m.data === null || Array.isArray(m.data)) return null;
+    return { t: "report", data: m.data as Record<string, unknown> };
+  }
   return null;
 }
 
-export function pong(msg: PingMsg, now: number): ServerMsg {
+export function pong(msg: PingMsg, now: number): PongMsg {
   return { t: "pong", seq: msg.seq, ct: msg.ct, st: now };
 }
 
-export function welcome(msg: HelloMsg, info: RoomInfo): ServerMsg {
+export function welcome(msg: HelloMsg, info: RoomInfo): WelcomeMsg | ErrorMsg {
   if (msg.v !== NETTEST_VERSION) return { t: "error", reason: "обновите страницу" };
   return { t: "welcome", v: NETTEST_VERSION, ...info };
 }
 
 const PAD = "x".repeat(SNAPSHOT_PAD_BYTES);
 
-/** Поток снапшотов примерно того же размера, что будут слать игровые комнаты. */
-export function makeSnapshot(n: number, now: number): ServerMsg {
+/** Поток снапшотов примерно того же размера, что будет слать хост в игре. */
+export function makeSnapshot(n: number, now: number): SnapMsg {
   return { t: "snap", n, st: now, pad: PAD };
 }
-
-/** Достаёт код дата-центра из ответа https://cloudflare.com/cdn-cgi/trace. */
-export function parseTraceColo(trace: string): string {
-  return /^colo=([A-Z0-9]+)$/m.exec(trace)?.[1] ?? "?";
-}
 ```
 
-- [ ] **Step 9: Убедиться, что тесты проходят**
+- [ ] **Step 4: Убедиться, что тесты проходят, и проверить типы**
 
-Run: `pnpm test`
-Expected: PASS — `Test Files  1 passed`, `Tests  16 passed`.
+Run: `pnpm test` и `pnpm --filter @doodlemagic/protocol typecheck`
+Expected: PASS, `Tests  21 passed`; типы без ошибок.
 
-- [ ] **Step 10: Проверить типы**
+- [ ] **Step 5: Коммит**
 
-Run: `pnpm --filter @doodlemagic/protocol typecheck`
-Expected: команда завершается без ошибок.
-
-- [ ] **Step 11: Первый коммит**
-
-Run: `git status --short` — среди файлов **нет** `research/doodle-district/source/`.
 ```bash
-git add .
-git commit -m "chore: monorepo skeleton and nettest protocol" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add packages/protocol
+git commit -m "feat(protocol): P2P nettest messages with host reports" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
-В коммит попадают и уже лежащие `design/`, `docs/`, `research/doodle-district/README.md`.
 
 ---
 
-### Task 2: Статистика теста связи
+### Task 3: Статистика, путь соединения, код комнаты
 
 **Files:**
 - Create: `apps/client/package.json`, `apps/client/tsconfig.json`
-- Create: `apps/client/src/config.ts`, `apps/client/src/nettest/stats.ts`
-- Test: `apps/client/src/config.test.ts`, `apps/client/src/nettest/stats.test.ts`
+- Create: `apps/client/src/config.ts`, `apps/client/src/nettest/stats.ts`, `apps/client/src/nettest/route.ts`
+- Test: `apps/client/src/config.test.ts`, `apps/client/src/nettest/stats.test.ts`, `apps/client/src/nettest/route.test.ts`
 
 **Interfaces:**
 - Consumes: ничего.
 - Produces:
-  - из `apps/client/src/nettest/stats.ts`:
+  - **`stats.ts`:**
     - `CRITERIA = { maxP95Ms: 120, stallGapMs: 1000, maxStalls: 0, maxLossPct: 2, maxDisconnects: 0, maxHiddenS: 5 }`;
-    - типы `RttSummary { count; p50; p95; max; jitter }`, `WsTestData { edge; roomColo; rtts: number[]; arrivals: number[]; sent; received; disconnects; hiddenMs; durationS }`, `P2pResult { role: "hub" | "peer"; connected; peers?; rtt: RttSummary | null; error? }`, `ResultMeta { name; room; ua; conn; tz }`, `NettestResult`, `Verdict { ok; reasons: string[] }`;
-    - `percentile(sorted, p)`, `summarizeRtt(samples)`, `countStalls(arrivals, gapMs)`, `lossPct(sent, received)`;
-    - `buildResult(d: WsTestData, meta: ResultMeta, p2p?: P2pResult): NettestResult`;
-    - `judge(r: NettestResult): Verdict`;
-    - `formatReport(r: NettestResult, v: Verdict): string`.
-  - из `apps/client/src/config.ts`: `gameServerUrl(): string`, `httpBase(wsUrl: string): string`, `cleanRoom(raw: string | null): string`.
+    - типы `Route = "direct" | "relay" | "?"`, `RttSummary { count; p50; p95; max; jitter }`, `LinkTestData { route; rtts: number[]; arrivals: number[]; sent; received; disconnects; hiddenMs; durationS }`, `ResultMeta { name; room; host; ua; conn; tz }`, `NettestResult` (= `ResultMeta` + `v: 2`, `route`, `durationS`, `rtt`, `sent`, `received`, `lossPct`, `stalls`, `worstGapMs`, `disconnects`, `hiddenS`), `Verdict { ok; reasons: string[] }`;
+    - `fmtMs(x)`, `percentile`, `summarizeRtt`, `countStalls`, `lossPct`;
+    - `buildResult(d: LinkTestData, meta: ResultMeta): NettestResult`, `judge(r): Verdict`, `formatReport(r, v): string`, `isNettestResult(x: unknown): x is NettestResult`, `formatSummary(results: readonly NettestResult[]): string`.
+  - **`route.ts`:** тип `StatsEntry`, `routeFromStats(entries: Iterable<StatsEntry>): Route`.
+  - **`config.ts`:** `cleanRoom(raw: string | null): string`.
 
 - [ ] **Step 1: Создать пакет клиента**
 
@@ -429,26 +330,74 @@ Expected: в `apps/client/package.json` появился `vite` 8.x.
 `apps/client/src/config.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
-import { cleanRoom, httpBase } from "./config";
-
-describe("httpBase", () => {
-  it("maps wss to https", () => {
-    expect(httpBase("wss://a.workers.dev")).toBe("https://a.workers.dev");
-  });
-
-  it("maps ws to http", () => {
-    expect(httpBase("ws://localhost:8787")).toBe("http://localhost:8787");
-  });
-});
+import { cleanRoom } from "./config";
 
 describe("cleanRoom", () => {
   it("uppercases and strips unsafe characters", () => {
     expect(cleanRoom("friends-1!<b>")).toBe("FRIENDS-1B");
   });
 
+  it("limits the code to 32 characters", () => {
+    expect(cleanRoom("a".repeat(40))).toBe("A".repeat(32));
+  });
+
   it("falls back to FRIENDS", () => {
     expect(cleanRoom(null)).toBe("FRIENDS");
     expect(cleanRoom("!!!")).toBe("FRIENDS");
+  });
+});
+```
+
+`apps/client/src/nettest/route.test.ts`:
+```ts
+import { describe, expect, it } from "vitest";
+import { routeFromStats } from "./route";
+
+const candidates = (local: string, remote: string) => [
+  { id: "L1", type: "local-candidate", candidateType: local },
+  { id: "R1", type: "remote-candidate", candidateType: remote },
+];
+
+describe("routeFromStats", () => {
+  it("is direct when the transport's selected pair has no relay candidate (Chrome)", () => {
+    const stats = [
+      { id: "T1", type: "transport", selectedCandidatePairId: "CP1" },
+      { id: "CP1", type: "candidate-pair", state: "succeeded", localCandidateId: "L1", remoteCandidateId: "R1" },
+      ...candidates("srflx", "host"),
+    ];
+    expect(routeFromStats(stats)).toBe("direct");
+  });
+
+  it("is relay when either side of the selected pair is a TURN candidate", () => {
+    const stats = [
+      { id: "T1", type: "transport", selectedCandidatePairId: "CP1" },
+      { id: "CP1", type: "candidate-pair", state: "succeeded", localCandidateId: "L1", remoteCandidateId: "R1" },
+      ...candidates("relay", "srflx"),
+    ];
+    expect(routeFromStats(stats)).toBe("relay");
+  });
+
+  it("falls back to the selected flag (Firefox)", () => {
+    const stats = [
+      { id: "CP1", type: "candidate-pair", state: "succeeded", selected: true, localCandidateId: "L1", remoteCandidateId: "R1" },
+      ...candidates("host", "relay"),
+    ];
+    expect(routeFromStats(stats)).toBe("relay");
+  });
+
+  it("falls back to a nominated succeeded pair", () => {
+    const stats = [
+      { id: "CP1", type: "candidate-pair", state: "succeeded", nominated: true, localCandidateId: "L1", remoteCandidateId: "R1" },
+      ...candidates("host", "host"),
+    ];
+    expect(routeFromStats(stats)).toBe("direct");
+  });
+
+  it("is unknown without a usable pair", () => {
+    expect(routeFromStats([])).toBe("?");
+    expect(
+      routeFromStats([{ id: "T1", type: "transport", selectedCandidatePairId: "CP1" }, { id: "CP1", type: "candidate-pair", state: "succeeded" }]),
+    ).toBe("?");
   });
 });
 ```
@@ -459,22 +408,24 @@ import { describe, expect, it } from "vitest";
 import {
   buildResult,
   countStalls,
+  fmtMs,
   formatReport,
+  formatSummary,
+  isNettestResult,
   judge,
   lossPct,
   percentile,
   summarizeRtt,
+  type LinkTestData,
   type ResultMeta,
-  type WsTestData,
 } from "./stats";
 
-const meta: ResultMeta = { name: "Аня", room: "FRIENDS", ua: "test", conn: "4g", tz: "Asia/Tashkent" };
+const meta: ResultMeta = { name: "Аня", room: "FRIENDS", host: "Хост", ua: "test", conn: "4g", tz: "Asia/Tashkent" };
 
-/** 10 минут здоровой связи: пинг 60 мс, сообщение от сервера каждые 50 мс. */
-function data(over: Partial<WsTestData> = {}): WsTestData {
+/** 10 минут здоровой связи: пинг 60 мс, сообщение от хоста каждые 50 мс. */
+function data(over: Partial<LinkTestData> = {}): LinkTestData {
   return {
-    edge: "TAS",
-    roomColo: "FRA",
+    route: "direct",
     rtts: Array.from({ length: 1000 }, () => 60),
     arrivals: Array.from({ length: 12000 }, (_, i) => i * 50),
     sent: 1000,
@@ -485,6 +436,15 @@ function data(over: Partial<WsTestData> = {}): WsTestData {
     ...over,
   };
 }
+
+describe("fmtMs", () => {
+  it("rounds finite numbers and hides missing ones", () => {
+    expect(fmtMs(59.6)).toBe("60 мс");
+    expect(fmtMs(Number.NaN)).toBe("—");
+    expect(fmtMs(null)).toBe("—");
+    expect(fmtMs(undefined)).toBe("—");
+  });
+});
 
 describe("percentile", () => {
   const sorted = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
@@ -533,6 +493,10 @@ describe("judge", () => {
     expect(judge(buildResult(data(), meta))).toEqual({ ok: true, reasons: [] });
   });
 
+  it("does not fail a run just because it went through TURN", () => {
+    expect(judge(buildResult(data({ route: "relay" }), meta)).ok).toBe(true);
+  });
+
   it("fails on a high p95", () => {
     const rtts = Array.from({ length: 100 }, (_, i) => (i < 90 ? 60 : 200));
     const v = judge(buildResult(data({ rtts }), meta));
@@ -551,8 +515,8 @@ describe("judge", () => {
     expect(v.reasons).toHaveLength(3);
   });
 
-  it("fails when the server never answered", () => {
-    expect(judge(buildResult(data({ rtts: [] }), meta)).reasons).toContain("сервер не ответил ни разу");
+  it("fails when the host never answered", () => {
+    expect(judge(buildResult(data({ rtts: [] }), meta)).reasons).toContain("хост не ответил ни разу");
   });
 });
 
@@ -565,36 +529,99 @@ describe("formatReport", () => {
     expect(text).toContain("обрывов связи: 2");
   });
 
-  it("describes a P2P result", () => {
-    const r = buildResult(data(), meta, { role: "peer", connected: true, rtt: summarizeRtt([40, 42]) });
-    expect(formatReport(r, judge(r))).toContain("P2P: напрямую, p50 40 мс");
+  it("names the host and the route", () => {
+    const r = buildResult(data({ route: "relay" }), meta);
+    expect(formatReport(r, judge(r))).toContain("Связь с хостом Хост: через ретранслятор (TURN)");
+  });
+});
+
+describe("isNettestResult", () => {
+  it("accepts a built result, also after a JSON round trip", () => {
+    const r = buildResult(data({ rtts: [] }), meta);
+    expect(isNettestResult(r)).toBe(true);
+    expect(isNettestResult(JSON.parse(JSON.stringify(r)))).toBe(true);
+  });
+
+  it.each([
+    ["null", null],
+    ["old version", { ...buildResult(data(), meta), v: 1 }],
+    ["missing rtt", { ...buildResult(data(), meta), rtt: undefined }],
+    ["string stalls", { ...buildResult(data(), meta), stalls: "0" }],
+    ["unknown route", { ...buildResult(data(), meta), route: "satellite" }],
+  ])("rejects %s", (_label, value) => {
+    expect(isNettestResult(value)).toBe(false);
+  });
+});
+
+describe("formatSummary", () => {
+  it("says when there is nothing yet", () => {
+    expect(formatSummary([])).toBe("Пока нет результатов.");
+  });
+
+  it("lists every participant and the totals", () => {
+    const good = buildResult(data(), meta);
+    const bad = buildResult(data({ route: "relay", disconnects: 1 }), { ...meta, name: "Боря" });
+    const text = formatSummary([good, bad]);
+    expect(text).toContain("OK   Аня");
+    expect(text).toContain("FAIL Боря · TURN");
+    expect(text).toContain("• обрывов связи: 1");
+    expect(text).toContain("Прошли 1 из 2 (50 %). Порог: 90 %.");
+    expect(text).toContain("Через ретранслятор (TURN): 1 из 2.");
+  });
+
+  it("shows missing ping values after a JSON round trip as dashes", () => {
+    const r = JSON.parse(JSON.stringify(buildResult(data({ rtts: [] }), meta)));
+    expect(formatSummary([r])).toContain("p50 —");
   });
 });
 ```
 
 - [ ] **Step 3: Убедиться, что тесты падают**
 
-Run: `pnpm test`
-Expected: FAIL — `Failed to resolve import "./config"` и `"./stats"`.
+Run: `pnpm test apps/client`
+Expected: FAIL — `Failed to resolve import "./config"`, `"./route"`, `"./stats"`.
 
-- [ ] **Step 4: Реализовать `config.ts`**
+- [ ] **Step 4: Реализовать `config.ts` и `route.ts`**
 
 `apps/client/src/config.ts`:
 ```ts
-/** Адрес игрового сервера: ?server=… в ссылке, иначе VITE_GAME_SERVER при сборке, иначе локальный wrangler. */
-export function gameServerUrl(): string {
-  const fromQuery = new URLSearchParams(location.search).get("server");
-  const fromEnv = import.meta.env.VITE_GAME_SERVER as string | undefined;
-  return (fromQuery || fromEnv || "ws://localhost:8787").replace(/\/+$/, "");
-}
-
-export function httpBase(wsUrl: string): string {
-  return wsUrl.replace(/^ws(s?):\/\//, "http$1://");
-}
-
+/** Код комнаты из ссылки: только A–Z, 0–9, «_» и «-», не длиннее 32 знаков. */
 export function cleanRoom(raw: string | null): string {
   const room = (raw ?? "").toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 32);
   return room || "FRIENDS";
+}
+```
+
+`apps/client/src/nettest/route.ts`:
+```ts
+import type { Route } from "./stats";
+
+/** Одна запись из RTCStatsReport. Поля зависят от типа записи и браузера. */
+export type StatsEntry = { id?: unknown; type?: unknown; [key: string]: unknown };
+
+function selectedPair(byId: Map<string, StatsEntry>): StatsEntry | undefined {
+  for (const e of byId.values()) {
+    if (e.type === "transport" && typeof e.selectedCandidatePairId === "string") {
+      const pair = byId.get(e.selectedCandidatePairId);
+      if (pair) return pair;
+    }
+  }
+  for (const e of byId.values()) {
+    if (e.type === "candidate-pair" && e.state === "succeeded" && (e.selected === true || e.nominated === true)) return e;
+  }
+  return undefined;
+}
+
+/** Идёт ли выбранная пара ICE-кандидатов через ретранслятор (TURN). */
+export function routeFromStats(entries: Iterable<StatsEntry>): Route {
+  const byId = new Map<string, StatsEntry>();
+  for (const e of entries) if (typeof e.id === "string") byId.set(e.id, e);
+  const pair = selectedPair(byId);
+  if (!pair) return "?";
+  const local = byId.get(String(pair.localCandidateId));
+  const remote = byId.get(String(pair.remoteCandidateId));
+  if (!local || !remote) return "?";
+  return local.candidateType === "relay" || remote.candidateType === "relay" ? "relay" : "direct";
 }
 ```
 
@@ -612,6 +639,8 @@ export const CRITERIA = {
   maxHiddenS: 5,
 } as const;
 
+export type Route = "direct" | "relay" | "?";
+
 export interface RttSummary {
   count: number;
   p50: number;
@@ -620,10 +649,9 @@ export interface RttSummary {
   jitter: number;
 }
 
-/** Сырые данные одного прогона WebSocket-теста. Время — performance.now() в мс. */
-export interface WsTestData {
-  edge: string;
-  roomColo: string;
+/** Сырые данные одного прогона участника. Время — performance.now() в мс. */
+export interface LinkTestData {
+  route: Route;
   rtts: number[];
   arrivals: number[];
   sent: number;
@@ -633,26 +661,18 @@ export interface WsTestData {
   durationS: number;
 }
 
-export interface P2pResult {
-  role: "hub" | "peer";
-  connected: boolean;
-  peers?: number;
-  rtt: RttSummary | null;
-  error?: string;
-}
-
 export interface ResultMeta {
   name: string;
   room: string;
+  host: string;
   ua: string;
   conn: string;
   tz: string;
 }
 
 export interface NettestResult extends ResultMeta {
-  v: 1;
-  edge: string;
-  roomColo: string;
+  v: 2;
+  route: Route;
   durationS: number;
   rtt: RttSummary;
   sent: number;
@@ -662,12 +682,23 @@ export interface NettestResult extends ResultMeta {
   worstGapMs: number;
   disconnects: number;
   hiddenS: number;
-  p2p?: P2pResult;
 }
 
 export interface Verdict {
   ok: boolean;
   reasons: string[];
+}
+
+const ROUTE_LABEL: Record<Route, string> = {
+  direct: "напрямую",
+  relay: "через ретранслятор (TURN)",
+  "?": "не определено",
+};
+const ROUTE_SHORT: Record<Route, string> = { direct: "напрямую", relay: "TURN", "?": "?" };
+
+/** Миллисекунды для людей. После JSON NaN превращается в null — тоже показываем прочерк. */
+export function fmtMs(x: number | null | undefined): string {
+  return typeof x === "number" && Number.isFinite(x) ? `${Math.round(x)} мс` : "—";
 }
 
 export function percentile(sorted: readonly number[], p: number): number {
@@ -708,13 +739,12 @@ export function lossPct(sent: number, received: number): number {
   return Math.max(0, ((sent - received) / sent) * 100);
 }
 
-export function buildResult(d: WsTestData, meta: ResultMeta, p2p?: P2pResult): NettestResult {
+export function buildResult(d: LinkTestData, meta: ResultMeta): NettestResult {
   const { stalls, worstGapMs } = countStalls(d.arrivals, CRITERIA.stallGapMs);
-  const result: NettestResult = {
-    v: 1,
+  return {
+    v: 2,
     ...meta,
-    edge: d.edge,
-    roomColo: d.roomColo,
+    route: d.route,
     durationS: Math.round(d.durationS),
     rtt: summarizeRtt(d.rtts),
     sent: d.sent,
@@ -725,13 +755,11 @@ export function buildResult(d: WsTestData, meta: ResultMeta, p2p?: P2pResult): N
     disconnects: d.disconnects,
     hiddenS: Math.round(d.hiddenMs / 1000),
   };
-  if (p2p) result.p2p = p2p;
-  return result;
 }
 
 export function judge(r: NettestResult): Verdict {
   const reasons: string[] = [];
-  if (r.rtt.count === 0) reasons.push("сервер не ответил ни разу");
+  if (r.rtt.count === 0) reasons.push("хост не ответил ни разу");
   else if (r.rtt.p95 > CRITERIA.maxP95Ms) {
     reasons.push(`пинг p95 ${Math.round(r.rtt.p95)} мс — выше ${CRITERIA.maxP95Ms}`);
   }
@@ -746,416 +774,419 @@ export function judge(r: NettestResult): Verdict {
   return { ok: reasons.length === 0, reasons };
 }
 
-function describeP2p(p: P2pResult, ms: (x: number) => string): string {
-  if (p.role === "hub") return `точка сбора, подключилось ${p.peers ?? 0}`;
-  if (p.connected) return `напрямую, p50 ${ms(p.rtt?.p50 ?? Number.NaN)}`;
-  return `не соединилось${p.error ? ` (${p.error})` : ""}`;
-}
-
 export function formatReport(r: NettestResult, v: Verdict): string {
-  const ms = (x: number) => (Number.isNaN(x) ? "—" : `${Math.round(x)} мс`);
   const lines = [
     `DoodleMagic · тест связи · ${v.ok ? "OK" : "ПРОБЛЕМЫ"}`,
     `Имя: ${r.name || "—"} · комната ${r.room} · ${r.durationS} с`,
-    `Сервер: вход ${r.edge}, комната ${r.roomColo}`,
-    `Пинг: p50 ${ms(r.rtt.p50)}, p95 ${ms(r.rtt.p95)}, макс ${ms(r.rtt.max)}, джиттер ${ms(r.rtt.jitter)}`,
+    `Связь с хостом ${r.host || "—"}: ${ROUTE_LABEL[r.route]}`,
+    `Пинг: p50 ${fmtMs(r.rtt.p50)}, p95 ${fmtMs(r.rtt.p95)}, макс ${fmtMs(r.rtt.max)}, джиттер ${fmtMs(r.rtt.jitter)}`,
     `Потери ${r.lossPct.toFixed(1)}% · зависаний ${r.stalls} · обрывов ${r.disconnects}`,
   ];
-  if (r.p2p) lines.push(`P2P: ${describeP2p(r.p2p, ms)}`);
   for (const reason of v.reasons) lines.push(`• ${reason}`);
+  return lines.join("\n");
+}
+
+const isNum = (x: unknown): boolean => typeof x === "number" && Number.isFinite(x);
+
+/** Отчёт приходит хосту от участника по сети — проверяем форму перед тем, как показывать. */
+export function isNettestResult(x: unknown): x is NettestResult {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  const rtt = r.rtt as Record<string, unknown> | null | undefined;
+  return (
+    r.v === 2 &&
+    typeof r.name === "string" &&
+    typeof r.host === "string" &&
+    typeof r.route === "string" &&
+    Object.hasOwn(ROUTE_LABEL, r.route) &&
+    typeof rtt === "object" &&
+    rtt !== null &&
+    isNum(rtt.count) &&
+    [r.durationS, r.sent, r.received, r.lossPct, r.stalls, r.worstGapMs, r.disconnects, r.hiddenS].every(isNum)
+  );
+}
+
+/** Сводка для хоста: строка на участника и итог по критерию «9 из 10». */
+export function formatSummary(results: readonly NettestResult[]): string {
+  if (results.length === 0) return "Пока нет результатов.";
+  const lines: string[] = [];
+  let passed = 0;
+  let relayed = 0;
+  for (const r of results) {
+    const v = judge(r);
+    if (v.ok) passed++;
+    if (r.route === "relay") relayed++;
+    lines.push(
+      `${v.ok ? "OK  " : "FAIL"} ${r.name || "—"} · ${ROUTE_SHORT[r.route]} · p50 ${fmtMs(r.rtt.p50)} · p95 ${fmtMs(r.rtt.p95)} · зав ${r.stalls} · обр ${r.disconnects} · пот ${r.lossPct.toFixed(1)}% · ${r.durationS} с`,
+    );
+    for (const reason of v.reasons) lines.push(`     • ${reason}`);
+  }
+  const pct = Math.round((passed / results.length) * 100);
+  lines.push(
+    "",
+    `Прошли ${passed} из ${results.length} (${pct} %). Порог: 90 %.`,
+    `Через ретранслятор (TURN): ${relayed} из ${results.length}.`,
+  );
   return lines.join("\n");
 }
 ```
 
-- [ ] **Step 6: Убедиться, что тесты проходят**
+- [ ] **Step 6: Убедиться, что тесты проходят, и проверить типы**
 
-Run: `pnpm test`
-Expected: PASS — `Test Files  3 passed`, все тесты зелёные.
+Run: `pnpm test` и `pnpm --filter @doodlemagic/client typecheck`
+Expected: PASS — `Test Files  4 passed`, все тесты зелёные, вывод без предупреждений; типы без ошибок.
 
-- [ ] **Step 7: Проверить типы**
-
-Run: `pnpm --filter @doodlemagic/client typecheck`
-Expected: без ошибок.
-
-- [ ] **Step 8: Коммит**
+- [ ] **Step 7: Коммит**
 
 ```bash
 git add apps/client pnpm-lock.yaml
-git commit -m "feat(client): nettest statistics and verdict" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(client): nettest statistics, route detection and host summary" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 3: Сервер: Worker, комната и хранилище отчётов
+### Task 4: P2P-сессии: хост и участник
 
 **Files:**
-- Create: `apps/server/package.json`, `apps/server/tsconfig.json`, `apps/server/wrangler.jsonc`, `apps/server/.dev.vars`
-- Create: `apps/server/src/env.ts`, `apps/server/src/index.ts`, `apps/server/src/RoomDO.ts`, `apps/server/src/ReportsDO.ts`
-- Test: `apps/server/scripts/smoke.mjs`
+- Create: `apps/client/src/nettest/p2p.ts`
+- Modify: `apps/client/package.json` (добавить `peerjs`)
 
 **Interfaces:**
-- Consumes: `parseClientMsg`, `pong`, `welcome`, `makeSnapshot`, `parseTraceColo`, `SNAPSHOT_HZ` из `@doodlemagic/protocol` (Task 1).
-- Produces (HTTP API, им пользуются Task 4–7):
-  - `GET /health` → `{"ok":true}`;
-  - `GET /room/:code` с `Upgrade: websocket`:
-    - клиент шлёт `hello` и `ping`;
-    - сервер шлёт `welcome` с полями `edge` (дата-центр входа) и `roomColo` (где живёт комната), `pong` на каждый пинг и `snap` 20 раз/с;
-  - `POST /report` с JSON до 8 КБ → `{"ok":true,"id":"…"}`;
-  - `GET /reports?key=<REPORTS_KEY>` → массив `{ id, at, country, data }`; с неверным ключом — 403.
+- Consumes:
+  - из `@doodlemagic/protocol` (Task 2): `NETTEST_VERSION`, `SNAPSHOT_HZ`, `makeSnapshot`, `parseClientMsg`, `pong`, `welcome`, тип `HostMsg`;
+  - из `stats.ts`: `isNettestResult`, типы `LinkTestData`, `NettestResult`;
+  - из `route.ts`: `routeFromStats`, тип `StatsEntry`.
+- Produces:
+  - `PEER_OPTIONS`, `hostPeerId(room: string): string`;
+  - `hostRoom(room: string, hostName: string, onUpdate: (s: HostState) => void): Promise<HostSession>`, где `HostState = { peers: string[]; reports: NettestResult[] }`, `HostSession = { close(): void }`. Если комнату уже занял другой хост, промис отклоняется ошибкой с `type === "unavailable-id"`;
+  - `runPeerTest(o: PeerRunOptions): Promise<PeerOutcome>`, где:
+    - `PeerRunOptions = { room; name; durationS; onTick?(data, connected, hostName) }`;
+    - `PeerOutcome = { hostFound: boolean; hostName: string; data: LinkTestData; sendReport(r: NettestResult): boolean; close(): void }`;
+    - промис отклоняется, только если недоступен сам сигналинг PeerJS.
 
-- [ ] **Step 1: Создать пакет сервера**
+Устройство:
+- Соединение PeerJS — `serialization: "raw"` (строки как есть, их разбирает `parseClientMsg`) и `reliable: false` (неупорядоченный канал, как для игровых снапшотов).
+- Хост на каждое соединение шлёт снапшоты 20 раз/с, на `hello` отвечает `welcome`, на `ping` — `pong`, принимает `report`.
+- Участник 30 раз/с шлёт `ping`; переподключается через 1 с после обрыва. Через 1,5 с после открытия соединения определяет путь по `getStats()`. Если за 12 с с хостом соединиться не удалось, тест заканчивается с `hostFound: false`.
+- WebRTC работает только в браузере, поэтому этот модуль проверяется типами, сборкой и живой проверкой в задаче 5. Вся считаемая логика уже покрыта тестами в задачах 2–3.
 
-`apps/server/package.json`:
-```json
-{
-  "name": "@doodlemagic/server",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "wrangler dev --port 8787",
-    "deploy": "wrangler deploy",
-    "types": "wrangler types",
-    "typecheck": "tsc --noEmit -p ."
-  },
-  "dependencies": {
-    "@doodlemagic/protocol": "workspace:*"
-  }
-}
-```
+- [ ] **Step 1: Поставить PeerJS**
 
-Run: `pnpm --filter @doodlemagic/server add -D wrangler`
-Expected: в `apps/server/package.json` появился `wrangler` 4.x.
+Run: `pnpm --filter @doodlemagic/client add peerjs@1.5.5`
+Expected: в `apps/client/package.json` в `dependencies` — `"peerjs": "1.5.5"`.
 
-`apps/server/tsconfig.json`:
-```json
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "lib": ["ES2022"],
-    "types": []
-  },
-  "include": ["src", "worker-configuration.d.ts"]
-}
-```
+- [ ] **Step 2: Реализовать сессии**
 
-`apps/server/wrangler.jsonc`:
-```jsonc
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "doodlemagic-server",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-06-01",
-  "durable_objects": {
-    "bindings": [
-      { "name": "ROOMS", "class_name": "RoomDO" },
-      { "name": "REPORTS", "class_name": "ReportsDO" }
-    ]
-  },
-  // на бесплатном тарифе Durable Objects бывают только SQLite-классы
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO", "ReportsDO"] }]
-}
-```
-
-`apps/server/.dev.vars` (в git не попадает):
-```
-REPORTS_KEY=dev
-```
-
-- [ ] **Step 2: Написать дымовой тест**
-
-`apps/server/scripts/smoke.mjs`:
-```js
-// Дымовой тест сервера. Запуск: node apps/server/scripts/smoke.mjs [ws-адрес] [REPORTS_KEY]
-const wsBase = (process.argv[2] ?? "ws://localhost:8787").replace(/\/+$/, "");
-const key = process.argv[3] ?? "dev";
-const httpBase = wsBase.replace(/^ws(s?):\/\//, "http$1://");
-
-function checkRoom() {
-  return new Promise((resolve) => {
-    const got = { welcome: null, pongs: 0, snaps: 0, error: null };
-    const ws = new WebSocket(`${wsBase}/room/SMOKE`);
-    ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({ t: "hello", v: 1, name: "smoke" }));
-      for (let i = 0; i < 10; i++) ws.send(JSON.stringify({ t: "ping", seq: i, ct: performance.now() }));
-    });
-    ws.addEventListener("message", (ev) => {
-      const m = JSON.parse(String(ev.data));
-      if (m.t === "welcome") got.welcome = m;
-      else if (m.t === "pong") got.pongs++;
-      else if (m.t === "snap") got.snaps++;
-    });
-    ws.addEventListener("error", () => {
-      got.error = "websocket error";
-    });
-    setTimeout(() => {
-      ws.close();
-      resolve(got);
-    }, 2000);
-  });
-}
-
-const room = await checkRoom();
-console.log("room:", JSON.stringify(room));
-
-let reportOk = false;
-try {
-  const post = await fetch(`${httpBase}/report`, { method: "POST", body: JSON.stringify({ smoke: true, at: Date.now() }) });
-  const list = await fetch(`${httpBase}/reports?key=${encodeURIComponent(key)}`).then((r) => r.json());
-  reportOk = post.ok && Array.isArray(list) && list.some((x) => x?.data?.smoke === true);
-  console.log("report:", post.status, "stored:", Array.isArray(list) ? list.length : JSON.stringify(list));
-} catch (e) {
-  console.log("report: request failed", String(e));
-}
-
-const ok = room.welcome !== null && room.pongs === 10 && room.snaps >= 20 && reportOk;
-console.log(ok ? "SMOKE OK" : "SMOKE FAIL");
-process.exit(ok ? 0 : 1);
-```
-
-- [ ] **Step 3: Убедиться, что дымовой тест падает**
-
-Run: `pnpm smoke` (сервер ещё не запущен)
-Expected: `SMOKE FAIL` и код выхода 1.
-
-- [ ] **Step 4: Реализовать окружение и роутер**
-
-`apps/server/src/env.ts`:
+`apps/client/src/nettest/p2p.ts`:
 ```ts
-import type { ReportsDO } from "./ReportsDO";
-import type { RoomDO } from "./RoomDO";
+import { Peer, type DataConnection } from "peerjs";
+import { NETTEST_VERSION, SNAPSHOT_HZ, makeSnapshot, parseClientMsg, pong, welcome, type HostMsg } from "@doodlemagic/protocol";
+import { routeFromStats, type StatsEntry } from "./route";
+import { isNettestResult, type LinkTestData, type NettestResult } from "./stats";
 
-export interface Env {
-  ROOMS: DurableObjectNamespace<RoomDO>;
-  REPORTS: DurableObjectNamespace<ReportsDO>;
-  REPORTS_KEY?: string;
-}
-```
+/** Как будущая игра: 30 пакетов ввода в секунду к хосту, снапшоты 20 раз в секунду от хоста. */
+export const PING_HZ = 30;
+export const RECONNECT_DELAY_MS = 1000;
+/** Пинги последних 2 с без ответа не считаем потерянными: ответ мог не успеть прийти. */
+export const LOSS_GRACE_MS = 2000;
+const TICK_MS = 250;
+const OPEN_TIMEOUT_MS = 12_000;
+const ROUTE_CHECK_DELAY_MS = 1500;
 
-`apps/server/src/index.ts`:
-```ts
-import type { Env } from "./env";
-import { ReportsDO } from "./ReportsDO";
-import { RoomDO } from "./RoomDO";
-
-export { ReportsDO, RoomDO };
-
-const CORS: Record<string, string> = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
-  "access-control-allow-headers": "content-type",
+/** Как в Doodle District: STUN от Google и Cloudflare и бесплатный публичный TURN на случай строгого NAT. */
+export const PEER_OPTIONS = {
+  config: {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun.cloudflare.com:3478" },
+      {
+        urls: [
+          "turn:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:443",
+          "turn:openrelay.metered.ca:443?transport=tcp",
+        ],
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+    ],
+  },
 };
-const ROOM_RE = /^\/room\/([A-Za-z0-9_-]{1,32})$/;
+const CONN_OPTIONS = { serialization: "raw", reliable: false };
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body, null, 2), {
-    status,
-    headers: { ...CORS, "content-type": "application/json; charset=utf-8" },
+type PeerError = Error & { type?: string };
+
+export function hostPeerId(room: string): string {
+  return `doodlemagic-nt-${room.toLowerCase()}-host`;
+}
+
+function openPeer(id: string | null): Promise<Peer> {
+  return new Promise((resolve, reject) => {
+    const peer = id ? new Peer(id, PEER_OPTIONS) : new Peer(PEER_OPTIONS);
+    const timer = setTimeout(() => {
+      peer.destroy();
+      reject(Object.assign(new Error("signalling timeout"), { type: "timeout" }));
+    }, OPEN_TIMEOUT_MS);
+    peer.once("open", () => {
+      clearTimeout(timer);
+      resolve(peer);
+    });
+    peer.once("error", (e: PeerError) => {
+      clearTimeout(timer);
+      peer.destroy();
+      reject(e);
+    });
   });
 }
 
-function withCors(res: Response): Response {
-  return new Response(res.body, {
-    status: res.status,
-    headers: { ...CORS, "content-type": "application/json; charset=utf-8" },
+/** Сигналинг PeerJS иногда рвёт связь: открытые P2P-каналы живут, а для новых нужно переподключиться. */
+function keepSignalling(peer: Peer): void {
+  peer.on("disconnected", () => {
+    if (!peer.destroyed) peer.reconnect();
   });
 }
 
-const cfField = (req: Request, field: "colo" | "country"): string =>
-  String((req.cf as unknown as Record<string, unknown> | undefined)?.[field] ?? "?");
+// ---------------------------------------------------------------- хост
 
-export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
-    const url = new URL(req.url);
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-    if (url.pathname === "/health") return json({ ok: true });
+export interface HostState {
+  peers: string[];
+  reports: NettestResult[];
+}
 
-    const room = ROOM_RE.exec(url.pathname)?.[1]?.toUpperCase();
-    if (room) {
-      if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-        return new Response("expected websocket", { status: 426 });
-      }
-      const headers = new Headers(req.headers);
-      headers.set("x-room", room);
-      headers.set("x-edge-colo", cfField(req, "colo"));
-      const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
-      return stub.fetch(new Request(req, { headers }));
-    }
+export interface HostSession {
+  close(): void;
+}
 
-    if (url.pathname === "/report" && req.method === "POST") {
-      const stub = env.REPORTS.get(env.REPORTS.idFromName("all"));
-      const res = await stub.fetch(
-        new Request("https://reports/add", {
-          method: "POST",
-          headers: { "x-country": cfField(req, "country") },
-          body: await req.text(),
-        }),
-      );
-      return withCors(res);
-    }
+export async function hostRoom(room: string, hostName: string, onUpdate: (s: HostState) => void): Promise<HostSession> {
+  const peer = await openPeer(hostPeerId(room));
+  keepSignalling(peer);
+  const names = new Map<DataConnection, string>();
+  const reports: NettestResult[] = [];
+  const emit = () => onUpdate({ peers: [...names.values()], reports: [...reports] });
 
-    if (url.pathname === "/reports" && req.method === "GET") {
-      if (!env.REPORTS_KEY || url.searchParams.get("key") !== env.REPORTS_KEY) return json({ error: "forbidden" }, 403);
-      const stub = env.REPORTS.get(env.REPORTS.idFromName("all"));
-      return withCors(await stub.fetch(new Request("https://reports/list")));
-    }
-
-    return json({ error: "not found" }, 404);
-  },
-} satisfies ExportedHandler<Env>;
-```
-
-- [ ] **Step 5: Реализовать комнату**
-
-`apps/server/src/RoomDO.ts`:
-```ts
-import { DurableObject } from "cloudflare:workers";
-import { SNAPSHOT_HZ, makeSnapshot, parseClientMsg, parseTraceColo, pong, welcome } from "@doodlemagic/protocol";
-import type { Env } from "./env";
-
-/** Защита от забытых вкладок: одна сессия не дольше 15 минут. */
-const MAX_SESSION_MS = 15 * 60 * 1000;
-
-export class RoomDO extends DurableObject<Env> {
-  private peers = 0;
-  private colo: Promise<string> | null = null;
-
-  async fetch(req: Request): Promise<Response> {
-    // Где физически живёт комната — узнаём один раз на экземпляр объекта.
-    this.colo ??= fetch("https://cloudflare.com/cdn-cgi/trace")
-      .then((r) => r.text())
-      .then(parseTraceColo)
-      .catch(() => "?");
-    const room = req.headers.get("x-room") ?? "?";
-    const edge = req.headers.get("x-edge-colo") ?? "?";
-
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
-    server.accept();
-    this.peers++;
-
-    const send = (msg: unknown) => {
-      try {
-        server.send(JSON.stringify(msg));
-      } catch {
-        // сокет уже закрыт
-      }
+  peer.on("connection", (conn: DataConnection) => {
+    let snapTimer: ReturnType<typeof setInterval> | undefined;
+    const send = (msg: HostMsg) => {
+      if (conn.open) void conn.send(JSON.stringify(msg));
     };
-    let n = 0;
-    const snapTimer = setInterval(() => send(makeSnapshot(n++, Date.now())), 1000 / SNAPSHOT_HZ);
-    const limitTimer = setTimeout(() => server.close(4000, "time limit"), MAX_SESSION_MS);
-    let closed = false;
-    const cleanup = () => {
-      if (closed) return;
-      closed = true;
-      clearInterval(snapTimer);
-      clearTimeout(limitTimer);
-      this.peers--;
-    };
-
-    server.addEventListener("message", (ev) => {
-      const msg = parseClientMsg(typeof ev.data === "string" ? ev.data : null);
-      if (!msg) {
-        send({ t: "error", reason: "bad message" });
-        return;
-      }
+    conn.on("open", () => {
+      let n = 0;
+      snapTimer = setInterval(() => send(makeSnapshot(n++, Date.now())), 1000 / SNAPSHOT_HZ);
+    });
+    conn.on("data", (raw) => {
+      const msg = parseClientMsg(typeof raw === "string" ? raw : null);
+      if (!msg) return;
       if (msg.t === "ping") {
         send(pong(msg, Date.now()));
-        return;
+      } else if (msg.t === "hello") {
+        names.set(conn, msg.name || "без имени");
+        send(welcome(msg, { room, host: hostName, peers: names.size }));
+        emit();
+      } else if (isNettestResult(msg.data)) {
+        reports.push(msg.data);
+        emit();
       }
-      void this.colo!.then((roomColo) => send(welcome(msg, { room, edge, roomColo, peers: this.peers })));
     });
-    server.addEventListener("close", cleanup);
-    server.addEventListener("error", cleanup);
+    const drop = () => {
+      clearInterval(snapTimer);
+      if (names.delete(conn)) emit();
+    };
+    conn.on("close", drop);
+    conn.on("error", drop);
+  });
 
-    return new Response(null, { status: 101, webSocket: client });
-  }
+  emit();
+  return { close: () => peer.destroy() };
 }
-```
 
-- [ ] **Step 6: Реализовать хранилище отчётов**
+// ---------------------------------------------------------------- участник
 
-`apps/server/src/ReportsDO.ts`:
-```ts
-import { DurableObject } from "cloudflare:workers";
-import type { Env } from "./env";
+export interface PeerRunOptions {
+  room: string;
+  name: string;
+  durationS: number;
+  onTick?: (data: Readonly<LinkTestData>, connected: boolean, hostName: string) => void;
+}
 
-const MAX_REPORT_BYTES = 8192;
+export interface PeerOutcome {
+  hostFound: boolean;
+  hostName: string;
+  data: LinkTestData;
+  sendReport(r: NettestResult): boolean;
+  close(): void;
+}
 
-export class ReportsDO extends DurableObject<Env> {
-  async fetch(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-    if (url.pathname === "/add" && req.method === "POST") {
-      const text = await req.text();
-      if (text.length > MAX_REPORT_BYTES) return Response.json({ error: "too large" }, { status: 413 });
-      let data: unknown;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        return Response.json({ error: "bad json" }, { status: 400 });
+export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
+  const me = await openPeer(null);
+  keepSignalling(me);
+
+  return new Promise((resolve) => {
+    const data: LinkTestData = {
+      route: "?",
+      rtts: [],
+      arrivals: [],
+      sent: 0,
+      received: 0,
+      disconnects: 0,
+      hiddenMs: 0,
+      durationS: 0,
+    };
+    const start = performance.now();
+    const endAt = start + o.durationS * 1000;
+    const sentAt = new Map<number, number>();
+    let seq = 0;
+    let conn: DataConnection | null = null;
+    let connected = false;
+    let everOpened = false;
+    let hostName = "";
+    let finished = false;
+    let hiddenSince: number | null = document.hidden ? start : null;
+
+    const onVisibility = () => {
+      const now = performance.now();
+      if (document.hidden) hiddenSince = now;
+      else if (hiddenSince !== null) {
+        data.hiddenMs += now - hiddenSince;
+        hiddenSince = null;
       }
-      const id = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-      await this.ctx.storage.put(`r:${id}`, {
-        id,
-        at: new Date().toISOString(),
-        country: req.headers.get("x-country") ?? "?",
-        data,
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    me.on("error", (e: PeerError) => {
+      if (e.type === "peer-unavailable" && !everOpened) finish(false);
+    });
+
+    const connect = () => {
+      const c = me.connect(hostPeerId(o.room), CONN_OPTIONS);
+      conn = c;
+      let opened = false;
+      c.on("open", () => {
+        opened = true;
+        everOpened = true;
+        connected = true;
+        void c.send(JSON.stringify({ t: "hello", v: NETTEST_VERSION, name: o.name }));
+        setTimeout(() => {
+          c.peerConnection
+            ?.getStats()
+            .then((report) => {
+              data.route = routeFromStats(report.values() as Iterable<StatsEntry>);
+            })
+            .catch(() => undefined);
+        }, ROUTE_CHECK_DELAY_MS);
       });
-      return Response.json({ ok: true, id });
+      c.on("data", (raw) => {
+        const now = performance.now();
+        data.arrivals.push(now);
+        let msg: HostMsg;
+        try {
+          msg = JSON.parse(String(raw)) as HostMsg;
+        } catch {
+          return;
+        }
+        if (msg.t === "welcome") {
+          hostName = msg.host;
+        } else if (msg.t === "pong") {
+          const t0 = sentAt.get(msg.seq);
+          if (t0 !== undefined) {
+            sentAt.delete(msg.seq);
+            data.rtts.push(now - t0);
+          }
+        }
+      });
+      c.on("close", () => {
+        if (finished || conn !== c) return;
+        connected = false;
+        // обрыв — это потеря уже открытого соединения; неудачные попытки переподключения не считаем
+        if (opened) data.disconnects++;
+        if (performance.now() < endAt) setTimeout(connect, RECONNECT_DELAY_MS);
+      });
+    };
+
+    const openTimer = setTimeout(() => {
+      if (!everOpened) finish(false);
+    }, OPEN_TIMEOUT_MS);
+
+    const pingTimer = setInterval(() => {
+      if (!connected || !conn?.open) return;
+      const s = seq++;
+      const t = performance.now();
+      sentAt.set(s, t);
+      void conn.send(JSON.stringify({ t: "ping", seq: s, ct: t }));
+    }, 1000 / PING_HZ);
+
+    const tickTimer = setInterval(() => {
+      o.onTick?.(data, connected, hostName);
+      if (performance.now() >= endAt) finish(true);
+    }, TICK_MS);
+
+    function finish(hostFound: boolean): void {
+      if (finished) return;
+      finished = true;
+      clearTimeout(openTimer);
+      clearInterval(pingTimer);
+      clearInterval(tickTimer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      const now = performance.now();
+      if (hiddenSince !== null) data.hiddenMs += now - hiddenSince;
+      const cutoff = now - LOSS_GRACE_MS;
+      let recent = 0;
+      let lost = 0;
+      for (const t of sentAt.values()) {
+        if (t >= cutoff) recent++;
+        else lost++;
+      }
+      data.sent = seq - recent;
+      data.received = data.sent - lost;
+      data.durationS = (now - start) / 1000;
+      resolve({
+        hostFound,
+        hostName,
+        data,
+        sendReport: (r) => {
+          if (!conn?.open) return false;
+          void conn.send(JSON.stringify({ t: "report", data: r }));
+          return true;
+        },
+        close: () => me.destroy(),
+      });
     }
-    if (url.pathname === "/list") {
-      const all = await this.ctx.storage.list({ prefix: "r:" });
-      return Response.json([...all.values()]);
-    }
-    return Response.json({ error: "not found" }, { status: 404 });
-  }
+
+    connect();
+  });
 }
 ```
 
-- [ ] **Step 7: Сгенерировать типы Workers и проверить типы**
+- [ ] **Step 3: Проверить типы, тесты и сборку**
 
-Run: `pnpm --filter @doodlemagic/server types` и затем `pnpm --filter @doodlemagic/server typecheck`
-Expected: создан `apps/server/worker-configuration.d.ts`; проверка типов без ошибок.
+Run: `pnpm --filter @doodlemagic/client typecheck` и `pnpm test`
+Expected: без ошибок типов; все тесты зелёные, как после задачи 3.
 
-- [ ] **Step 8: Запустить сервер и прогнать дымовой тест**
-
-В отдельном терминале: `pnpm dev:server`
-Expected в нём: `Ready on http://localhost:8787`.
-
-Run: `pnpm smoke`
-Expected:
-```
-room: {"welcome":{"t":"welcome","v":1,"room":"SMOKE",...},"pongs":10,"snaps":38,"error":null}
-report: 200 stored: 1
-SMOKE OK
-```
-(`snaps` около 40, `edge` и `roomColo` локально могут быть `?`.)
-
-- [ ] **Step 9: Коммит**
+- [ ] **Step 4: Коммит**
 
 ```bash
-git add apps/server pnpm-lock.yaml
-git commit -m "feat(server): nettest room and reports durable objects" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add apps/client pnpm-lock.yaml
+git commit -m "feat(client): PeerJS host room and participant session" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 4: Страница теста связи `/nettest`
+### Task 5: Страница `/nettest`
 
 **Files:**
 - Create: `apps/client/index.html`, `apps/client/vercel.json`
-- Create: `apps/client/src/main.ts`, `apps/client/src/style.css`
-- Create: `apps/client/src/nettest/runner.ts`, `apps/client/src/nettest/page.ts`
+- Create: `apps/client/src/main.ts`, `apps/client/src/style.css`, `apps/client/src/nettest/page.ts`
+- Create: `.claude/launch.json`
 
 **Interfaces:**
-- Consumes: из `@doodlemagic/protocol` — `NETTEST_VERSION` и тип `ServerMsg` (Task 1); из `stats.ts` и `config.ts` — всё, что перечислено в Task 2; HTTP API сервера (Task 3).
+- Consumes:
+  - из `config.ts`: `cleanRoom`;
+  - из `p2p.ts`: `hostRoom`, `runPeerTest`, тип `PeerOutcome`;
+  - из `stats.ts`: `CRITERIA`, `buildResult`, `countStalls`, `fmtMs`, `formatReport`, `formatSummary`, `judge`, `summarizeRtt`, тип `ResultMeta`.
 - Produces:
-  - `runWsTest(o: RunWsOptions): Promise<WsTestData>`, где `RunWsOptions = { url; room; name; durationS; onTick?(data, connected) }`;
   - `mountNettest(root: HTMLElement): void`;
-  - маршрут `/nettest?room=КОД[&dur=секунды][&server=wss://…]`.
+  - маршруты: `/nettest?room=КОД&host=1` — хост, `/nettest?room=КОД[&dur=секунды]` — участник.
 
-- [ ] **Step 1: Точка входа и стили**
+- [ ] **Step 1: Точка входа, стили, перезапись для Vercel**
 
 `apps/client/index.html`:
 ```html
@@ -1193,7 +1224,8 @@ if (location.pathname.startsWith("/nettest")) {
     <section class="card">
       <h1>DoodleMagic</h1>
       <p>Магическая арена от первого лица. Скоро.</p>
-      <p><a class="btn" href="/nettest">Проверить связь</a></p>
+      <p><a class="btn" href="/nettest?host=1">Я организатор: открыть тест связи</a></p>
+      <p><a class="btn secondary" href="/nettest">Меня позвали: пройти тест</a></p>
     </section>`;
 }
 ```
@@ -1226,7 +1258,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system
 #app { max-width: 560px; margin: 0 auto; padding: 24px 16px 48px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
 h1 { margin: 0 0 8px; font-size: 28px; }
-h2 { margin: 0 0 12px; font-size: 22px; }
+h2 { margin: 16px 0 8px; font-size: 20px; }
 label { display: block; margin: 12px 0; font-weight: 600; }
 input, select {
   display: block; width: 100%; margin-top: 6px; padding: 10px 12px; font: inherit;
@@ -1244,152 +1276,30 @@ input, select {
 .grid .k { display: block; font-size: 13px; color: var(--muted); }
 .grid b { font-size: 22px; font-variant-numeric: tabular-nums; }
 pre {
-  white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line);
+  white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border: 1px solid var(--line);
   border-radius: 8px; padding: 12px; font-size: 14px;
 }
 .ok { color: var(--good); }
 .bad { color: var(--accent); }
 ```
 
-- [ ] **Step 2: Сессия WebSocket**
-
-`apps/client/src/nettest/runner.ts`:
-```ts
-import { NETTEST_VERSION, type ServerMsg } from "@doodlemagic/protocol";
-import type { WsTestData } from "./stats";
-
-/** Как будущая игра: 30 пакетов ввода в секунду вверх, снапшоты 20 раз в секунду вниз. */
-export const PING_HZ = 30;
-export const RECONNECT_DELAY_MS = 1000;
-/** Пинги последних 2 с без ответа не считаем потерянными: ответ мог не успеть прийти. */
-export const LOSS_GRACE_MS = 2000;
-const TICK_MS = 250;
-
-export interface RunWsOptions {
-  url: string;
-  room: string;
-  name: string;
-  durationS: number;
-  onTick?: (data: Readonly<WsTestData>, connected: boolean) => void;
-}
-
-export function runWsTest(o: RunWsOptions): Promise<WsTestData> {
-  return new Promise((resolve) => {
-    const data: WsTestData = {
-      edge: "?",
-      roomColo: "?",
-      rtts: [],
-      arrivals: [],
-      sent: 0,
-      received: 0,
-      disconnects: 0,
-      hiddenMs: 0,
-      durationS: 0,
-    };
-    const start = performance.now();
-    const endAt = start + o.durationS * 1000;
-    const sentAt = new Map<number, number>();
-    let seq = 0;
-    let ws: WebSocket | null = null;
-    let connected = false;
-    let finished = false;
-    let hiddenSince: number | null = document.hidden ? start : null;
-
-    const onVisibility = () => {
-      const now = performance.now();
-      if (document.hidden) hiddenSince = now;
-      else if (hiddenSince !== null) {
-        data.hiddenMs += now - hiddenSince;
-        hiddenSince = null;
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    const connect = () => {
-      const sock = new WebSocket(`${o.url}/room/${encodeURIComponent(o.room)}`);
-      ws = sock;
-      let opened = false;
-      sock.addEventListener("open", () => {
-        opened = true;
-        connected = true;
-        sock.send(JSON.stringify({ t: "hello", v: NETTEST_VERSION, name: o.name }));
-      });
-      sock.addEventListener("message", (ev) => {
-        const now = performance.now();
-        data.arrivals.push(now);
-        let msg: ServerMsg;
-        try {
-          msg = JSON.parse(String(ev.data)) as ServerMsg;
-        } catch {
-          return;
-        }
-        if (msg.t === "welcome") {
-          data.edge = msg.edge;
-          data.roomColo = msg.roomColo;
-        } else if (msg.t === "pong") {
-          const t0 = sentAt.get(msg.seq);
-          if (t0 !== undefined) {
-            sentAt.delete(msg.seq);
-            data.rtts.push(now - t0);
-          }
-        }
-      });
-      sock.addEventListener("close", () => {
-        if (finished) return;
-        connected = false;
-        // обрыв — это потеря уже открытого соединения; неудачные попытки переподключения не считаем
-        if (opened) data.disconnects++;
-        if (performance.now() < endAt) setTimeout(connect, RECONNECT_DELAY_MS);
-      });
-    };
-
-    const pingTimer = setInterval(() => {
-      if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
-      const s = seq++;
-      const t = performance.now();
-      sentAt.set(s, t);
-      ws.send(JSON.stringify({ t: "ping", seq: s, ct: t }));
-    }, 1000 / PING_HZ);
-
-    const tickTimer = setInterval(() => {
-      o.onTick?.(data, connected);
-      if (performance.now() >= endAt) finish();
-    }, TICK_MS);
-
-    function finish(): void {
-      if (finished) return;
-      finished = true;
-      clearInterval(pingTimer);
-      clearInterval(tickTimer);
-      document.removeEventListener("visibilitychange", onVisibility);
-      const now = performance.now();
-      if (hiddenSince !== null) data.hiddenMs += now - hiddenSince;
-      const cutoff = now - LOSS_GRACE_MS;
-      let recent = 0;
-      let lost = 0;
-      for (const t of sentAt.values()) {
-        if (t >= cutoff) recent++;
-        else lost++;
-      }
-      data.sent = seq - recent;
-      data.received = data.sent - lost;
-      data.durationS = (now - start) / 1000;
-      ws?.close(1000, "done");
-      resolve(data);
-    }
-
-    connect();
-  });
-}
-```
-
-- [ ] **Step 3: Интерфейс страницы**
+- [ ] **Step 2: Интерфейс страницы**
 
 `apps/client/src/nettest/page.ts`:
 ```ts
-import { cleanRoom, gameServerUrl, httpBase } from "../config";
-import { runWsTest } from "./runner";
-import { CRITERIA, buildResult, countStalls, formatReport, judge, summarizeRtt, type ResultMeta } from "./stats";
+import { cleanRoom } from "../config";
+import { hostRoom, runPeerTest, type PeerOutcome } from "./p2p";
+import {
+  CRITERIA,
+  buildResult,
+  countStalls,
+  fmtMs,
+  formatReport,
+  formatSummary,
+  judge,
+  summarizeRtt,
+  type ResultMeta,
+} from "./stats";
 
 const NAME_KEY = "nettest_name";
 
@@ -1409,17 +1319,115 @@ function safeSet(key: string, value: string): void {
   }
 }
 
-const fmtMs = (x: number | null): string => (x === null || Number.isNaN(x) ? "—" : `${Math.round(x)} мс`);
 const fmtClock = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const connType = (): string =>
   (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType ?? "?";
 
+function byId<T extends HTMLElement = HTMLElement>(root: HTMLElement, id: string): T {
+  const node = root.querySelector<T>(`#${id}`);
+  if (!node) throw new Error(`missing #${id}`);
+  return node;
+}
+
+async function keepAwake(): Promise<WakeLockSentinel | null> {
+  try {
+    return await navigator.wakeLock.request("screen");
+  } catch {
+    return null;
+  }
+}
+
+function copyOnClick(btn: HTMLButtonElement, text: () => string): void {
+  btn.addEventListener("click", () => {
+    void navigator.clipboard.writeText(text()).then(
+      () => {
+        btn.textContent = "Скопировано ✓";
+      },
+      () => {
+        btn.textContent = "Не вышло — выдели текст вручную";
+      },
+    );
+  });
+}
+
 export function mountNettest(root: HTMLElement): void {
   const params = new URLSearchParams(location.search);
   const room = cleanRoom(params.get("room"));
-  const server = gameServerUrl();
-  const debugDur = Number(params.get("dur"));
+  if (params.get("host") === "1") mountHost(root, room);
+  else mountPeer(root, room, Number(params.get("dur")));
+}
 
+// ---------------------------------------------------------------- хост
+
+function mountHost(root: HTMLElement, room: string): void {
+  const shareLink = `${location.origin}/nettest?room=${encodeURIComponent(room)}`;
+  root.innerHTML = `
+    <section class="card">
+      <h1>Тест связи: ты хост</h1>
+      <p class="muted">Твой браузер будет «сервером», как в будущей игре. Открой комнату, отправь друзьям ссылку и не закрывай и не сворачивай эту вкладку, пока все не закончат.</p>
+      <label>Твоё имя (его увидят участники) <input id="nt-name" maxlength="24" autocomplete="nickname" placeholder="Например, Хост" /></label>
+      <p class="muted small">Комната: <b id="nt-room"></b></p>
+      <button id="nt-open" class="btn" type="button">Открыть комнату</button>
+      <p class="muted small" id="nt-status"></p>
+    </section>
+    <section class="card" id="nt-room-card" hidden>
+      <p>Ссылка для друзей:</p>
+      <pre id="nt-link"></pre>
+      <button id="nt-copy-link" class="btn secondary" type="button">Скопировать ссылку</button>
+      <h2>Сейчас в тесте: <span id="nt-count">0</span></h2>
+      <p class="muted small" id="nt-peers"></p>
+      <h2>Результаты</h2>
+      <pre id="nt-summary"></pre>
+      <button id="nt-copy-summary" class="btn secondary" type="button">Скопировать сводку</button>
+    </section>`;
+
+  const nameInput = byId<HTMLInputElement>(root, "nt-name");
+  const openBtn = byId<HTMLButtonElement>(root, "nt-open");
+  const status = byId(root, "nt-status");
+  let summary = formatSummary([]);
+  byId(root, "nt-room").textContent = room;
+  byId(root, "nt-link").textContent = shareLink;
+  byId(root, "nt-summary").textContent = summary;
+  nameInput.value = safeGet(NAME_KEY) ?? "";
+  copyOnClick(byId<HTMLButtonElement>(root, "nt-copy-link"), () => shareLink);
+  copyOnClick(byId<HTMLButtonElement>(root, "nt-copy-summary"), () => summary);
+
+  openBtn.addEventListener("click", () => {
+    void open();
+  });
+
+  async function open(): Promise<void> {
+    const name = nameInput.value.trim().slice(0, 24) || "Хост";
+    safeSet(NAME_KEY, name);
+    openBtn.disabled = true;
+    nameInput.disabled = true;
+    status.textContent = "Открываем комнату…";
+    try {
+      await hostRoom(room, name, (s) => {
+        byId(root, "nt-count").textContent = String(s.peers.length);
+        byId(root, "nt-peers").textContent = s.peers.join(", ");
+        summary = formatSummary(s.reports);
+        byId(root, "nt-summary").textContent = summary;
+      });
+    } catch (e) {
+      const type = (e as { type?: string }).type;
+      status.textContent =
+        type === "unavailable-id"
+          ? `Комната ${room} уже открыта (в другой вкладке или у другого хоста). Закрой её или возьми другой код: ?room=ДРУГОЙ&host=1`
+          : `Не удалось открыть комнату (${type ?? String(e)}). Проверь интернет и обнови страницу.`;
+      openBtn.disabled = false;
+      nameInput.disabled = false;
+      return;
+    }
+    await keepAwake();
+    status.textContent = "Комната открыта ✓ Не закрывай и не сворачивай эту вкладку.";
+    byId(root, "nt-room-card").hidden = false;
+  }
+}
+
+// ---------------------------------------------------------------- участник
+
+function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
   root.innerHTML = `
     <section class="card">
       <h1>Тест связи</h1>
@@ -1428,6 +1436,7 @@ export function mountNettest(root: HTMLElement): void {
       <label>Длительность <select id="nt-dur"></select></label>
       <p class="muted small">Комната: <b id="nt-room"></b></p>
       <button id="nt-start" class="btn" type="button">Начать</button>
+      <p class="bad small" id="nt-error"></p>
     </section>
     <section class="card" id="nt-live" hidden>
       <div class="grid">
@@ -1436,7 +1445,7 @@ export function mountNettest(root: HTMLElement): void {
         <div><span class="k">Пинг p95</span><b id="nt-p95">—</b></div>
         <div><span class="k">Зависания</span><b id="nt-stalls">0</b></div>
       </div>
-      <p class="muted small" id="nt-status">Подключаемся…</p>
+      <p class="muted small" id="nt-status">Подключаемся к хосту…</p>
     </section>
     <section class="card" id="nt-result" hidden>
       <h2 id="nt-verdict"></h2>
@@ -1445,16 +1454,12 @@ export function mountNettest(root: HTMLElement): void {
       <button id="nt-copy" class="btn secondary" type="button">Скопировать результат</button>
     </section>`;
 
-  const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
-    const node = root.querySelector<T>(`#${id}`);
-    if (!node) throw new Error(`missing #${id}`);
-    return node;
-  };
-  const nameInput = el<HTMLInputElement>("nt-name");
-  const durSelect = el<HTMLSelectElement>("nt-dur");
-  const startBtn = el<HTMLButtonElement>("nt-start");
-
-  el("nt-room").textContent = room;
+  const nameInput = byId<HTMLInputElement>(root, "nt-name");
+  const durSelect = byId<HTMLSelectElement>(root, "nt-dur");
+  const startBtn = byId<HTMLButtonElement>(root, "nt-start");
+  const errorLine = byId(root, "nt-error");
+  let reportText = "";
+  byId(root, "nt-room").textContent = room;
   nameInput.value = safeGet(NAME_KEY) ?? "";
   const durations: Array<[number, string]> = [
     [600, "10 минут — полный тест"],
@@ -1462,6 +1467,13 @@ export function mountNettest(root: HTMLElement): void {
   ];
   if (Number.isFinite(debugDur) && debugDur > 0) durations.unshift([debugDur, `${debugDur} с — отладка`]);
   for (const [seconds, label] of durations) durSelect.add(new Option(label, String(seconds)));
+  copyOnClick(byId<HTMLButtonElement>(root, "nt-copy"), () => reportText);
+
+  const setInputsDisabled = (disabled: boolean) => {
+    startBtn.disabled = disabled;
+    nameInput.disabled = disabled;
+    durSelect.disabled = disabled;
+  };
 
   startBtn.addEventListener("click", () => {
     void run();
@@ -1470,537 +1482,207 @@ export function mountNettest(root: HTMLElement): void {
   async function run(): Promise<void> {
     const name = nameInput.value.trim().slice(0, 24);
     safeSet(NAME_KEY, name);
-    startBtn.disabled = true;
-    nameInput.disabled = true;
-    durSelect.disabled = true;
-    el("nt-live").hidden = false;
-
-    let wake: WakeLockSentinel | null = null;
-    try {
-      wake = await navigator.wakeLock.request("screen");
-    } catch {
-      wake = null;
-    }
+    setInputsDisabled(true);
+    errorLine.textContent = "";
+    byId(root, "nt-live").hidden = false;
+    const wake = await keepAwake();
 
     const started = performance.now();
     let lastSummaryAt = 0;
-    const data = await runWsTest({
-      url: server,
-      room,
-      name,
-      durationS: Number(durSelect.value),
-      onTick: (d, connected) => {
-        const now = performance.now();
-        el("nt-elapsed").textContent = fmtClock((now - started) / 1000);
-        el("nt-last").textContent = fmtMs(d.rtts.at(-1) ?? null);
-        el("nt-status").textContent = connected
-          ? `Связь есть · вход ${d.edge}, комната ${d.roomColo}`
-          : "Связь потеряна, переподключаемся…";
-        if (now - lastSummaryAt > 1000) {
-          lastSummaryAt = now;
-          el("nt-p95").textContent = fmtMs(summarizeRtt(d.rtts).p95);
-          el("nt-stalls").textContent = String(countStalls(d.arrivals, CRITERIA.stallGapMs).stalls);
-        }
-      },
-    });
-
+    let outcome: PeerOutcome;
+    try {
+      outcome = await runPeerTest({
+        room,
+        name,
+        durationS: Number(durSelect.value),
+        onTick: (d, connected, hostName) => {
+          const now = performance.now();
+          byId(root, "nt-elapsed").textContent = fmtClock((now - started) / 1000);
+          byId(root, "nt-last").textContent = fmtMs(d.rtts.at(-1));
+          byId(root, "nt-status").textContent = connected
+            ? `Связь с хостом ${hostName || "…"} есть`
+            : "Связь с хостом потеряна, переподключаемся…";
+          if (now - lastSummaryAt > 1000) {
+            lastSummaryAt = now;
+            byId(root, "nt-p95").textContent = fmtMs(summarizeRtt(d.rtts).p95);
+            byId(root, "nt-stalls").textContent = String(countStalls(d.arrivals, CRITERIA.stallGapMs).stalls);
+          }
+        },
+      });
+    } catch (e) {
+      await wake?.release().catch(() => undefined);
+      byId(root, "nt-live").hidden = true;
+      errorLine.textContent = `Не удалось подключиться к сигналингу PeerJS (${(e as { type?: string }).type ?? String(e)}). Проверь интернет и нажми «Начать» ещё раз.`;
+      setInputsDisabled(false);
+      return;
+    }
     await wake?.release().catch(() => undefined);
+
+    if (!outcome.hostFound) {
+      outcome.close();
+      byId(root, "nt-live").hidden = true;
+      errorLine.textContent = "Хост не найден. Проверь ссылку или попроси организатора открыть комнату, потом нажми «Начать» ещё раз.";
+      setInputsDisabled(false);
+      return;
+    }
+
     const meta: ResultMeta = {
       name,
       room,
+      host: outcome.hostName,
       ua: navigator.userAgent.slice(0, 160),
       conn: connType(),
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
-    const result = buildResult(data, meta);
+    const result = buildResult(outcome.data, meta);
     const verdict = judge(result);
-    const text = formatReport(result, verdict);
+    reportText = formatReport(result, verdict);
 
-    const verdictEl = el("nt-verdict");
+    const verdictEl = byId(root, "nt-verdict");
     verdictEl.textContent = verdict.ok ? "Связь в порядке ✓" : "Есть проблемы";
     verdictEl.className = verdict.ok ? "ok" : "bad";
-    el("nt-report").textContent = text;
-    el("nt-result").hidden = false;
-    el("nt-copy").addEventListener("click", () => {
-      void navigator.clipboard.writeText(text).then(
-        () => {
-          el("nt-copy").textContent = "Скопировано ✓";
-        },
-        () => {
-          el("nt-copy").textContent = "Не вышло — выдели текст вручную";
-        },
-      );
-    });
-
-    const sentLine = el("nt-sent");
-    sentLine.textContent = "Отправляем результат…";
-    try {
-      const res = await fetch(`${httpBase(server)}/report`, { method: "POST", body: JSON.stringify(result) });
-      sentLine.textContent = res.ok
-        ? "Результат отправлен организатору ✓"
-        : `Не удалось отправить (код ${res.status}) — скопируй текст и пришли в чат`;
-    } catch {
-      sentLine.textContent = "Не удалось отправить — скопируй текст и пришли в чат";
-    }
+    byId(root, "nt-report").textContent = reportText;
+    byId(root, "nt-result").hidden = false;
+    byId(root, "nt-sent").textContent = outcome.sendReport(result)
+      ? "Результат отправлен хосту ✓"
+      : "Связь с хостом уже закрыта — скопируй текст и пришли в чат";
+    setTimeout(() => outcome.close(), 1500);
   }
 }
 ```
 
-- [ ] **Step 4: Проверить типы и тесты**
+- [ ] **Step 3: Проверить типы, тесты и сборку**
 
-Run: `pnpm --filter @doodlemagic/client typecheck` и `pnpm test`
-Expected: без ошибок типов; все тесты зелёные, как после Task 2.
+Run: `pnpm --filter @doodlemagic/client typecheck`, `pnpm test`, `pnpm build:client`
+Expected: без ошибок типов; все тесты зелёные; `apps/client/dist/index.html` и бандл в `dist/assets/` собраны без ошибок.
 
-- [ ] **Step 5: Проверить страницу вживую против локального сервера**
+- [ ] **Step 4: Конфигурация запуска для проверки в браузере**
 
-1. Терминал 1: `pnpm dev:server` → `Ready on http://localhost:8787`.
-2. Терминал 2: `pnpm dev:client` → `Local: http://localhost:5173/`.
-3. Открыть `http://localhost:5173/nettest?room=LOCAL&dur=20`, выбрать «20 с — отладка», ввести имя, нажать «Начать».
+`.claude/launch.json`:
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "client",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@doodlemagic/client", "dev", "--port", "5173", "--strictPort"],
+      "port": 5173
+    }
+  ]
+}
+```
 
-Expected:
-- во время теста «Пинг сейчас» — единицы мс, «Зависания» — 0, статус «Связь есть»;
-- через 20 с: «Связь в порядке ✓», текст отчёта, строка «Результат отправлен организатору ✓»;
-- `curl "http://localhost:8787/reports?key=dev"` показывает запись с этим именем.
-
-Затем остановить сервер (Ctrl+C в терминале 1) посреди нового 20-секундного прогона и снова запустить.
-Expected: статус «Связь потеряна, переподключаемся…», затем связь возвращается; в отчёте «обрывов связи: 1» и вердикт «Есть проблемы».
-
-- [ ] **Step 6: Проверить сборку**
-
-Run: `pnpm build:client`
-Expected: `apps/client/dist/index.html` и бандл в `dist/assets/`, без ошибок.
-
-- [ ] **Step 7: Коммит**
+- [ ] **Step 5: Коммит**
 
 ```bash
-git add apps/client
-git commit -m "feat(client): /nettest page with live stats and auto report" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add apps/client .claude/launch.json
+git commit -m "feat(client): /nettest page with host and participant modes" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+- [ ] **Step 6: Живая проверка в браузере (контролёр)**
+
+Запустить dev-сервер `client` из `.claude/launch.json` и открыть две вкладки (нужен интернет: облако PeerJS):
+1. Вкладка A: `http://localhost:5173/nettest?room=LOCALTEST&host=1` → «Открыть комнату».
+   Expected: «Комната открыта ✓», «Сейчас в тесте: 0».
+2. Вкладка B: `http://localhost:5173/nettest?room=LOCALTEST&dur=20` → выбрать «20 с — отладка», ввести имя, «Начать».
+   Expected во время теста: «Связь с хостом … есть», пинг — единицы или десятки мс, зависаний 0; во вкладке A — «Сейчас в тесте: 1».
+3. Через 20 с во вкладке B: «Связь в порядке ✓», в отчёте «Связь с хостом …: напрямую», «Результат отправлен хосту ✓».
+   Expected во вкладке A: сводка со строкой участника и «Прошли 1 из 1 (100 %)».
+4. Вкладка C: `http://localhost:5173/nettest?room=NOHOST&dur=20` → «Начать».
+   Expected: не позже чем через 12 с — «Хост не найден…», кнопка снова активна.
 
 ---
 
-### Task 5: Проверка P2P (запасной вариант сети)
-
-P2P у владельца уже косвенно проверен: Doodle District работает у него через PeerJS. Задача добавляет проверку у каждого друга, параллельно основному тесту. Если время поджимает, задачу можно пропустить: страница работает и без неё.
+### Task 6: Деплой на Vercel
 
 **Files:**
-- Create: `apps/client/src/nettest/webrtc.ts`
-- Modify: `apps/client/src/nettest/page.ts` (импорт, разметка, функция `run`)
+- Modify: ничего в коде.
 
 **Interfaces:**
-- Consumes: `summarizeRtt` и тип `P2pResult` из `stats.ts` (Task 2); `buildResult(d, meta, p2p?)`.
-- Produces: `runP2pCheck(room: string, stop: AbortSignal, onStatus: (s: string) => void): Promise<P2pResult>`, `hubId(room: string): string`.
+- Consumes: клиент из задач 3–5.
+- Produces: публичная страница `https://<проект>.vercel.app/nettest`, которую использует задача 7.
 
-Как это работает:
-- **Первый, кто открыл страницу с этим `room`**, занимает PeerJS-ID `doodlemagic-nt-<room>-hub` и становится точкой сбора на всё время своего теста.
-- **Остальные** 20 секунд пингуют его напрямую через WebRTC, только со STUN, без TURN. Если соединение возникло, значит P2P между этой парой работает без ретранслятора.
+- [ ] **Step 1: 👤 Владелец: автор коммитов**
 
-- [ ] **Step 1: Поставить PeerJS**
-
-Run: `pnpm --filter @doodlemagic/client add peerjs@1.5.5`
-Expected: в `apps/client/package.json` в `dependencies` — `"peerjs": "1.5.5"`.
-
-- [ ] **Step 2: Реализовать проверку**
-
-`apps/client/src/nettest/webrtc.ts`:
-```ts
-import { Peer, type DataConnection } from "peerjs";
-import { summarizeRtt, type P2pResult } from "./stats";
-
-export const P2P_PING_MS = 100;
-export const P2P_MEASURE_MS = 20_000;
-const OPEN_TIMEOUT_MS = 12_000;
-/** Только STUN: если соединение возникло, значит P2P работает без ретранслятора. */
-const PEER_OPTIONS = {
-  debug: 0,
-  config: {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun.cloudflare.com:3478" }],
-  },
-};
-
-type PeerError = Error & { type?: string };
-type PingMsg = { t?: string; s?: number };
-
-export function hubId(room: string): string {
-  return `doodlemagic-nt-${room.toLowerCase()}-hub`;
-}
-
-function openPeer(id: string | null): Promise<Peer> {
-  return new Promise((resolve, reject) => {
-    const peer = id ? new Peer(id, PEER_OPTIONS) : new Peer(PEER_OPTIONS);
-    const timer = setTimeout(() => {
-      peer.destroy();
-      reject(Object.assign(new Error("signalling timeout"), { type: "timeout" }));
-    }, OPEN_TIMEOUT_MS);
-    peer.once("open", () => {
-      clearTimeout(timer);
-      resolve(peer);
-    });
-    peer.once("error", (e: PeerError) => {
-      clearTimeout(timer);
-      peer.destroy();
-      reject(e);
-    });
-  });
-}
-
-function serveAsHub(hub: Peer, stop: AbortSignal, onStatus: (s: string) => void): Promise<P2pResult> {
-  let peers = 0;
-  onStatus("P2P: ты — точка сбора, ждём других участников…");
-  hub.on("connection", (conn: DataConnection) => {
-    conn.on("open", () => {
-      peers++;
-      onStatus(`P2P: подключилось участников — ${peers}`);
-    });
-    conn.on("data", (d) => {
-      const m = d as PingMsg;
-      if (m.t === "p") conn.send({ t: "q", s: m.s });
-    });
-  });
-  return new Promise((resolve) => {
-    const done = () => {
-      hub.destroy();
-      resolve({ role: "hub", connected: peers > 0, peers, rtt: null });
-    };
-    if (stop.aborted) done();
-    else stop.addEventListener("abort", done, { once: true });
-  });
-}
-
-function measureHub(me: Peer, room: string, onStatus: (s: string) => void): Promise<P2pResult> {
-  return new Promise((resolve) => {
-    const rtts: number[] = [];
-    const sentAt = new Map<number, number>();
-    let seq = 0;
-    let pingTimer: ReturnType<typeof setInterval> | undefined;
-    let openTimer: ReturnType<typeof setTimeout> | undefined;
-    let done = false;
-    const finish = (connected: boolean, error?: string) => {
-      if (done) return;
-      done = true;
-      clearInterval(pingTimer);
-      clearTimeout(openTimer);
-      me.destroy();
-      resolve({
-        role: "peer",
-        connected,
-        rtt: rtts.length > 0 ? summarizeRtt(rtts) : null,
-        ...(error ? { error } : {}),
-      });
-    };
-
-    onStatus("P2P: соединяемся с точкой сбора напрямую…");
-    const conn = me.connect(hubId(room), { serialization: "json", reliable: false });
-    openTimer = setTimeout(() => finish(false, "не соединилось напрямую за 12 с"), OPEN_TIMEOUT_MS);
-    conn.on("open", () => {
-      clearTimeout(openTimer);
-      onStatus("P2P: соединились напрямую, меряем…");
-      pingTimer = setInterval(() => {
-        const s = seq++;
-        sentAt.set(s, performance.now());
-        conn.send({ t: "p", s });
-      }, P2P_PING_MS);
-      setTimeout(() => {
-        onStatus("P2P: готово");
-        finish(true);
-      }, P2P_MEASURE_MS);
-    });
-    conn.on("data", (d) => {
-      const m = d as PingMsg;
-      if (m.t !== "q" || typeof m.s !== "number") return;
-      const t0 = sentAt.get(m.s);
-      if (t0 === undefined) return;
-      sentAt.delete(m.s);
-      rtts.push(performance.now() - t0);
-    });
-    conn.on("error", (e) => finish(false, String((e as PeerError).type ?? e)));
-  });
-}
-
-export async function runP2pCheck(room: string, stop: AbortSignal, onStatus: (s: string) => void): Promise<P2pResult> {
-  try {
-    const hub = await openPeer(hubId(room));
-    return await serveAsHub(hub, stop, onStatus);
-  } catch (e) {
-    const err = e as PeerError;
-    if (err.type !== "unavailable-id") {
-      onStatus("P2P: сервер сигналинга недоступен");
-      return { role: "peer", connected: false, rtt: null, error: err.type ?? err.message };
-    }
-  }
-  try {
-    const me = await openPeer(null);
-    return await measureHub(me, room, onStatus);
-  } catch (e) {
-    const err = e as PeerError;
-    onStatus("P2P: не удалось начать проверку");
-    return { role: "peer", connected: false, rtt: null, error: err.type ?? err.message };
-  }
-}
-```
-
-- [ ] **Step 3: Подключить проверку к странице**
-
-В `apps/client/src/nettest/page.ts`:
-
-1. Заменить строку
-```ts
-import { runWsTest } from "./runner";
-```
-на
-```ts
-import { runWsTest } from "./runner";
-import { runP2pCheck } from "./webrtc";
-```
-
-2. Заменить строку
-```html
-      <p class="muted small" id="nt-status">Подключаемся…</p>
-```
-на
-```html
-      <p class="muted small" id="nt-status">Подключаемся…</p>
-      <p class="muted small" id="nt-p2p">P2P: готовимся…</p>
-```
-
-3. Заменить строку
-```ts
-    const started = performance.now();
-```
-на
-```ts
-    const stopP2p = new AbortController();
-    const p2pPromise = runP2pCheck(room, stopP2p.signal, (s) => {
-      el("nt-p2p").textContent = s;
-    });
-    const started = performance.now();
-```
-
-4. Заменить строку
-```ts
-    await wake?.release().catch(() => undefined);
-```
-на
-```ts
-    stopP2p.abort();
-    const p2p = await p2pPromise;
-    await wake?.release().catch(() => undefined);
-```
-
-5. Заменить строку
-```ts
-    const result = buildResult(data, meta);
-```
-на
-```ts
-    const result = buildResult(data, meta, p2p);
-```
-
-- [ ] **Step 4: Проверить типы и тесты**
-
-Run: `pnpm --filter @doodlemagic/client typecheck` и `pnpm test`
-Expected: без ошибок; все тесты зелёные.
-
-- [ ] **Step 5: Проверить вживую на двух вкладках**
-
-При запущенных `pnpm dev:server` и `pnpm dev:client`:
-- вкладка A: `http://localhost:5173/nettest?room=P2PLOCAL&dur=40`, нажать «Начать»;
-- через несколько секунд вкладка B (лучше другой браузер): тот же адрес, «Начать».
-
-Expected:
-- A показывает «P2P: ты — точка сбора…», затем «подключилось участников — 1»;
-- B показывает «P2P: соединились напрямую, меряем…», затем «P2P: готово»;
-- в отчёте B есть строка «P2P: напрямую, p50 … мс», в отчёте A — «P2P: точка сбора, подключилось 1».
-
-- [ ] **Step 6: Коммит**
-
+Коммиты сделаны от `HermesOG <личная почта>`. После пуша в публичный репозиторий этот адрес будет виден всем. Если нужно скрыть почту, взять адрес вида `…+HermesOG@users.noreply.github.com` (GitHub → Settings → Emails) и переписать автора всех локальных коммитов:
 ```bash
-git add apps/client pnpm-lock.yaml
-git commit -m "feat(client): P2P reachability check via PeerJS" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git config user.name "HermesOG"
+git config user.email "<адрес noreply>"
+git rebase --root --exec "git commit --amend --no-edit --reset-author"
 ```
+Expected: `git log --format='%an <%ae>'` показывает нужный адрес у всех коммитов.
 
----
+- [ ] **Step 2: 👤 Владелец подтверждает: отправить код на GitHub**
 
-### Task 6: Деплой: Cloudflare, GitHub, Vercel
-
-**Files:**
-- Modify: ничего в коде. Создаются только облачные ресурсы.
-
-**Interfaces:**
-- Consumes: сервер (Task 3), клиент (Task 4–5).
-- Produces: публичные адреса, которые нужны Task 7:
-  - `wss://doodlemagic-server.<поддомен>.workers.dev` — сервер;
-  - `https://<проект>.vercel.app/nettest` — страница теста;
-  - секрет `REPORTS_KEY` хранится у владельца.
-
-- [ ] **Step 1: 👤 Владелец: вход в Cloudflare**
-
-Run: `pnpm --filter @doodlemagic/server exec wrangler login`
-Expected: откроется браузер. Владелец входит или регистрируется в бесплатном аккаунте Cloudflare и нажимает «Allow»; в терминале — `Successfully logged in`.
-
-- [ ] **Step 2: Задеплоить сервер**
-
-Run: `pnpm --filter @doodlemagic/server deploy`
-Expected: в выводе есть строка `https://doodlemagic-server.<поддомен>.workers.dev`. Если аккаунт новый, wrangler попросит выбрать поддомен `workers.dev` — выбрать любой. Адрес записать: дальше он `<SERVER>`.
-
-- [ ] **Step 3: 👤 Владелец: задать ключ для чтения отчётов**
-
-Сгенерировать ключ: `node -e "console.log(crypto.randomUUID())"` — сохранить его в менеджер паролей.
-Run: `pnpm --filter @doodlemagic/server exec wrangler secret put REPORTS_KEY` и вставить ключ.
-Expected: `Success! Uploaded secret REPORTS_KEY`.
-
-- [ ] **Step 4: Дымовой тест прода**
-
-Run: `node apps/server/scripts/smoke.mjs wss://doodlemagic-server.<поддомен>.workers.dev <REPORTS_KEY>`
-Expected: `SMOKE OK`; в `welcome` поле `roomColo` — реальный код дата-центра (например, `FRA`), а не `?`.
-
-- [ ] **Step 5: 👤 Владелец подтверждает: отправить код на GitHub**
-
-Перед пушем проверить, что не уходит лишнее: `git ls-files | grep -E "research/doodle-district/source|\.dev\.vars|design/nettest/"` — вывод **пустой**.
+Проверить, что не уходит лишнее: `git ls-files | grep -E "research/doodle-district/source|design/nettest/|\.superpowers"` — вывод **пустой**.
 Run (после явного «да» владельца): `git push -u origin main`
-Expected: ветка `main` появилась на `https://github.com/HermesOG/DoodleMagic`. При запросе входа — авторизация через окно Git Credential Manager.
+Expected: ветка `main` есть на `https://github.com/HermesOG/DoodleMagic`.
 
-- [ ] **Step 6: 👤 Владелец: подключить Vercel к репозиторию**
+- [ ] **Step 3: 👤 Владелец: подключить Vercel к репозиторию**
 
 На `https://vercel.com/new` → Import Git Repository → `HermesOG/DoodleMagic`:
 - **Project Name:** `doodlemagic`;
 - **Root Directory:** `apps/client`;
 - **Framework Preset:** Vite (определится сам);
-- **Environment Variables:**
-  - `VITE_GAME_SERVER` = `wss://doodlemagic-server.<поддомен>.workers.dev`;
-  - `ENABLE_EXPERIMENTAL_COREPACK` = `1` (чтобы Vercel взял pnpm 12 из `packageManager`);
+- **Environment Variables:** `ENABLE_EXPERIMENTAL_COREPACK` = `1`, чтобы Vercel взял pnpm 12 из `packageManager`;
 - нажать **Deploy**.
 
-Expected: деплой зелёный, адрес вида `https://doodlemagic.vercel.app`. Если имя занято, Vercel даст другое — его записать.
+Expected: деплой зелёный, адрес вида `https://doodlemagic.vercel.app`. Если имя занято, Vercel даст другое — записать его.
 
-- [ ] **Step 7: Проверить прод целиком**
+- [ ] **Step 4: Проверить прод**
 
-Открыть `https://<проект>.vercel.app/nettest?room=OWNER`, выбрать «3 минуты», пройти тест.
-Expected: «Связь в порядке ✓» или понятные причины; «Результат отправлен организатору ✓»; в ответе `curl "<SERVER-https>/reports?key=<REPORTS_KEY>"` есть запись `OWNER`. Заодно это подтверждает, что `*.vercel.app` открывается из Узбекистана без VPN.
+Повторить живую проверку из задачи 5 (шаг 6, пункты 1–3) на продовом адресе: хост — на компьютере владельца, участник — с телефона на мобильном интернете.
+Expected: участник получает «Связь в порядке ✓» или понятные причины; хост видит его в сводке. Заодно это подтверждает, что `*.vercel.app` открывается без VPN.
 
 ---
 
-### Task 7: Тест с друзьями и решение по сети
+### Task 7: Тест с друзьями и решение
 
 **Files:**
-- Create: `tools/summarize-nettest.ts`
 - Create: `design/nettest-results.md`
-- Local only (в `.gitignore`): `design/nettest/results.json`
 
 **Interfaces:**
-- Consumes: `judge` и тип `NettestResult` из `apps/client/src/nettest/stats.ts`; `GET /reports` (Task 3); адреса из Task 6.
-- Produces: решение «Cloudflare или P2P» для фазы 3 в `design/nettest-results.md`.
+- Consumes: продовая страница из задачи 6.
+- Produces: решение по сети для фазы 3.
 
-- [ ] **Step 1: Сводка отчётов**
+- [ ] **Step 1: 👤 Владелец: открыть комнату и разослать приглашение**
 
-`tools/summarize-nettest.ts` (Node 24 запускает TypeScript напрямую):
-```ts
-// Сводка теста связи. Запуск: node tools/summarize-nettest.ts design/nettest/results.json
-import { readFileSync } from "node:fs";
-import { judge, type NettestResult } from "../apps/client/src/nettest/stats.ts";
-
-interface Stored {
-  id: string;
-  at: string;
-  country: string;
-  data: NettestResult | { smoke: true };
-}
-
-const file = process.argv[2];
-if (!file) throw new Error("укажи путь к results.json");
-
-const rows = (JSON.parse(readFileSync(file, "utf8")) as Stored[]).filter(
-  (r): r is Stored & { data: NettestResult } => (r.data as NettestResult).v === 1,
-);
-
-let passed = 0;
-for (const { country, data: d } of rows) {
-  const v = judge(d);
-  if (v.ok) passed++;
-  const p2p = !d.p2p
-    ? "—"
-    : d.p2p.role === "hub"
-      ? `hub(${d.p2p.peers ?? 0})`
-      : d.p2p.connected
-        ? "p2p ok"
-        : "p2p FAIL";
-  console.log(
-    [
-      v.ok ? "OK  " : "FAIL",
-      (d.name || "—").padEnd(12),
-      country,
-      `${d.edge}→${d.roomColo}`,
-      `p50 ${Math.round(d.rtt.p50)}`,
-      `p95 ${Math.round(d.rtt.p95)}`,
-      `зав ${d.stalls}`,
-      `обр ${d.disconnects}`,
-      `пот ${d.lossPct.toFixed(1)}%`,
-      `${d.durationS}с`,
-      d.conn,
-      p2p,
-    ].join(" | "),
-  );
-  for (const reason of v.reasons) console.log(`       • ${reason}`);
-}
-const pct = rows.length > 0 ? Math.round((passed / rows.length) * 100) : 0;
-console.log(`\nПрошли ${passed} из ${rows.length} (${pct}%). Порог: 90%.`);
-```
-
-Проверка на данных прода (там уже есть отчёт `OWNER` из Task 6):
-```bash
-mkdir -p design/nettest
-curl -s "https://doodlemagic-server.<поддомен>.workers.dev/reports?key=<REPORTS_KEY>" -o design/nettest/results.json
-node tools/summarize-nettest.ts design/nettest/results.json
-```
-Expected: строка `OK   | OWNER …` (или `FAIL` с причинами) и итог `Прошли 1 из 1 (100%)`.
-
-- [ ] **Step 2: 👤 Владелец: разослать приглашение друзьям**
-
-Текст для чата:
+Владелец открывает `https://<проект>.vercel.app/nettest?room=FRIENDS&host=1` на своём компьютере, жмёт «Открыть комнату» и не сворачивает вкладку. Текст для чата:
 > Привет! Делаю браузерную игру и проверяю, потянет ли связь. Помоги, пожалуйста, это 10 минут:
 > 1. Открой **с компьютера** ссылку: https://doodlemagic.vercel.app/nettest?room=FRIENDS
 > 2. Впиши имя и нажми «Начать».
 > 3. Не закрывай и не сворачивай вкладку 10 минут: можно просто отойти.
 >
-> Результат отправится сам. Если есть телефон с мобильным интернетом, повтори с него: это тоже полезно. Давайте начнём все примерно в одно время, например в 21:00.
+> Результат отправится мне сам. Если есть телефон с мобильным интернетом, повтори с него, это тоже полезно. Давайте начнём все примерно в одно время, например в 21:00.
 
 Цель: 5–10 человек, домашний Wi-Fi и разные мобильные операторы Узбекистана, плюс хотя бы один человек из Европы.
 
-- [ ] **Step 3: Собрать результаты и посмотреть сводку**
+- [ ] **Step 2: Записать итог и решение**
 
-```bash
-curl -s "https://doodlemagic-server.<поддомен>.workers.dev/reports?key=<REPORTS_KEY>" -o design/nettest/results.json
-node tools/summarize-nettest.ts design/nettest/results.json
-```
-Expected: по строке на участника и итог «Прошли N из M».
-
-- [ ] **Step 4: Записать итог и решение**
-
-`design/nettest-results.md` (имена — только инициалы: файл публичный):
+Когда все закончат, владелец жмёт «Скопировать сводку» и присылает её. Из сводки заполняется `design/nettest-results.md` (имена — только инициалы: файл публичный):
 ```markdown
 # Тест связи: результаты (дата)
 
-## Участники
-| Кто | Страна | Сеть | Вход → комната | p50 | p95 | Зависания | Обрывы | Потери | P2P | Итог |
-|---|---|---|---|---|---|---|---|---|---|---|
-| (строки из сводки) |
+## Сводка хоста
+(вставить сводку, заменив имена инициалами)
 
 ## Итог
 - Прошли: N из M (X %). Порог: 90 %.
-- Где жила комната (roomColo): …; медиана p95: … мс.
-- P2P: соединились напрямую K из L пар.
+- Через ретранслятор (TURN): R из M.
+- Медиана p95: … мс.
 
 ## Решение для фазы 3
-- [ ] **Cloudflare Durable Objects**: ≥ 90 % OK и медиана p95 ≤ 120 мс.
-- [ ] **P2P (хост в браузере)**: Cloudflare не прошёл, а P2P соединяется у большинства.
-- [ ] **Обсудить с владельцем**: не прошло ни то, ни другое (варианты: VPS в Алматы или Франкфурте, другой регион DO).
+- [ ] **P2P как есть**: ≥ 90 % OK и медиана p95 ≤ 120 мс.
+- [ ] **P2P со своим бесплатным TURN**: проблемы только у тех, кто шёл через публичный TURN.
+- [ ] **Обсудить с владельцем**: проблемы и у прямых соединений.
 ```
 Отметить ровно один пункт решения и коротко написать почему.
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 3: Коммит**
 
 ```bash
-git add tools/summarize-nettest.ts design/nettest-results.md
+git add design/nettest-results.md
 git commit -m "docs: nettest results and network decision" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 `git push` — только с подтверждения владельца.
@@ -2008,5 +1690,5 @@ git commit -m "docs: nettest results and network decision" -m "Co-Authored-By: C
 ---
 
 ## После фазы 0
-1. По решению из `design/nettest-results.md` обновить фазу 3 в [дорожной карте](2026-10-17-prototype-roadmap.md).
+1. По решению из `design/nettest-results.md` уточнить фазу 3 в [дорожной карте](2026-10-17-prototype-roadmap.md).
 2. Написать подробный план фазы 1 (оффлайн-песочница) в том же формате.
