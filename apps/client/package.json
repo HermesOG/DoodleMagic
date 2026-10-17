@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@doodlemagic/protocol": "workspace:*"
+    "@doodlemagic/protocol": "workspace:*",
+    "peerjs": "1.5.5"
   },
   "devDependencies": {
     "vite": "^8.3.4"
