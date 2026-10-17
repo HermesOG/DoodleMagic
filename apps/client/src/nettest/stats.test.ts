@@ -209,7 +209,7 @@ describe("judge", () => {
     expect(judge(r)).toEqual({
       ok: false,
       full: true,
-      reasons: ["канал с хостом не открылся (P2P не прошёл даже через TURN)"],
+      reasons: ["канал с хостом не открылся (прямое P2P-соединение не прошло, а TURN пока не настроен)"],
     });
   });
 

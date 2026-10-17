@@ -178,7 +178,7 @@ export function buildResult(d: LinkTestData, meta: ResultMeta): NettestResult {
 export function judge(r: NettestResult): Verdict {
   const reasons: string[] = [];
   if (r.rtt.count === 0) {
-    reasons.push(r.opened ? "хост не ответил ни разу" : "канал с хостом не открылся (P2P не прошёл даже через TURN)");
+    reasons.push(r.opened ? "хост не ответил ни разу" : "канал с хостом не открылся (прямое P2P-соединение не прошло, а TURN пока не настроен)");
   } else {
     // Отчёт пришёл по сети: после JSON NaN становится null, а `null <= 120` в JS — true.
     // Поэтому проверяем конечность явно: непонятное значение считается провалом.
