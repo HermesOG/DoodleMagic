@@ -54,7 +54,7 @@ describe("Fire kit", () => {
     const { log } = play([at(-10)], 500, (k) => ({ q: k === 0 || k === 100 || k === 480, pitch: pitchTo(10) }));
     expect([ticksOf(log, "cast", "fireball"), ticksOf(log, "release", "fireball")[0], hitsOf(log, "burning").length]).toEqual([[0, 480], 15, 6]);
     expect(hitsOf(log, "fireball")[0]!.e).toMatchObject({ amount: 50, target: 2 });
-    expect(log).toContainEqual(reject(118, "q", "cooldown")); // нажатие на 100 ждёт в буфере 0,3 с, отказ — по его концу
+    expect(log).toContainEqual(reject(100, "q", "cooldown"));
   });
 
   it("buffers a press for 0.3 s: a fireball pressed 0.1 s before its cooldown ends casts at the cooldown end", () => {
@@ -62,9 +62,16 @@ describe("Fire kit", () => {
     expect([ticksOf(log, "cast", "fireball"), log.filter(({ e }) => e.type === "reject")]).toEqual([[0, 480], []]);
   });
 
-  it("a press still refused after 0.3 s in the buffer gives exactly one reject, when the buffer runs out", () => {
+  it("a press that cannot become legal within 0.3 s rejects at once, on the press tick: a Q with ~8 s of cooldown left", () => {
     const { log } = play([], 60, (k) => ({ q: k === 0 || k === 10 }));
-    expect(log.filter(({ e }) => e.type === "reject")).toEqual([reject(28, "q", "cooldown")]);
+    expect(log.filter(({ e }) => e.type === "reject")).toEqual([reject(10, "q", "cooldown")]);
+  });
+
+  it("buffers only within the window: 18 ticks before ready casts at ready, 19 ticks before rejects on the press tick", () => {
+    const inWindow = play([], 490, (k) => ({ q: k === 0 || k === 462 }));
+    expect([ticksOf(inWindow.log, "cast", "fireball"), inWindow.log.filter(({ e }) => e.type === "reject")]).toEqual([[0, 480], []]);
+    const outside = play([], 490, (k) => ({ q: k === 0 || k === 461 }));
+    expect([ticksOf(outside.log, "cast", "fireball"), outside.log.filter(({ e }) => e.type === "reject")]).toEqual([[0], [reject(461, "q", "cooldown")]]);
   });
 
   it("jet dash: 8 m in 0.2 s along the strafe, leaving a 2 s burning trail", () => {
