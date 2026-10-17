@@ -1632,7 +1632,7 @@ git commit -m "feat(client): /nettest page with host and participant modes" -m "
 
 - [ ] **Step 1: 👤 Владелец: автор коммитов**
 
-Коммиты сделаны от `HermesOG <личная почта>`. После пуша в публичный репозиторий этот адрес будет виден всем. Если нужно скрыть почту, взять адрес вида `…+HermesOG@users.noreply.github.com` (GitHub → Settings → Emails) и переписать автора всех локальных коммитов:
+**Выполнено 17.10.2026:** все коммиты переписаны на адрес GitHub noreply, личная почта в историю не попала. Если коммиты подписаны личной почтой, перед пушем в публичный репозиторий её стоит скрыть: взять адрес вида `…+HermesOG@users.noreply.github.com` (GitHub → Settings → Emails) и переписать автора всех локальных коммитов:
 ```bash
 git config user.name "HermesOG"
 git config user.email "<адрес noreply>"
