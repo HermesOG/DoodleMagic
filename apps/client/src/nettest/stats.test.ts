@@ -176,6 +176,22 @@ describe("formatReport", () => {
     const full = buildResult(data(), meta);
     expect(formatReport(full, judge(full))).not.toContain("Короткий тест");
   });
+
+  it("marks a healthy short run in the headline", () => {
+    const short = buildResult(data({ durationS: 180 }), meta);
+    const first = formatReport(short, judge(short)).split("\n")[0];
+    expect(first).toContain("OK (короткий тест)");
+    const full = buildResult(data(), meta);
+    const fullFirst = formatReport(full, judge(full)).split("\n")[0];
+    expect(fullFirst).toMatch(/· OK$/);
+  });
+
+  it("keeps ПРОБЛЕМЫ in the headline of a failed short run", () => {
+    const shortBad = buildResult(data({ durationS: 180, disconnects: 1 }), meta);
+    const first = formatReport(shortBad, judge(shortBad)).split("\n")[0];
+    expect(first).toContain("ПРОБЛЕМЫ");
+    expect(first).not.toContain("OK");
+  });
 });
 
 describe("isNettestResult", () => {
@@ -208,27 +224,43 @@ describe("formatSummary", () => {
     expect(text).toContain("OK   Аня");
     expect(text).toContain("FAIL Боря · TURN");
     expect(text).toContain("• обрывов связи: 1");
-    expect(text).toContain("Прошли 1 из 2 полных тестов (50 %). Порог: 90 %.");
+    expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).toContain("Через ретранслятор (TURN): 1 из 2.");
     expect(text).not.toContain("Коротких тестов");
   });
 
-  it("keeps short runs out of the 9-of-10 count and tags them", () => {
+  it("keeps healthy short runs out of the 9-of-10 count and tags them", () => {
     const good = buildResult(data(), meta);
     const bad = buildResult(data({ disconnects: 1 }), { ...meta, name: "Боря" });
     const short = buildResult(data({ durationS: 180, route: "relay" }), { ...meta, name: "Вася" });
     const text = formatSummary([good, bad, short]);
-    expect(text).toContain("Прошли 1 из 2 полных тестов (50 %). Порог: 90 %.");
+    expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).toContain("Коротких тестов (не в зачёт): 1.");
     expect(text).toContain("OK   Вася · короткий · TURN");
     expect(text).not.toContain("OK   Аня · короткий");
     expect(text).toContain("Через ретранслятор (TURN): 1 из 3.");
   });
 
-  it("reports 0 % when there are no full runs", () => {
+  it("counts a failed short run as a failure and not as excluded", () => {
+    const good = buildResult(data(), meta);
+    const shortBad = buildResult(data({ durationS: 180, disconnects: 1 }), { ...meta, name: "Вася" });
+    const text = formatSummary([good, shortBad]);
+    expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
+    expect(text).not.toContain("Коротких тестов");
+    expect(text).toContain("FAIL Вася · короткий");
+    expect(text).toContain("• обрывов связи: 1");
+  });
+
+  it("cannot reach 100 % while a short run reported problems", () => {
+    const shortBad = buildResult(data({ durationS: 180, disconnects: 1 }), meta);
+    const text = formatSummary([buildResult(data(), meta), shortBad]);
+    expect(text).not.toContain("(100 %)");
+  });
+
+  it("reports 0 % when no run counts", () => {
     const short = buildResult(data({ durationS: 60 }), meta);
     const text = formatSummary([short]);
-    expect(text).toContain("Прошли 0 из 0 полных тестов (0 %). Порог: 90 %.");
+    expect(text).toContain("Прошли 0 из 0 в зачёте (0 %). Порог: 90 %.");
     expect(text).toContain("Коротких тестов (не в зачёт): 1.");
   });
 

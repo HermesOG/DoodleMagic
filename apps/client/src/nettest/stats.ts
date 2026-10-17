@@ -162,7 +162,7 @@ export function judge(r: NettestResult): Verdict {
 
 export function formatReport(r: NettestResult, v: Verdict): string {
   const lines = [
-    `DoodleMagic · тест связи · ${v.ok ? "OK" : "ПРОБЛЕМЫ"}`,
+    `DoodleMagic · тест связи · ${v.ok ? (v.full ? "OK" : "OK (короткий тест)") : "ПРОБЛЕМЫ"}`,
     `Имя: ${r.name || "—"} · комната ${r.room} · ${r.durationS} с`,
     `Связь с хостом ${r.host || "—"}: ${ROUTE_LABEL[r.route]}`,
     `Пинг: p50 ${fmtMs(r.rtt.p50)}, p95 ${fmtMs(r.rtt.p95)}, макс ${fmtMs(r.rtt.max)}, джиттер ${fmtMs(r.rtt.jitter)}`,
@@ -193,18 +193,22 @@ export function isNettestResult(x: unknown): x is NettestResult {
   );
 }
 
-/** Сводка для хоста: строка на участника и итог по критерию «9 из 10» (только полные тесты). */
+/**
+ * Сводка для хоста: строка на участника и итог по критерию «9 из 10».
+ * В зачёт идут полные тесты и любые тесты с проблемами: короткий, но неудачный прогон — это провал,
+ * а не повод вычеркнуть участника из знаменателя. Исключаются только короткие здоровые прогоны.
+ */
 export function formatSummary(results: readonly NettestResult[]): string {
   if (results.length === 0) return "Пока нет результатов.";
   const lines: string[] = [];
   let passed = 0;
-  let full = 0;
+  let counted = 0;
   let relayed = 0;
   for (const r of results) {
     const v = judge(r);
-    if (v.full) {
-      full++;
-      if (v.ok) passed++;
+    if (v.full || !v.ok) {
+      counted++;
+      if (v.ok && v.full) passed++;
     }
     if (r.route === "relay") relayed++;
     lines.push(
@@ -212,10 +216,10 @@ export function formatSummary(results: readonly NettestResult[]): string {
     );
     for (const reason of v.reasons) lines.push(`     • ${reason}`);
   }
-  const short = results.length - full;
-  const pct = full === 0 ? 0 : Math.round((passed / full) * 100);
-  lines.push("", `Прошли ${passed} из ${full} полных тестов (${pct} %). Порог: ${Math.round(CRITERIA.passShare * 100)} %.`);
-  if (short > 0) lines.push(`Коротких тестов (не в зачёт): ${short}.`);
+  const excluded = results.length - counted;
+  const pct = counted === 0 ? 0 : Math.round((passed / counted) * 100);
+  lines.push("", `Прошли ${passed} из ${counted} в зачёте (${pct} %). Порог: ${Math.round(CRITERIA.passShare * 100)} %.`);
+  if (excluded > 0) lines.push(`Коротких тестов (не в зачёт): ${excluded}.`);
   lines.push(`Через ретранслятор (TURN): ${relayed} из ${results.length}.`);
   return lines.join("\n");
 }
