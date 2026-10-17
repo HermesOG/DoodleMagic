@@ -93,7 +93,7 @@ function pick<T extends HTMLElement | SVGElement = HTMLElement>(root: ParentNode
 function setText(el: HTMLElement | SVGElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;
 }
-type StyleProp = "transform" | "opacity" | "width" | "left" | "strokeDashoffset";
+type StyleProp = "transform" | "opacity" | "left" | "strokeDashoffset";
 /**
  * Последняя записанная строка каждого свойства: сравнивать с el.style нельзя — браузер нормализует значение
  * ("translate(1px, 2px)" читается иначе, "0.500" — как "0.5"), и запись шла бы каждый кадр.
@@ -122,6 +122,8 @@ interface Cell {
 }
 interface DummyBar {
   root: HTMLDivElement;
+  /** Полоса шириной BAR_PX.max; ширину по расстоянию даёт scaleX (без пересчёта раскладки в кадре). */
+  track: HTMLDivElement;
   fill: HTMLDivElement;
   icons: Record<keyof typeof ICON, HTMLElement>;
 }
@@ -191,9 +193,12 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     let b = bars.get(id);
     if (!b) {
       const r = div("ch-dbar ch-at", `<div class="ch-dbar-st">${icon("burn")}${icon("root")}${icon("slow")}${icon("air")}</div><div class="ch-dbar-track"><div class="ch-dbar-fill"></div></div>`);
+      // ширина задаётся один раз; ближе или дальше полосу делает scaleX дорожки
+      r.style.width = `${BAR_PX.max}px`;
       barsLayer.append(r);
       b = {
         root: r,
+        track: pick<HTMLDivElement>(r, ".ch-dbar-track"),
         fill: pick<HTMLDivElement>(r, ".ch-dbar-fill"),
         icons: { burn: pick(r, ".ch-st.burn"), root: pick(r, ".ch-st.root"), slow: pick(r, ".ch-st.slow"), air: pick(r, ".ch-st.air") },
       };
@@ -317,7 +322,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       const b = barFor(u.id);
       setHidden(b.root, false);
       const px = Math.min(BAR_PX.max, Math.max(BAR_PX.min, (BAR_WORLD_M * H) / (2 * screen.depth * tanHalf)));
-      setStyle(b.root, "width", `${px.toFixed(0)}px`);
+      setStyle(b.track, "transform", `scaleX(${(px / BAR_PX.max).toFixed(3)})`);
       setStyle(b.root, "transform", `translate(${screen.x.toFixed(1)}px, ${screen.y.toFixed(1)}px) translate(-50%, -100%)`);
       setStyle(b.fill, "transform", `scaleX(${hpBar(u).frac.toFixed(4)})`);
       const f = statusFlags(u, view.cur.tick);

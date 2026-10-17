@@ -6,6 +6,7 @@ import {
   TICK_DT,
   buildTickWorld,
   createMatch,
+  groundBelow,
   lerpVec,
   lineOfSight,
   matchContext,
@@ -31,9 +32,10 @@ import { showElementSelect } from "../hud/elementSelect";
 import { loadPrefs, savePrefs } from "../hud/prefs";
 import { buildArenaMeshes } from "../render/arenaMeshes";
 import { FPS_METER_MAX_FRAME_MS, createFpsMeter } from "../render/fpsMeter";
-import { createAutoQuality, type AutoQuality, type PresetId } from "../render/quality";
+import { createAutoQuality, createQualityWatchdog, type AutoQuality, type PresetId, type QualityWatchdog } from "../render/quality";
 import { StyleRenderer, WORLD_FOV } from "../render/styleRenderer";
 import { KEYS, applyLook, buildMatchInput, lookRate, type Look } from "./controls";
+import { FALL_HOLD_Y, createFallCamera, stepFallCamera } from "./fallCamera";
 import { advanceClock } from "./fixedStep";
 import { CONTEXT_LOST_MESSAGE, createHud } from "./hud";
 import { createInput } from "./input";
@@ -46,6 +48,8 @@ const NO_KEYS: ReadonlySet<string> = new Set();
 const NO_EFFECTS: readonly Effect[] = [];
 const UP: Vec3 = { x: 0, y: 1, z: 0 };
 const STILL: CameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, fovDeg: 0 };
+/** Пол ближе этого под падающим магом — не ущелье (ров на −1 м): камера идёт за ним, как обычно. */
+const FALL_PROBE_M = 2;
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** Сделать видимыми все скрытые объекты под корнями (пустые пулы эффектов) — на время прогрева. Возвращает откат. */
@@ -115,6 +119,9 @@ export function mountSandbox(root: HTMLElement): void {
   let hitstopUntil = 0;
   let handRig = createHandRig();
   let auto: AutoQuality | null = settings.quality === "auto" ? createAutoQuality("high") : null;
+  /** После вердикта автовыбора — сторож боя (только вниз); ручной пресет выключает и его. */
+  let watchdog: QualityWatchdog | null = null;
+  let fallCam = createFallCamera();
   const meter = createFpsMeter();
   let selecting = false;
   let stopped = false;
@@ -231,6 +238,8 @@ export function mountSandbox(root: HTMLElement): void {
   hud.onQuality((q) => {
     settings.quality = q;
     saveSettings(settings);
+    // сторож — часть «Авто»: ручной пресет его выключает, «Авто» включит снова после нового вердикта
+    watchdog = null;
     if (q === "auto") {
       // подбор умеет только спускаться: после ручного пресета начинаем снова с высокого
       setPreset("high");
@@ -254,15 +263,30 @@ export function mountSandbox(root: HTMLElement): void {
   });
 
   const cam = renderer.camera;
-  /** Камера мира в глазах мага: между двумя последними тиками, взгляд — сразу по мыши, плюс тряска и толчки. */
-  const placeCamera = (alpha: number, offset: CameraOffset): Vec3 => {
+  /**
+   * Камера мира в глазах мага: между двумя последними тиками, взгляд — сразу по мыши, плюс тряска и толчки.
+   * Сорвался в ущелье: пока маг ниже пола и падает (и до возрождения), камера стоит на последнем глазе над полом и
+   * доворачивает на мага, руки спрятаны. Возрождение возвращает её в глаза сразу: prev = cur, проводки через карту нет.
+   */
+  const placeCamera = (alpha: number, offset: CameraOffset, dtS: number): Vec3 => {
     const me = unitById(cur, LOCAL)!;
     const was = unitById(prev, LOCAL) ?? me;
     const p = lerpVec(was.move.body.pos, me.move.body.pos, alpha);
-    cam.position.set(p.x, p.y + EYE_HEIGHT, p.z);
-    cam.rotation.set(look.pitch + offset.pitch, look.yaw + offset.yaw, offset.roll, "YXZ");
-    cam.translateX(offset.x);
-    cam.translateY(offset.y);
+    const eye = { x: p.x, y: p.y + EYE_HEIGHT, z: p.z };
+    // в ров (пол на −1 м) маг тоже спрыгивает ниже FALL_HOLD_Y, но под ним пол: это не падение
+    const falling = p.y < FALL_HOLD_Y && !me.move.onGround && groundBelow(ctx.world, p, FALL_PROBE_M) === null;
+    fallCam = stepFallCamera(fallCam, { eye, target: { x: p.x, y: p.y + EYE_HEIGHT / 2, z: p.z }, falling, look, dt: dtS });
+    const hold = fallCam.hold;
+    mittens.scene.visible = hold === null;
+    if (hold) {
+      cam.position.set(hold.pos.x, hold.pos.y, hold.pos.z);
+      cam.rotation.set(hold.pitch, hold.yaw, 0, "YXZ");
+    } else {
+      cam.position.set(eye.x, eye.y, eye.z);
+      cam.rotation.set(look.pitch + offset.pitch, look.yaw + offset.yaw, offset.roll, "YXZ");
+      cam.translateX(offset.x);
+      cam.translateY(offset.y);
+    }
     const fov = WORLD_FOV + offset.fovDeg;
     if (cam.fov !== fov) {
       cam.fov = fov;
@@ -324,7 +348,7 @@ export function mountSandbox(root: HTMLElement): void {
 
     const shake = guard.run("camera", () => stepCameraFeel(feel, dtS, prefs.cameraMotion), null);
     if (shake) feel = shake.feel;
-    const p = placeCamera(clock.alpha, shake?.offset ?? STILL);
+    const p = placeCamera(clock.alpha, shake?.offset ?? STILL, dtS);
 
     // визуальный hitstop: руки замирают, симуляция идёт (GDD 2.2)
     const handDt = nowS < hitstopUntil ? 0 : dtS;
@@ -374,6 +398,10 @@ export function mountSandbox(root: HTMLElement): void {
     meter.push(Math.min(rawMs, FPS_METER_MAX_FRAME_MS));
     const next = auto?.push(rawMs);
     if (next) setPreset(next);
+    // автовыбор судил по экрану выбора стихии; бой тяжелее — дальше смотрит сторож, по кадрам с захваченной мышью
+    if (auto?.done && !watchdog) watchdog = createQualityWatchdog(renderer.preset.id);
+    const lower = watchdog?.push(rawMs, input.locked);
+    if (lower) setPreset(lower);
     if (hud.debugVisible) {
       const mode = auto ? (auto.done ? " (авто)" : " (подбор)") : "";
       hud.setDebugText(
@@ -398,7 +426,7 @@ export function mountSandbox(root: HTMLElement): void {
   hud.setSelecting(true);
   hud.setLocked(false);
   hud.setElement(prefs.element);
-  placeCamera(0, STILL);
+  placeCamera(0, STILL, 0);
   vfx.sync({ prev: cur, cur, alpha: 0, nowS: performance.now() / 1000, camera: cam, localId: LOCAL, palms: mittens.palms() });
   const restore = revealForWarmUp([vfx.worldGroup, vfx.fx.world, vfx.fx.palm]);
   renderer
