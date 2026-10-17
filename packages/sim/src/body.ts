@@ -4,7 +4,10 @@ import { overlapping, type World } from "./world";
 export const MAX_SUBSTEPS = 8;
 /** Насколько глубоко ниже подошвы ищем опору, чтобы считать тело стоящим, м. */
 export const GROUND_PROBE_M = 0.02;
-/** Бокс считается «впереди», если его грань не дальше этого от тела до сдвига, м. */
+/**
+ * Бокс считается «впереди», если его грань не дальше этого от тела до сдвига, м. Бокс, в который тело утоплено
+ * глубже, движение не держит: из него можно выйти, но в нём же можно и провалиться.
+ */
 const AHEAD_TOL = 1e-4;
 
 export function bodyBox(b: Body): AABB {
@@ -14,6 +17,7 @@ export function bodyBox(b: Body): AABB {
   };
 }
 
+// Общий буфер для overlapping: очищается при каждом вызове; moveBody нельзя вызывать изнутри цикла по overlapping.
 const scratch: number[] = [];
 
 /**
@@ -75,7 +79,7 @@ function moveHorizontal(w: World, b: Body, dx: number, dz: number, canStep: bool
 
   const fx = b.pos.x;
   const fz = b.pos.z;
-  const flatDist2 = (fx - sx) ** 2 + (fz - sz) ** 2;
+  const flatDist2 = (fx - sx) * (fx - sx) + (fz - sz) * (fz - sz);
   b.pos.x = sx;
   b.pos.z = sz;
   sweepAxis(w, b, "y", b.stepHeight);
@@ -84,7 +88,7 @@ function moveHorizontal(w: World, b: Body, dx: number, dz: number, canStep: bool
     const sbx = sweepAxis(w, b, "x", dx);
     const sbz = sweepAxis(w, b, "z", dz);
     sweepAxis(w, b, "y", -lifted);
-    const stepDist2 = (b.pos.x - sx) ** 2 + (b.pos.z - sz) ** 2;
+    const stepDist2 = (b.pos.x - sx) * (b.pos.x - sx) + (b.pos.z - sz) * (b.pos.z - sz);
     if (stepDist2 > flatDist2 + 1e-8 && b.pos.y >= sy - 1e-6) {
       return { blockedX: sbx, blockedZ: sbz, stepped: b.pos.y > sy + 1e-6 };
     }
@@ -99,6 +103,12 @@ function moveHorizontal(w: World, b: Body, dx: number, dz: number, canStep: bool
  * Сдвигает тело на vel·dt с коллизиями: поосно X → Z → Y, с заходом на ступеньки и прилипанием к земле
  * на спуске. Шаг делится на подшаги не длиннее halfW/2, поэтому тело не проскакивает тонкие стены.
  * Меняет body.pos и body.vel (заблокированные составляющие скорости обнуляются).
+ *
+ * landVel — это body.vel.y в момент касания. stepPlayer передаёт сюда среднюю за тик скорость (гравитация по
+ * трапеции), поэтому через stepPlayer landVel отличается от баллистической скорости касания не больше чем на g·dt/2.
+ *
+ * Тело, утопленное в коллайдер глубже AHEAD_TOL (0,1 мм), этот коллайдер не видит: может из него выйти, но может
+ * и провалиться сквозь него вниз. Поэтому точки появления и телепорта нужно заранее проверять: isFree(w, bodyBox(b)).
  */
 export function moveBody(w: World, b: Body, dt: number, wasOnGround: boolean): MoveResult {
   const speed = Math.sqrt(b.vel.x * b.vel.x + b.vel.y * b.vel.y + b.vel.z * b.vel.z);

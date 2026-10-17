@@ -72,6 +72,20 @@ describe("moveBody", () => {
     expect(b.pos.x).toBeCloseTo(1 - 0.4, 6);
   });
 
+  it("steps up a riser of exactly stepHeight (0.55 m) but not one of 0.56 m", () => {
+    const exact = createWorld([FLOOR, col(1, 0, -5, 10, 0.55, 5)]);
+    const a = body(0, 0, 0);
+    expect(run(a, exact, 60, 4, 0)).toBe(true);
+    expect(a.pos.y).toBe(0.55);
+    expect(a.pos.x).toBeGreaterThan(3);
+
+    const tall = createWorld([FLOOR, col(1, 0, -5, 10, 0.56, 5)]);
+    const b = body(0, 0, 0);
+    expect(run(b, tall, 60, 4, 0)).toBe(true);
+    expect(b.pos.y).toBe(0);
+    expect(b.pos.x).toBeCloseTo(1 - 0.4, 6);
+  });
+
   it("does not step up while airborne", () => {
     const w = createWorld([FLOOR, col(1, 0, -5, 10, 0.4, 5)]);
     const b = body(0, 0.1, 0, 4, 0, 0);
