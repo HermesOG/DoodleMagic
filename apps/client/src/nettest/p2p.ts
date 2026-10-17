@@ -10,7 +10,12 @@ export const RECONNECT_DELAY_MS = 1000;
 export const LOSS_GRACE_MS = 2000;
 const TICK_MS = 250;
 const OPEN_TIMEOUT_MS = 12_000;
+/** Одна попытка соединения: PeerJS 1.5.5 не сообщает о сорвавшемся ICE или потерянном offer, поэтому ждём сами. */
+const ATTEMPT_TIMEOUT_MS = 8000;
 const ROUTE_CHECK_DELAY_MS = 1500;
+/** Повторное подключение к сигналингу: задержка удваивается от минимума до максимума. */
+const SIGNALLING_RETRY_MIN_MS = 1000;
+const SIGNALLING_RETRY_MAX_MS = 15_000;
 
 /** Как в Doodle District: STUN от Google и Cloudflare и бесплатный публичный TURN на случай строгого NAT. */
 export const PEER_OPTIONS = {
@@ -42,26 +47,46 @@ export function hostPeerId(room: string): string {
 function openPeer(id: string | null): Promise<Peer> {
   return new Promise((resolve, reject) => {
     const peer = id ? new Peer(id, PEER_OPTIONS) : new Peer(PEER_OPTIONS);
+    // Слушатели нужны только до открытия: позже ошибка Peer (обрыв сигналинга, сбой одного соединения) не должна его уничтожать.
+    const onOpen = () => {
+      clearTimeout(timer);
+      peer.off("error", onError);
+      resolve(peer);
+    };
+    const onError = (e: PeerError) => {
+      clearTimeout(timer);
+      peer.off("open", onOpen);
+      peer.destroy();
+      reject(e);
+    };
     const timer = setTimeout(() => {
+      peer.off("open", onOpen);
+      peer.off("error", onError);
       peer.destroy();
       reject(Object.assign(new Error("signalling timeout"), { type: "timeout" }));
     }, OPEN_TIMEOUT_MS);
-    peer.once("open", () => {
-      clearTimeout(timer);
-      resolve(peer);
-    });
-    peer.once("error", (e: PeerError) => {
-      clearTimeout(timer);
-      peer.destroy();
-      reject(e);
-    });
+    peer.on("open", onOpen);
+    peer.on("error", onError);
   });
 }
 
-/** Сигналинг PeerJS иногда рвёт связь: открытые P2P-каналы живут, а для новых нужно переподключиться. */
+/**
+ * Сигналинг PeerJS иногда рвёт связь: открытые P2P-каналы живут, а для новых нужно переподключиться.
+ * Повторы идут с нарастающей задержкой, не чаще одного ожидающего таймера; успешное открытие сбрасывает задержку.
+ */
 function keepSignalling(peer: Peer): void {
+  let delay = SIGNALLING_RETRY_MIN_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  peer.on("open", () => {
+    delay = SIGNALLING_RETRY_MIN_MS;
+  });
   peer.on("disconnected", () => {
-    if (!peer.destroyed) peer.reconnect();
+    if (timer !== undefined || peer.destroyed) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (!peer.destroyed && peer.disconnected) peer.reconnect();
+    }, delay);
+    delay = Math.min(delay * 2, SIGNALLING_RETRY_MAX_MS);
   });
 }
 
@@ -82,7 +107,10 @@ export async function hostRoom(room: string, hostName: string, onUpdate: (s: Hos
   const names = new Map<DataConnection, string>();
   /** Один результат на участника: при повторном прохождении остаётся последний. */
   const reports = new Map<string, NettestResult>();
-  const emit = () => onUpdate({ peers: [...names.values()], reports: [...reports.values()] });
+  let closed = false;
+  const emit = () => {
+    if (!closed) onUpdate({ peers: [...names.values()], reports: [...reports.values()] });
+  };
 
   peer.on("connection", (conn: DataConnection) => {
     let snapTimer: ReturnType<typeof setInterval> | undefined;
@@ -116,7 +144,12 @@ export async function hostRoom(room: string, hostName: string, onUpdate: (s: Hos
   });
 
   emit();
-  return { close: () => peer.destroy() };
+  return {
+    close: () => {
+      closed = true;
+      peer.destroy();
+    },
+  };
 }
 
 // ---------------------------------------------------------------- участник
@@ -173,21 +206,40 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
     };
     document.addEventListener("visibilitychange", onVisibility);
 
+    // «Хоста нет» (hostFound: false) — только когда сигналинг сам сказал peer-unavailable и ни одно соединение не открывалось.
     me.on("error", (e: PeerError) => {
       if (e.type === "peer-unavailable" && !everOpened) finish(false);
     });
+
+    /** Единая цепочка повторов: не больше одного ожидающего таймера, не после финиша и не после конца теста. */
+    let retryPending = false;
+    const scheduleReconnect = () => {
+      if (finished || retryPending || performance.now() >= endAt) return;
+      retryPending = true;
+      setTimeout(() => {
+        retryPending = false;
+        connect();
+      }, RECONNECT_DELAY_MS);
+    };
 
     const connect = () => {
       if (finished) return;
       // PeerJS 1.5.5 возвращает undefined, пока peer отключён от сигналинга
       const c = me.connect(hostPeerId(o.room), CONN_OPTIONS) as DataConnection | undefined;
       if (!c) {
-        setTimeout(connect, RECONNECT_DELAY_MS);
+        scheduleReconnect();
         return;
       }
       conn = c;
       let opened = false;
+      // PeerJS 1.5.5 не шлёт close для соединения, которое так и не открылось (ICE, потерянный offer): обрываем попытку сами.
+      const attemptTimer = setTimeout(() => {
+        if (finished || opened || conn !== c) return;
+        c.close();
+        scheduleReconnect();
+      }, ATTEMPT_TIMEOUT_MS);
       c.on("open", () => {
+        clearTimeout(attemptTimer);
         opened = true;
         everOpened = true;
         connected = true;
@@ -196,12 +248,20 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
           c.peerConnection
             ?.getStats()
             .then((report) => {
+              if (finished) return;
               data.route = routeFromStats(report.values() as Iterable<StatsEntry>);
             })
             .catch(() => undefined);
         }, ROUTE_CHECK_DELAY_MS);
       });
+      c.on("error", () => {
+        if (finished || opened || conn !== c) return;
+        clearTimeout(attemptTimer);
+        c.close();
+        scheduleReconnect();
+      });
       c.on("data", (raw) => {
+        if (finished) return;
         const now = performance.now();
         data.arrivals.push(now);
         let msg: HostMsg;
@@ -225,12 +285,14 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
         connected = false;
         // обрыв — это потеря уже открытого соединения; неудачные попытки переподключения не считаем
         if (opened) data.disconnects++;
-        if (performance.now() < endAt) setTimeout(connect, RECONNECT_DELAY_MS);
+        scheduleReconnect();
       });
     };
 
+    // Ни одно соединение не открылось, а peer-unavailable не было: хост в комнате есть, но P2P-канал (даже через TURN) не поднялся.
+    // Это именно тот сбой, который тест должен показать, поэтому hostFound остаётся true.
     const openTimer = setTimeout(() => {
-      if (!everOpened) finish(false);
+      if (!everOpened) finish(true);
     }, OPEN_TIMEOUT_MS);
 
     const pingTimer = setInterval(() => {
@@ -242,8 +304,16 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
     }, 1000 / PING_HZ);
 
     const tickTimer = setInterval(() => {
-      o.onTick?.(data, connected, hostName);
-      if (performance.now() >= endAt) finish(true);
+      if (performance.now() >= endAt) {
+        finish(true);
+        return;
+      }
+      // ошибка в onTick не должна останавливать тест
+      try {
+        o.onTick?.(data, connected, hostName);
+      } catch (e) {
+        console.error(e);
+      }
     }, TICK_MS);
 
     function finish(hostFound: boolean): void {
