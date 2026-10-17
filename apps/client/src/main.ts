@@ -14,6 +14,8 @@ if (location.pathname.startsWith("/nettest")) {
   mountNettest(app);
 } else if (location.pathname.startsWith("/render-test")) {
   import("./render/testPage").then((m) => m.mountRenderTest(app)).catch(failed("рендер"));
+} else if (location.pathname.startsWith("/fx-test")) {
+  import("./fx/fxTestPage").then((m) => m.mountFxTest(app)).catch(failed("эффекты"));
 } else {
   import("./sandbox/page").then((m) => m.mountSandbox(app)).catch(failed("игру"));
 }
