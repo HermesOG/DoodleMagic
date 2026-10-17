@@ -122,7 +122,21 @@ export function mountSandbox(root: HTMLElement): void {
 
   const setPreset = (p: PresetId): void => {
     renderer.setPreset(p);
-    guard.run("vfx", () => vfx.setPreset(p), undefined);
+    guard.run(
+      "vfx",
+      () => {
+        vfx.setPreset(p);
+        // FX_CHEAP стены огня — другая программа: собираем её сейчас (параллельно, если драйвер умеет), а не на
+        // первой стене после смены. compile обходит сцену сразу, поэтому скрытое можно вернуть до конца сборки
+        const restore = revealForWarmUp([vfx.fx.world]);
+        try {
+          void renderer.gl.compileAsync(vfx.fx.world, renderer.camera).catch(() => undefined);
+        } finally {
+          restore();
+        }
+      },
+      undefined,
+    );
   };
 
   /** Эффект — своему исполнителю; исключение исполнителя ловит guard, остальные эффекты кадра идут. */
@@ -303,6 +317,8 @@ export function mountSandbox(root: HTMLElement): void {
         for (const e of guard.run("effects", () => effectsFor(ev, { localId: LOCAL, state }), NO_EFFECTS)) route(e, nowS);
       }
     }
+    // тики кадра нажатия увидели: отпущенные раньше тика (тап тачпада) теперь гаснут
+    if (clock.ticks > 0) input.ticked();
     // руки после возрождения — в покое, а не с отставанием и креном от падения
     if (respawned) handRig = createHandRig();
 
