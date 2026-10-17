@@ -34,6 +34,12 @@
 .ch * {
   pointer-events: none;
 }
+/* hidden работает и без общего style.css: иначе display: flex у полос и значков пересилил бы его */
+.ch [hidden],
+.ch[hidden],
+.es [hidden] {
+  display: none !important;
+}
 .ch-layer {
   position: absolute;
   inset: 0;

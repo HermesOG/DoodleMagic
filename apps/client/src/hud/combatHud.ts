@@ -93,8 +93,18 @@ function pick<T extends HTMLElement | SVGElement = HTMLElement>(root: ParentNode
 function setText(el: HTMLElement | SVGElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;
 }
-function setStyle(el: HTMLElement | SVGElement, prop: "transform" | "opacity" | "width" | "left" | "strokeDashoffset", value: string): void {
-  if (el.style[prop] !== value) el.style[prop] = value;
+type StyleProp = "transform" | "opacity" | "width" | "left" | "strokeDashoffset";
+/**
+ * Последняя записанная строка каждого свойства: сравнивать с el.style нельзя — браузер нормализует значение
+ * ("translate(1px, 2px)" читается иначе, "0.500" — как "0.5"), и запись шла бы каждый кадр.
+ */
+const written = new WeakMap<HTMLElement | SVGElement, Partial<Record<StyleProp, string>>>();
+function setStyle(el: HTMLElement | SVGElement, prop: StyleProp, value: string): void {
+  let last = written.get(el);
+  if (!last) written.set(el, (last = {}));
+  if (last[prop] === value) return;
+  last[prop] = value;
+  el.style[prop] = value;
 }
 function setHidden(el: HTMLElement, hidden: boolean): void {
   if (el.hidden !== hidden) el.hidden = hidden;
@@ -247,14 +257,15 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     const m = me.mage;
     if (!m) return;
     setElement(m.element);
-    const busy = m.windup !== null;
+    // замах ЛКМ (камень, 0,2 с ≈ 1,9 раза в секунду) ячейки не гасит: иначе при зажатой ЛКМ мигали бы три ячейки
+    const busy = m.windup !== null && m.windup.slot !== "primary";
     for (const slot of SLOTS) {
       const c = cells[slot];
       const frac = cooldownFraction(m, slot, now);
       setStyle(c.enso, "strokeDashoffset", (ENSO_LEN * frac).toFixed(1));
       const ready = frac <= 0;
       c.root.classList.toggle("is-ready", ready);
-      // замах шара и камня не даёт стрелять ЛКМ, Q и C (Р14): ячейки бледнеют
+      // замах шара не даёт стрелять ЛКМ, Q и C (Р14): ячейки бледнеют
       c.root.classList.toggle("is-busy", busy && slot !== "e");
       // секунды до готовности — у Q / E / C; у ЛКМ перезарядка — доли секунды
       const counting = !ready && slot !== "primary";

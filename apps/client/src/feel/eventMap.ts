@@ -52,6 +52,8 @@ const burst = (preset: BurstPreset, pos: Vec3, dir: Vec3 = UP, scale = 1): Effec
 const centre = (u: Unit): Vec3 => ({ x: u.move.body.pos.x, y: u.move.body.pos.y + u.move.body.height / 2, z: u.move.body.pos.z });
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const clampTo = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+/** Крошка выпущенного камня: 0,8 м вперёд по прицелу от глаз и 0,35 м вниз — там, где руки. */
+const releaseCrumblePoint =(eye: Vec3, dir: Vec3): Vec3 => ({ x: eye.x + dir.x * 0.8, y: eye.y + dir.y * 0.8 - 0.35, z: eye.z + dir.z * 0.8 });
 
 /** Точка зоны для всплеска: середина основания бокса, середина отрезка, центр диска. */
 function zonePoint(s: ZoneShape): Vec3 {
@@ -91,8 +93,11 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
   const out: Effect[] = [];
   const lmb = isPrimary(ev.ability);
   if (ev.source === view.localId && ev.target !== view.localId) {
-    if (overTime(ev)) out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne });
-    else {
+    if (overTime(ev)) {
+      out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne });
+      // добил горением или следом — убийство всё равно отмечается
+      if (ev.killed) out.push({ kind: "hitmarker", kill: true, air: ev.airborne });
+    } else {
       // вторая фаза попадания: урон засчитан (round2/03, конфликт 1)
       out.push(
         { kind: "hitmarker", kill: ev.killed, air: ev.airborne },
@@ -172,7 +177,8 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
       if (!mine(ev.unit)) return [];
       if (ev.ability === "fireball")
         return [{ kind: "kick", pitchDeg: 1.5, yawDeg: 0, rollDeg: 0 }, { kind: "fov", deg: 3, holdS: 0.15 }, { kind: "trauma", amount: 0.15 }];
-      if (ev.ability === "stoneShot") return [burst("stoneCrumble", ev.pos)];
+      // pos выпуска — глаза: крошка сыплется у рук, впереди и ниже, а не в лицо (≈ 1,9 раза в секунду)
+      if (ev.ability === "stoneShot") return [burst("stoneCrumble", releaseCrumblePoint(ev.pos, ev.dir))];
       return [];
     case "impact": {
       // первая фаза попадания: снаряд врезался — видно и слышно в мире, хитмаркер ждёт события hit
