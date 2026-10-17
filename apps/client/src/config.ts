@@ -24,7 +24,10 @@ export function deviceKind(ua: string): string {
   return /Mobi|Android|iPhone|iPad/i.test(ua) ? "телефон" : "ПК";
 }
 
-/** navigator.connection есть не во всех браузерах; type («wifi», «cellular») бывает только на телефонах. */
+/**
+ * Тип сети («wifi», «cellular»…) из navigator.connection.type. Он есть в основном на Android; effectiveType —
+ * это класс скорости, а не тип сети, и он хранится отдельно в поле conn.
+ */
 export function netKind(conn: { type?: string; effectiveType?: string } | undefined): string {
-  return conn?.type ?? conn?.effectiveType ?? "?";
+  return conn?.type ?? "?";
 }

@@ -59,9 +59,10 @@ describe("deviceKind", () => {
 });
 
 describe("netKind", () => {
-  it("prefers the connection type, then the effective type", () => {
+  it("uses only the connection type: the effective type is a speed class and stays in conn", () => {
     expect(netKind({ type: "wifi", effectiveType: "4g" })).toBe("wifi");
-    expect(netKind({ effectiveType: "3g" })).toBe("3g");
+    expect(netKind({ type: "cellular" })).toBe("cellular");
+    expect(netKind({ effectiveType: "3g" })).toBe("?");
   });
 
   it("is ? without the Network Information API", () => {

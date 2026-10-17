@@ -309,8 +309,8 @@ describe("formatSummary", () => {
     const good = buildResult(data(), meta);
     const bad = buildResult(data({ route: "relay", disconnects: 1 }), { ...meta, name: "Боря" });
     const text = formatSummary([good, bad]);
-    expect(text).toContain("OK   Аня · ПК · напрямую");
-    expect(text).toContain("FAIL Боря · ПК · TURN");
+    expect(text).toContain("OK   Аня · ПК · сеть wifi · напрямую");
+    expect(text).toContain("FAIL Боря · ПК · сеть wifi · TURN");
     expect(text).toContain("• обрывов связи: 1");
     expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).toContain("Через ретранслятор (TURN): 1 из 2.");
@@ -324,8 +324,8 @@ describe("formatSummary", () => {
     const text = formatSummary([good, bad, short]);
     expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).toContain("Коротких тестов (не в зачёт): 1.");
-    expect(text).toContain("OK   Вася · ПК · короткий · TURN");
-    expect(text).not.toContain("OK   Аня · ПК · короткий");
+    expect(text).toContain("OK   Вася · ПК · сеть wifi · короткий · TURN");
+    expect(text).not.toContain("OK   Аня · ПК · сеть wifi · короткий");
     expect(text).toContain("Через ретранслятор (TURN): 1 из 3.");
   });
 
@@ -335,7 +335,7 @@ describe("formatSummary", () => {
     const text = formatSummary([good, shortBad]);
     expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).not.toContain("Коротких тестов");
-    expect(text).toContain("FAIL Вася · ПК · короткий");
+    expect(text).toContain("FAIL Вася · ПК · сеть wifi · короткий");
     expect(text).toContain("• обрывов связи: 1");
   });
 
@@ -357,11 +357,11 @@ describe("formatSummary", () => {
     expect(formatSummary([r])).toContain("p50 —");
   });
 
-  it("shows the device, p99 and unanswered pings in each row", () => {
-    const phone = buildResult(data(), { ...meta, device: "телефон" });
+  it("shows the device, network, p99 and unanswered pings in each row", () => {
+    const phone = buildResult(data(), { ...meta, device: "телефон", net: "cellular" });
     const text = formatSummary([phone]);
     expect(text).toContain(
-      "OK   Аня · телефон · напрямую · p50 60 мс · p95 60 мс · p99 60 мс · зав 0 · обр 0 · без ответа 0.0% · 600 с",
+      "OK   Аня · телефон · сеть cellular · напрямую · p50 60 мс · p95 60 мс · p99 60 мс · зав 0 · обр 0 · без ответа 0.0% · 600 с",
     );
     expect(text).not.toContain("пот ");
   });
@@ -417,8 +417,8 @@ describe("formatSummary", () => {
     const text = formatSummary([good, turnOk, turnBad], {
       failedOpens: [{ name: "Гена", device: "ПК", relayOnly: true }],
     });
-    expect(text).toContain("OK   Боря · ПК · проверка TURN · TURN");
-    expect(text).toContain("FAIL Вася · ПК · проверка TURN · TURN");
+    expect(text).toContain("OK   Боря · ПК · сеть wifi · проверка TURN · TURN");
+    expect(text).toContain("FAIL Вася · ПК · сеть wifi · проверка TURN · TURN");
     expect(text).toContain("FAIL Гена · ПК · проверка TURN · канал не открылся");
     expect(text).toContain("Прошли 1 из 1 в зачёте (100 %).");
     expect(text).toContain("Проверок только через TURN (не в зачёт): 3, прошли 1.");

@@ -57,7 +57,7 @@ export interface ResultMeta {
   tz: string;
   /** «телефон» или «ПК»: один человек может пройти тест с двух устройств. */
   device: string;
-  /** Тип сети из navigator.connection, если браузер его даёт. */
+  /** Тип сети из navigator.connection.type («wifi», «cellular») или «?», если браузер его не даёт. */
   net: string;
   /** Прогон шёл принудительно только через TURN (`/nettest?relay=1`). */
   relayOnly: boolean;
@@ -292,7 +292,7 @@ export function formatSummary(results: readonly NettestResult[], extras: Summary
       } else short++;
     }
     lines.push(
-      `${v.ok ? "OK  " : "FAIL"} ${r.name || "—"} · ${r.device}${v.full ? "" : " · короткий"}${turnTag(r.relayOnly)} · ${ROUTE_SHORT[r.route]} · p50 ${fmtMs(r.rtt.p50)} · p95 ${fmtMs(r.rtt.p95)} · p99 ${fmtMs(r.rtt.p99)} · зав ${r.stalls} · обр ${r.disconnects} · без ответа ${r.lossPct.toFixed(1)}% · ${r.durationS} с`,
+      `${v.ok ? "OK  " : "FAIL"} ${r.name || "—"} · ${r.device} · сеть ${r.net}${v.full ? "" : " · короткий"}${turnTag(r.relayOnly)} · ${ROUTE_SHORT[r.route]} · p50 ${fmtMs(r.rtt.p50)} · p95 ${fmtMs(r.rtt.p95)} · p99 ${fmtMs(r.rtt.p99)} · зав ${r.stalls} · обр ${r.disconnects} · без ответа ${r.lossPct.toFixed(1)}% · ${r.durationS} с`,
     );
     for (const reason of v.reasons) lines.push(`     • ${reason}`);
   }
