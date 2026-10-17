@@ -1,0 +1,18 @@
+{
+  "name": "doodlemagic",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "dev:client": "pnpm --filter @doodlemagic/client dev",
+    "dev:server": "pnpm --filter @doodlemagic/server dev",
+    "build:client": "pnpm --filter @doodlemagic/client build",
+    "smoke": "node apps/server/scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

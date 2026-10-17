@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.vercel/
+*.log
+.DS_Store
+# чужой исходник только для локального изучения — не публикуем
+research/doodle-district/source/
+# сырые результаты теста связи с именами друзей — не публикуем
+design/nettest/
