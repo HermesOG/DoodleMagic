@@ -120,7 +120,7 @@ void main() {
   glow = min(glow, 1.5);
   float pulse = 0.7 + 0.3 * sin(uTime * 2.2 + seed * 6.2831 + depthM * 1.7);
   float k = bright * pulse * vis;
-  float a = core * 0.55 * k;
+  float a = core * 0.55 * bright * pulse * fxDense(vis);
   gl_FragColor = fxCompose(uJade, a, fxLight(uJade * (glow * 0.3 + core * 0.35) * k, 0.5));
 }
 `;
@@ -207,6 +207,7 @@ export function createVeinMeshes(gbuffer: FxGBuffer, time: TimeUniform, max = 96
       }
       for (const a of [a0, a1, a2]) {
         a.clearUpdateRanges();
+        if (n === 0) continue;
         a.addUpdateRange(0, n * 4);
         a.needsUpdate = true;
       }

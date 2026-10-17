@@ -32,10 +32,20 @@ varying vec2 vUv;
 varying vec4 vColor;
 varying vec3 vInfo;
 varying float vSoft;
+varying float vNear;
 const float DRAG = 2.6;
 const float STREAK_S = 0.03;
+// не больше этой доли высоты кадра на глубине частицы: вплотную к камере квадрат не заливает экран
+const float MAX_SCREEN = 0.35;
 
-float seedOf(float i) { return fract(sin(i * 12.9898 + 78.233) * 43758.5453); }
+// целочисленный хеш номера и момента рождения: одинаково на всех GPU, не теряет точность с ростом времени
+float seedOf(uint i, float birth) {
+  uint h = i * 2654435769u ^ floatBitsToUint(birth) * 2246822519u;
+  h ^= h >> 15;
+  h *= 3266489917u;
+  h ^= h >> 13;
+  return float(h & 0xffffffu) / 16777215.0;
+}
 
 void main() {
   float age = uTime - aTime.x;
@@ -44,6 +54,7 @@ void main() {
   vColor = aColor;
   vInfo = vec3(1.0, 0.0, 0.0);
   vSoft = 1.0;
+  vNear = 1.0;
   if (life <= 0.0 || age < 0.0 || age >= life) {
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
     return;
@@ -57,15 +68,28 @@ void main() {
   vec3 pos = aP0 + aV0 * tv - vec3(0.0, 0.5 * aGrav * age * age, 0.0);
   vec3 vel = aV0 * e - vec3(0.0, aGrav * age, 0.0);
   float size = mix(aTime.z, aTime.w, t);
-  float seed = seedOf(float(gl_InstanceID) + aTime.x * 7.13);
+  float seed = seedOf(uint(gl_InstanceID), aTime.x);
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  float depth = -mv.z;
+#ifdef FX_NO_DEPTH
+  float nearK = 1.0;
+#else
+  // ближе 0,6 м к глазам частица гаснет, ближе 0,35 м — не рисуется
+  float nearK = smoothstep(0.35, 0.6, depth);
+  if (nearK <= 0.0) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    return;
+  }
+#endif
+  float maxSize = 2.0 * MAX_SCREEN * depth / projectionMatrix[1][1];
+  size = min(size, maxSize);
   vec2 ax;
   float along = size;
   if (kind == 0.0) {
     vec2 sv = (mat3(modelViewMatrix) * vel).xy;
     float sp = length(sv);
     ax = sp > 1e-3 ? sv / sp : vec2(1.0, 0.0);
-    along = size + sp * STREAK_S;
+    along = min(size + sp * STREAK_S, maxSize);
   } else {
     float spin = kind == 2.0 ? (seed - 0.5) * 18.0 : (seed - 0.5) * 1.2;
     float a = seed * 6.2831853 + age * spin;
@@ -76,6 +100,7 @@ void main() {
   gl_Position = projectionMatrix * mv;
   vInfo = vec3(t, seed, kind);
   vSoft = max(0.04, size * 0.5);
+  vNear = nearK;
 }
 `;
 
@@ -84,20 +109,22 @@ varying vec2 vUv;
 varying vec4 vColor;
 varying vec3 vInfo;
 varying float vSoft;
+varying float vNear;
 
 void main() {
   float t = vInfo.x;
   float seed = vInfo.y;
   float kind = vInfo.z;
+  // все формы (пятно, облако, осколок) лежат в единичном круге: угол квадрата отбрасываем до выборок G-буфера
   float r2 = dot(vUv, vUv);
-  float vis = fxVisibility(vSoft);
+  if (r2 >= 1.0) discard;
+  float vis = fxVisibility(vSoft) * vNear;
   if (vis <= 0.0) discard;
   vec3 rgb = vColor.rgb;
   float a = vColor.a;
   float fadeIn = smoothstep(0.0, 0.06, t);
   if (kind < 0.5) {
     // свет: мягкое пятно, белый центр, мерцание
-    if (r2 >= 1.0) discard;
     float f = 1.0 - r2;
     float m = f * f * (1.0 - smoothstep(0.45, 1.0, t)) * fadeIn;
     m *= 0.8 + 0.2 * fxNoise(vec2(seed * 40.0, t * 18.0));
@@ -105,7 +132,8 @@ void main() {
     float hi = max(rgb.r, max(rgb.g, rgb.b));
     float sat = hi > 0.0 ? (hi - min(rgb.r, min(rgb.g, rgb.b))) / hi : 0.0;
     vec3 light = mix(rgb, vec3(1.0, 0.98, 0.92), 0.6 * f * f * f * (1.0 - 0.75 * sat)) * m;
-    gl_FragColor = fxLight(light * vis, 0.35);
+    // свет частиц копится слоями (десяток ядер взрыва): над врагом он гаснет как плотное, иначе залил бы силуэт белым
+    gl_FragColor = fxLight(light * fxDense(vis), 0.35);
     return;
   }
   if (kind < 1.5) {
@@ -120,9 +148,9 @@ void main() {
     vec3 cooled = mix(rgb, vec3(0.5, 0.17, 0.06), 0.8 * smoothstep(0.35, 1.0, t));
     rgb = mix(rgb, cooled, hot);
     rgb = mix(rgb, vec3(1.0, 0.89, 0.63), hot * (1.0 - smoothstep(0.0, 0.35, t)) * (1.0 - smoothstep(0.0, 0.6, rr)));
-    a *= m;
+    a *= m * fxDense(vis);
     vec3 glow = rgb * (hot * 0.38 * m * (1.0 - t));
-    gl_FragColor = vec4((rgb * a + glow) * vis, a * vis);
+    gl_FragColor = vec4(rgb * a + glow * vis, a);
     return;
   }
   // осколок камня: угловатый четырёхугольник с кромкой туши, освещённая и теневая половины
@@ -131,8 +159,8 @@ void main() {
   if (shape > 0.9) discard;
   rgb *= vUv.y > 0.1 * vUv.x ? 1.08 : 0.72;
   rgb = mix(rgb, vec3(0.1, 0.09, 0.08), smoothstep(0.66, 0.8, shape));
-  a *= 1.0 - smoothstep(0.8, 1.0, t);
-  gl_FragColor = vec4(rgb * a * vis, a * vis);
+  a *= (1.0 - smoothstep(0.8, 1.0, t)) * fxDense(vis);
+  gl_FragColor = vec4(rgb * a, a);
 }
 `;
 
@@ -230,7 +258,11 @@ export function createParticlePool(o: ParticlePoolOptions): ParticlePool {
           aGrav.array[i] = s.gravity;
         }
         for (const a of all) {
-          a.addUpdateRange(range.start * a.itemSize, range.count * a.itemSize);
+          // кадр без отрисовки (вкладка в фоне) копил бы диапазоны: больше 32 — грузим кольцо целиком
+          if (a.updateRanges.length >= 32) {
+            a.clearUpdateRanges();
+            a.addUpdateRange(0, cap * a.itemSize);
+          } else a.addUpdateRange(range.start * a.itemSize, range.count * a.itemSize);
           a.needsUpdate = true;
         }
       }

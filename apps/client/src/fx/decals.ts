@@ -156,7 +156,7 @@ void main() {
       float line = exp(-across * across / 0.004);
       float flick = 0.6 + 0.4 * fxNoise(vec2(l.x * 6.0, t * 20.0));
       add += mix(uFire, uCore, 0.4) * line * lit * flick;
-      float head = exp(-pow((along - prog) * hs.x / 0.25, 2.0)) * exp(-across * across / 0.02) * step(along, 1.02);
+      float head = fxBell((along - prog) * hs.x / 0.25) * exp(-across * across / 0.02) * step(along, 1.02);
       add += uCore * head * 2.2;
       vec2 cell = vec2(floor(l.x / 0.3), floor(t * 14.0) + seed);
       float sp = step(0.8, fxHash(cell));
@@ -178,31 +178,36 @@ void main() {
     float r = shape == 1 ? length(l) / hs.x : max(abs(l.x) / hs.x, abs(l.y) / hs.y);
     float reach = mix(0.35, 1.3, prog);
     float mask = 1.0 - smoothstep(reach - 0.25, reach, r + (fxNoise(l * 3.0 + seed) - 0.5) * 0.25);
-    float cell = fxCells(l * 2.6 + seed);
-    float keep = 0.35 + 0.65 * smoothstep(0.35, 0.6, fxNoise(l * 1.7 + seed * 5.0));
-    float edge = (1.0 - smoothstep(0.03, 0.09, cell)) * keep;
-    float core = (1.0 - smoothstep(0.0, 0.035, cell)) * keep;
     float pulse = 0.75 + 0.25 * sin(t * 18.0 + seed);
-    a = edge * mask * 0.85;
-    add += uJade * core * mask * (0.5 + 0.9 * prog) * pulse;
+    // ячейки шума (9 выборок) — только там, куда трещины уже дошли
+    if (mask > 0.0) {
+      float keep = 0.35 + 0.65 * smoothstep(0.35, 0.6, fxNoise(l * 1.7 + seed * 5.0));
+      float cell = fxCells(l * 2.6 + seed);
+      float edge = (1.0 - smoothstep(0.03, 0.09, cell)) * keep;
+      float core = (1.0 - smoothstep(0.0, 0.035, cell)) * keep;
+      a = edge * mask * 0.85;
+      add += uJade * core * mask * (0.5 + 0.9 * prog) * pulse;
+    }
     add += uJade * (1.0 - smoothstep(0.5, 1.0, r)) * (0.06 + 0.22 * prog) * pulse;
   } else if (style == 2) {
     // землетрясение: тёмная граница 7 м, к удару внутрь сходится нефритовое кольцо, за ним — трещины
     float rr = length(l);
     float R = hs.x;
     float conv = R * (1.0 - prog);
-    a = exp(-pow((rr - R) / 0.07, 2.0)) * 0.85;
-    float ring = exp(-pow((rr - conv) / (0.1 + 0.3 * (1.0 - prog)), 2.0)) * step(rr, R + 0.1);
+    a = fxBell((rr - R) / 0.07) * 0.85;
+    float ring = fxBell((rr - conv) / (0.1 + 0.3 * (1.0 - prog))) * step(rr, R + 0.1);
     add += uJade * ring * (0.55 + 0.9 * prog);
     add += uJade * (1.0 - smoothstep(R - 0.25, R, rr)) * (0.04 + 0.1 * prog);
     float rootR = R * ROOT_FRAC;
     float dash = step(0.5, fract(atan(l.y, l.x) * 7.0 / 3.14159265 + t * 0.4));
-    add += uJade * exp(-pow((rr - rootR) / 0.05, 2.0)) * dash * 0.4;
-    // трещины — редкими пучками, а не сеткой: только где низкочастотный шум высок
+    add += uJade * fxBell((rr - rootR) / 0.05) * dash * 0.4;
+    // трещины — редкими пучками, а не сеткой: только где низкочастотный шум высок; ячейки шума (9 выборок)
+    // считаются лишь там, где трещина может быть
     float swept = smoothstep(conv, conv + 0.5, rr) * (1.0 - smoothstep(R - 0.1, R, rr));
-    float cell = fxCells(l * 0.85 + seed);
-    float keep = smoothstep(0.5, 0.72, fxNoise(l * 0.45 + seed * 3.0));
-    a = max(a, (1.0 - smoothstep(0.015, 0.05, cell)) * swept * keep * 0.7);
+    if (swept > 0.0) {
+      float keep = smoothstep(0.5, 0.72, fxNoise(l * 0.45 + seed * 3.0));
+      if (keep > 0.0) a = max(a, (1.0 - smoothstep(0.015, 0.05, fxCells(l * 0.85 + seed))) * swept * keep * 0.7);
+    }
   } else if (style == 3) {
     // след рывка: телеграф — светлая полоса, потом — тлеющие угли, к концу — подпалина тушью
     float along = abs(l.x) / hs.x;
@@ -221,15 +226,16 @@ void main() {
     // обездвижен: нефритовое кольцо у ног, бегущие штрихи
     float rr = length(l);
     float R = hs.x * 0.85;
-    float ring = exp(-pow((rr - R) / 0.04, 2.0));
+    float ring = fxBell((rr - R) / 0.04);
     float dash = 0.55 + 0.45 * sin(atan(l.y, l.x) * 8.0 - t * 4.0);
     float pulse = 0.75 + 0.25 * sin(t * 9.0);
     add += uJade * ring * dash * pulse * 1.2;
     add += uJade * (1.0 - smoothstep(0.0, R, rr)) * 0.12 * pulse;
   }
 
-  float k = hfade * inten * (fxIsEnemy(fxInkAt(p)) ? 0.25 : 1.0);
-  a = clamp(a, 0.0, 1.0) * k;
+  bool enemy = fxIsEnemy(fxInkAt(p));
+  float k = hfade * inten * (enemy ? FX_ENEMY_LIGHT : 1.0);
+  a = clamp(a, 0.0, 1.0) * hfade * inten * (enemy ? FX_ENEMY_DENSE : 1.0);
   gl_FragColor = fxCompose(ink, a, fxLight(add * k, 0.6));
 }
 `;
@@ -290,6 +296,7 @@ export function createDecalMeshes(gbuffer: FxGBuffer, time: TimeUniform, max = 3
       }
       for (const a of [a0, a1, a2]) {
         a.clearUpdateRanges();
+        if (n === 0) continue;
         a.addUpdateRange(0, n * 4);
         a.needsUpdate = true;
       }

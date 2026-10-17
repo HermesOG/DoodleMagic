@@ -1,4 +1,4 @@
-import { BackSide, FrontSide } from "three";
+import { BackSide, DepthTexture, FrontSide, PerspectiveCamera, Texture, Vector2 } from "three";
 import { describe, expect, it } from "vitest";
 import type { Terrain, Zone } from "@doodlemagic/sim";
 import { BURST_PRESETS } from "../feel/effects";
@@ -8,7 +8,12 @@ import { zoneDecal } from "./decals";
 import { dummyParts, haloMargin, type DummyPose } from "./dummyMeshes";
 import { handToWorldView, lerpById, muzzleBlend } from "./interp";
 import { allocateRing } from "./particles";
-import { FX_COLOR, MAGIC_LIGHTS, PARTICLE_BUDGET, burstParticles, palmParticles, poolCaps } from "./presets";
+import { createDecalMeshes } from "./decals";
+import { createFireWallMeshes } from "./fireWalls";
+import { ENEMY_DENSE, ENEMY_LIGHT } from "./fxShader";
+import { cullGlows, createGlowMeshes } from "./glows";
+import { createParticlePool } from "./particles";
+import { BURST_SHARE, FX_COLOR, MAGIC_LIGHTS, PARTICLE_BUDGET, burstParticles, palmParticles, poolCaps, thinParticles } from "./presets";
 import { terrainVisualBox } from "./terrainMeshes";
 
 const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => ({ min: { x: x0, y: y0, z: z0 }, max: { x: x1, y: y1, z: z1 } });
@@ -130,5 +135,62 @@ describe("fx budgets and mapping", () => {
     expect(head.tiltX).toBeCloseTo(0.3, 9);
     const squashed = dummyParts({ ...pose, squash: 0.8 });
     expect(Math.max(...squashed.map((p) => p.pos[1] + p.scale[1] / 2))).toBeLessThan(1.8 * 0.8 + 0.12);
+  });
+});
+
+describe("fx performance guards", () => {
+  const gbuffer = { surface: new Texture(), depth: new DepthTexture(1, 1), invDepth: new Vector2(1, 0) };
+  const time = { value: 0 };
+  const glow = (x: number, y: number, z: number, halo: number, light: number) => ({ pos: { x, y, z }, color: FX_COLOR.fire, halo, light, intensity: 1, core: 0 });
+
+  it("drops glows whose sphere is outside the view frustum, keeps those in view or around the camera", () => {
+    const cam = new PerspectiveCamera(70, 16 / 9, 0.05, 160);
+    cam.updateMatrixWorld();
+    const kept = cullGlows([glow(0, 0, -6, 1.4, 5), glow(0, 0, 6, 1, 1.8), glow(0, 0, 0.5, 0, 5), glow(40, 0, -2, 0.5, 2), glow(0, 0, -3, 0, 0)], cam);
+    expect(kept.map((g) => g.pos.z)).toEqual([-6, 0.5]);
+    cam.rotation.y = Math.PI;
+    cam.updateMatrixWorld();
+    expect(cullGlows([glow(0, 0, -6, 1.4, 5), glow(0, 0, 6, 1, 1.8)], cam).map((g) => g.pos.z)).toEqual([6]);
+  });
+
+  it("thins bursts by preset and keeps the layer mix", () => {
+    expect(BURST_SHARE).toEqual({ low: 0.5, medium: 0.75, high: 1 });
+    const full = burstParticles("fireballBoom", O, O, 1, rng());
+    const half = thinParticles(full, BURST_SHARE.low);
+    expect([half.length, thinParticles(full, BURST_SHARE.medium).length, thinParticles(full, 1).length]).toEqual([40, 60, 80]);
+    const lightShare = (ps: readonly { alpha: number }[]) => ps.filter((p) => p.alpha === 0).length / ps.length;
+    expect(Math.abs(lightShare(half) - lightShare(full))).toBeLessThan(0.05);
+  });
+
+  it("keeps light-pass shaders free of pow(), culls glows behind the camera and discards quad corners first", () => {
+    const glows = createGlowMeshes(gbuffer).mesh.material;
+    const decals = createDecalMeshes(gbuffer, time).mesh.material;
+    const pool = createParticlePool({ name: "t", maxCap: 4, cap: 4, gbuffer, time }).mesh.material;
+    for (const m of [glows, decals, pool]) expect(m.vertexShader + m.fragmentShader.replace(/\/\/.*$/gm, "")).not.toMatch(/\bpow\s*\(/);
+    expect(glows.vertexShader).toContain("if (c.z > R)");
+    // луч — в фрагментном шейдере из точки квадрата, а не делением в вершинах
+    expect([glows.vertexShader.includes("q / -q.z"), glows.fragmentShader.includes("vQ / -vQ.z")]).toEqual([false, true]);
+    const body = pool.fragmentShader.slice(pool.fragmentShader.indexOf("void main()", pool.fragmentShader.indexOf("fxCompose")));
+    expect(body.indexOf("if (r2 >= 1.0) discard;")).toBeGreaterThan(-1);
+    expect(body.indexOf("if (r2 >= 1.0) discard;")).toBeLessThan(body.indexOf("fxVisibility("));
+  });
+
+  it("keeps dense fx over enemy ink to a tenth and light to a quarter, so a blast cannot flood the silhouette", () => {
+    expect([ENEMY_LIGHT, ENEMY_DENSE]).toEqual([0.25, 0.1]);
+    const pool = createParticlePool({ name: "t", maxCap: 4, cap: 4, gbuffer, time }).mesh.material;
+    const walls = createFireWallMeshes(gbuffer, time).mesh.material;
+    expect(pool.defines).toMatchObject({ FX_ENEMY_LIGHT: "0.25", FX_ENEMY_DENSE: "0.1" });
+    for (const m of [pool, walls]) expect(m.fragmentShader).toContain("fxDense(vis)");
+    // восемь перекрывающихся языков (альфа 0,7) над врагом: раньше ≈ 79 % заливки, теперь меньше половины
+    expect([1 - (1 - 0.7 * ENEMY_LIGHT) ** 8 > 0.7, 1 - (1 - 0.7 * ENEMY_DENSE) ** 8 < 0.5]).toEqual([true, true]);
+  });
+
+  it("draws the fire wall as one sheet and switches its cheap noise with the preset", () => {
+    const walls = createFireWallMeshes(gbuffer, time);
+    expect(walls.mesh.geometry.getAttribute("position").count).toBe(4);
+    walls.setCheap(true);
+    expect("FX_CHEAP" in walls.mesh.material.defines).toBe(true);
+    walls.setCheap(false);
+    expect("FX_CHEAP" in walls.mesh.material.defines).toBe(false);
   });
 });

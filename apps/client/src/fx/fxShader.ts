@@ -15,6 +15,9 @@ uniform sampler2D gDepth;
 uniform sampler2D gSurface;
 uniform vec2 uInvDepth;
 float fxDist(float d) { return 1.0 / (uInvDepth.x - uInvDepth.y * d); }
+// Над тушью врага плотному (альфа — пламя, пыль, дым) остаётся ещё меньше, чем свету: fxVisibility запоминает здесь
+// множитель, fxDense применяет его к альфе. Иначе перекрывающиеся языки набирают заливку и топят силуэт.
+float fxDenseK = 1.0;
 // 0 — фрагмент за миром или за рукой; у пересечения с миром мягко гаснет на softM метрах;
 // над тушью врага, его ореолом и вспышкой — четверть: магический свет на врага не падает, силуэт читается
 float fxVisibility(float softM) {
@@ -28,10 +31,15 @@ float fxVisibility(float softM) {
   if (gap <= 0.0) return 0.0;
   float vis = clamp(gap / softM, 0.0, 1.0);
   int ink = int(texelFetch(gSurface, p, 0).g * 255.0 + 0.5);
-  if (ink == INK_ENEMY || ink == INK_HALO || ink == INK_FLASH) vis *= 0.25;
+  if (ink == INK_ENEMY || ink == INK_HALO || ink == INK_FLASH) {
+    vis *= FX_ENEMY_LIGHT;
+    fxDenseK = FX_ENEMY_DENSE / FX_ENEMY_LIGHT;
+  }
   return vis;
 #endif
 }
+// видимость плотного слоя: после fxVisibility; над врагом — FX_ENEMY_DENSE вместо FX_ENEMY_LIGHT
+float fxDense(float vis) { return vis * fxDenseK; }
 int fxInkAt(ivec2 p) { return int(texelFetch(gSurface, p, 0).g * 255.0 + 0.5); }
 bool fxIsEnemy(int ink) { return ink == INK_ENEMY || ink == INK_HALO || ink == INK_FLASH; }
 // нормаль поверхности в пространстве камеры из октаэдрической развёртки G-буфера (B, A)
@@ -58,7 +66,16 @@ float fxNoise(vec2 p) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(fxHash(i), fxHash(i + vec2(1.0, 0.0)), u.x), mix(fxHash(i + vec2(0.0, 1.0)), fxHash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
-float fxFbm(vec2 p) { return 0.55 * fxNoise(p) + 0.3 * fxNoise(p * 2.03 + 17.0) + 0.15 * fxNoise(p * 4.1 + 41.0); }
+// три октавы; FX_CHEAP (пресеты «Низкое» и «Среднее») — две
+float fxFbm(vec2 p) {
+#ifdef FX_CHEAP
+  return 0.65 * fxNoise(p) + 0.35 * fxNoise(p * 2.03 + 17.0);
+#else
+  return 0.55 * fxNoise(p) + 0.3 * fxNoise(p * 2.03 + 17.0) + 0.15 * fxNoise(p * 4.1 + 41.0);
+#endif
+}
+// гауссов колокол e^(−u²): без pow() — у pow с отрицательным основанием в GLSL ES результат не определён
+float fxBell(float u) { return exp(-u * u); }
 // Свет как глазурь: добавляет цвет и чуть гасит подложку пропорционально своей насыщенности, чтобы на светлой
 // бумаге оранжевый и нефрит не выцветали в белое. Белый свет (ядро) — чистое сложение.
 vec4 fxLight(vec3 light, float tint) {
@@ -88,6 +105,13 @@ float fxCells(vec2 p) {
   return d2 - d1;
 }
 `;
+
+/**
+ * Над тушью врага, его ореолом и вспышкой (GDD 6, «магический свет на вражескую тушь не падает»): свет — четверть,
+ * плотное (пламя, пыль, дым, тушь декалей) — десятая доля, чтобы перекрывающиеся языки взрыва не залили силуэт.
+ */
+export const ENEMY_LIGHT = 0.25;
+export const ENEMY_DENSE = 0.1;
 
 /** Униформы G-буфера для материала света: значения — общие объекты рендера (текстуры и вектор раскодировки). */
 export function fxUniforms(g: FxGBuffer): Record<"gDepth" | "gSurface" | "uInvDepth", IUniform> {
@@ -122,6 +146,8 @@ export function createFxMaterial(o: FxMaterialOptions): ShaderMaterial {
       INK_ENEMY: INK.enemy,
       INK_HALO: INK.halo,
       INK_FLASH: INK.flash,
+      FX_ENEMY_LIGHT: glslFloat(ENEMY_LIGHT),
+      FX_ENEMY_DENSE: glslFloat(ENEMY_DENSE),
       ...(o.noDepth ? { FX_NO_DEPTH: "" } : {}),
       ...o.defines,
     },

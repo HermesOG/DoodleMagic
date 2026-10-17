@@ -350,6 +350,19 @@ export function palmParticles(element: Element, kind: "flash" | "charge" | "fizz
   return emit(layers, layers.reduce((a, l) => a + l.n, 0), pos, { x: 0, y: 0.15, z: -1 }, rng);
 }
 
+/** Слои следов и линий пламени — постоянные: следы порождаются каждый кадр, без мусора на каждую частицу. */
+const TRAIL = {
+  ballFlame: L("flame", 1, "up", [0.4, 1.2], [0.3, 0.45], [0.45, 0.65], [0.15, 0.3]),
+  ballGlow: L("glow", 1, "sphere", [0.1, 0.5], [0.2, 0.3], [0.6, 0.8], [0.3, 0.4]),
+  ballEmber: L("ember", 1, "sphere", [0.8, 2], [0.3, 0.5], [0.04, 0.06], [0.02, 0.03], { gravity: 2 }),
+  ballSmoke: L("smoke", 1, "up", [0.2, 0.6], [0.6, 0.9], [0.35, 0.5], [0.8, 1.1]),
+  fistGlow: L("glow", 1, "sphere", [0, 0.3], [0.1, 0.16], [0.18, 0.26], [0.06, 0.1]),
+  fistEmber: L("ember", 1, "sphere", [0.5, 1.5], [0.15, 0.3], [0.03, 0.05], [0.015, 0.02], { gravity: 3 }),
+  stoneDust: L("dust", 1, "sphere", [0.05, 0.25], [0.3, 0.5], [0.08, 0.12], [0.26, 0.36]),
+  lineFlame: L("flame", 1, "up", [1.5, 3.5], [0.35, 0.55], [0.5, 0.8], [0.9, 1.3], { cone: 0.3 }),
+  lineEmber: L("ember", 1, "up", [1.5, 4], [0.4, 0.8], [0.04, 0.07], [0.02, 0.03], { gravity: 2, cone: 0.4 }),
+} as const;
+
 /**
  * Частицы следа снаряда на отрезке a → b (их число задаёт вызывающий по пройденному пути).
  * Огонь роняет языки пламени, угли и дым; камень — пыль цвета бумаги.
@@ -363,17 +376,20 @@ export function trailParticles(kind: "fireFists" | "fireball" | "stoneShot", a: 
     if (kind === "fireball") {
       const j = randomUnit(rng);
       const q = { x: p.x + j.x * 0.18, y: p.y + j.y * 0.18, z: p.z + j.z * 0.18 };
-      if (r < 0.62) out.push(spawn(L("flame", 1, "up", [0.4, 1.2], [0.3, 0.45], [0.45, 0.65], [0.15, 0.3]), q, UP, rng));
-      else if (r < 0.75) out.push({ ...spawn(L("glow", 1, "sphere", [0.1, 0.5], [0.2, 0.3], [0.6, 0.8], [0.3, 0.4]), q, UP, rng), color: FX_COLOR.fire });
-      else if (r < 0.9) out.push(spawn(L("ember", 1, "sphere", [0.8, 2], [0.3, 0.5], [0.04, 0.06], [0.02, 0.03], { gravity: 2 }), q, UP, rng));
-      else out.push(spawn(L("smoke", 1, "up", [0.2, 0.6], [0.6, 0.9], [0.35, 0.5], [0.8, 1.1]), q, UP, rng));
+      if (r < 0.62) out.push(spawn(TRAIL.ballFlame, q, UP, rng));
+      else if (r < 0.75) {
+        const g = spawn(TRAIL.ballGlow, q, UP, rng);
+        g.color = FX_COLOR.fire;
+        out.push(g);
+      } else if (r < 0.9) out.push(spawn(TRAIL.ballEmber, q, UP, rng));
+      else out.push(spawn(TRAIL.ballSmoke, q, UP, rng));
     } else if (kind === "fireFists") {
-      if (r < 0.7) out.push(spawn(L("glow", 1, "sphere", [0, 0.3], [0.1, 0.16], [0.18, 0.26], [0.06, 0.1]), p, UP, rng));
-      else out.push(spawn(L("ember", 1, "sphere", [0.5, 1.5], [0.15, 0.3], [0.03, 0.05], [0.015, 0.02], { gravity: 3 }), p, UP, rng));
+      out.push(spawn(r < 0.7 ? TRAIL.fistGlow : TRAIL.fistEmber, p, UP, rng));
     } else {
       // камень оставляет мягкий пыльный след, а не цепочку клубов
-      const s = spawn(L("dust", 1, "sphere", [0.05, 0.25], [0.3, 0.5], [0.08, 0.12], [0.26, 0.36]), p, UP, rng);
-      out.push({ ...s, alpha: s.alpha * 0.45 });
+      const d = spawn(TRAIL.stoneDust, p, UP, rng);
+      d.alpha *= 0.45;
+      out.push(d);
     }
   }
   return out;
@@ -385,8 +401,22 @@ export function lineFlames(a: Vec3, b: Vec3, n: number, tall: boolean, rng: () =
   for (let i = 0; i < n; i++) {
     const t = rng();
     const p = { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) + 0.1, z: lerp(a.z, b.z, t) };
-    if (tall && rng() < 0.6) out.push(spawn(L("flame", 1, "up", [1.5, 3.5], [0.35, 0.55], [0.5, 0.8], [0.9, 1.3], { cone: 0.3 }), p, UP, rng));
-    else out.push(spawn(L("ember", 1, "up", [1.5, 4], [0.4, 0.8], [0.04, 0.07], [0.02, 0.03], { gravity: 2, cone: 0.4 }), p, UP, rng));
+    out.push(spawn(tall && rng() < 0.6 ? TRAIL.lineFlame : TRAIL.lineEmber, p, UP, rng));
   }
+  return out;
+}
+
+/** Доля частиц мирового пула по пресету: на слабых пресетах всплески и следы реже. */
+export const BURST_SHARE: Readonly<Record<PresetId, number>> = { low: 0.5, medium: 0.75, high: 1 };
+
+/**
+ * Равномерная выборка round(n·share) частиц из всплеска — шагом по массиву, поэтому сохраняется смесь слоёв
+ * (ядро, пламя, угли, дым идут в массиве подряд). share ≥ 1 — без изменений.
+ */
+export function thinParticles(specs: readonly ParticleSpec[], share: number): ParticleSpec[] {
+  if (!(share < 1)) return specs.slice();
+  const k = Math.round(specs.length * Math.max(0, share));
+  const out: ParticleSpec[] = [];
+  for (let i = 0; i < k; i++) out.push(specs[Math.floor(((i + 0.5) * specs.length) / k)]!);
   return out;
 }
