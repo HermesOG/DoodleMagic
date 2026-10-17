@@ -1,13 +1,19 @@
-import { CapsuleGeometry, CylinderGeometry, Group, Mesh, Scene, SphereGeometry, Vector3, type BufferGeometry, type Material, type Matrix4 } from "three";
+import { CapsuleGeometry, CylinderGeometry, Group, Mesh, Scene, SphereGeometry, Vector3, type BufferGeometry, type Material, type Matrix4, type Object3D } from "three";
 import { createInkMaterial, type SunUniform } from "../render/gbuffer";
 import { INK, SUN_DIR } from "../render/palette";
+import type { HandGesture } from "./gestures";
 import type { HandPose } from "./motion";
 
 /** Руки-«варежки» из примитивов. Живут в своей сцене в пространстве камеры и рисуются вторым слоем G-буфера. */
 export interface Mittens {
   readonly scene: Scene;
-  /** Поза из updateHandRig и обратная матрица мировой камеры (чтобы солнце на руках совпадало с миром). */
-  update(pose: HandPose, cameraWorldInverse: Matrix4): void;
+  /**
+   * Поза из updateHandRig, обратная матрица мировой камеры (чтобы солнце на руках совпадало с миром) и жест каста
+   * из stepGestures: его смещение и наклон прибавляются к позе покоя каждой руки. Без жеста — руки в покое.
+   */
+  update(pose: HandPose, cameraWorldInverse: Matrix4, gesture?: HandGesture): void;
+  /** Центры варежек в пространстве камеры рук после последнего update. Каждый раз те же два вектора. */
+  palms(): { right: Vector3; left: Vector3 };
   /** Освобождает геометрию и материал (они общие у обеих рук). */
   dispose(): void;
 }
@@ -69,14 +75,31 @@ export function createMittens(): Mittens {
   rig.add(right, left);
   scene.add(rig);
   const sunWorld = new Vector3(SUN_DIR[0], SUN_DIR[1], SUN_DIR[2]);
+  const mittenOf = (hand: Group, name: string): Object3D => {
+    const m = hand.getObjectByName(`mitten-${name}`);
+    if (!m) throw new Error(`mitten-${name} missing`);
+    return m;
+  };
+  const centres = { right: new Vector3(), left: new Vector3() };
+  const mitten = { right: mittenOf(right, "right"), left: mittenOf(left, "left") };
   return {
     scene,
-    update(pose, cameraWorldInverse) {
+    update(pose, cameraWorldInverse, gesture) {
       sun.value.copy(sunWorld).transformDirection(cameraWorldInverse);
       rig.position.set(pose.x, pose.y, 0);
       rig.rotation.z = pose.roll;
-      right.position.y = REST.y + pose.swing * 0.008;
-      left.position.y = REST.y - pose.swing * 0.008;
+      const r = gesture?.right;
+      const l = gesture?.left;
+      right.position.set(REST.x + (r?.x ?? 0), REST.y + pose.swing * 0.008 + (r?.y ?? 0), REST.z + (r?.z ?? 0));
+      left.position.set(-REST.x + (l?.x ?? 0), REST.y - pose.swing * 0.008 + (l?.y ?? 0), REST.z + (l?.z ?? 0));
+      right.rotation.x = TILT.x + (r?.pitch ?? 0);
+      left.rotation.x = TILT.x + (l?.pitch ?? 0);
+    },
+    palms() {
+      // getWorldPosition сам обновляет матрицы от корня сцены: сцена рук и есть пространство камеры рук
+      mitten.right.getWorldPosition(centres.right);
+      mitten.left.getWorldPosition(centres.left);
+      return centres;
     },
     dispose() {
       for (const g of Object.values(parts)) g.dispose();
