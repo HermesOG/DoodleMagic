@@ -51,7 +51,7 @@ describe("Earth kit", () => {
     const { log } = play([at(-12)], 700, (k) => ({ jump: k === 0, q: k === 5 || k === 100 || k === 640, pitch: pitchTo(12, 0.5) }));
     expect(log).toContainEqual(reject(5, "q", "notGrounded"));
     expect(ticksOf(log, "cast", "stonePillar")).toEqual([100]);
-    expect(log).toContainEqual(reject(658, "q", "cooldown")); // нажатие на 640 ждёт в буфере 0,3 с, отказ — по его концу
+    expect(log).toContainEqual(reject(640, "q", "cooldown"));
     const self = play([], 120, (k) => ({ q: k === 0, pitch: -1.5 }));
     expect(self.log.some(({ e }) => e.type === "hit")).toBe(false);
     expect([self.s.units[0]!.move.onGround, Number(self.s.units[0]!.move.body.pos.y.toFixed(6))]).toEqual([true, 2.5]);
@@ -100,11 +100,11 @@ describe("Earth kit", () => {
     // нажатие на 723 ждёт в буфере и выходит на 725, когда E готова: отказа нет
     expect([ticksOf(air.log, "cast", "stoneWall"), air.log.filter(({ e }) => e.type === "reject")]).toEqual([[5, 725], []]);
     const busy = play([], 870, (k) => ({ primary: k === 0, q: k === 6, c: k === 6 || k === 20 || k === 858 || k === 860 }));
-    // Q и C в замахе камня (выпуск на 12) ждут в буфере и выходят на 13; C на 20 ждёт 0,3 с и отказывает на 38
+    // Q и C в замахе камня (выпуск на 12) ждут в буфере и выходят на 13; C на 20 и на 860 готова не скоро — отказ сразу
     expect([ticksOf(busy.log, "cast", "stonePillar"), ticksOf(busy.log, "cast", "earthquake"), busy.log.filter(({ e }) => e.type === "reject")]).toEqual([
       [13],
       [13, 858],
-      [reject(38, "c", "cooldown")],
+      [reject(20, "c", "cooldown"), reject(860, "c", "cooldown")],
     ]);
     const edge = play([], 2, () => ({ q: true, yaw: -Math.PI / 2 }), { pos: { x: 18, y: 0, z: 0 }, yaw: -Math.PI / 2 });
     expect(edge.log).toContainEqual(reject(0, "q", "noTarget"));

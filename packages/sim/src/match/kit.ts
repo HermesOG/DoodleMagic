@@ -78,30 +78,41 @@ export type TryCast = (s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => R
 
 /** Сколько тиков после нажатия оно ждёт в буфере: 0,3 с → 18. */
 export const PRESS_BUFFER_TICKS = ticks(PRESS_BUFFER_S);
-/** Эти отказы снимет само время: нажатие с ними ждёт в буфере. Остальные (нет опоры, цели, обездвижен) — сразу. */
-const waits = (r: RejectReason): boolean => r === "cooldown" || r === "busy";
+/**
+ * С какого тика отказ r снимет само время: перезарядка — с ready слота; замах — со следующего тика после выпуска
+ * (input идёт раньше tick, который выпускает снаряд). Прочие отказы (нет опоры, цели, обездвижен) время не снимет — null.
+ */
+function legalAt(m: NonNullable<Unit["mage"]>, slot: Slot, r: RejectReason, now: number): number | null {
+  if (r === "cooldown") return m.ready[slot];
+  if (r === "busy") return m.windup ? m.windup.releaseTick + 1 : now + 1;
+  return null;
+}
 
 /**
  * Нажатия тика по слотам в порядке SLOTS (ЛКМ, Q, E, C). Слот пробует каст, если его кнопку нажали на этом тике,
  * если прежнее нажатие ещё ждёт в буфере, а ЛКМ — и пока она удержана (темп карточки, как раньше).
- * - Отказ «перезарядка» или «замах» держит нажатие в буфере до PRESS_BUFFER_TICKS тиков после него: каст выходит
- *   на первом тике, когда он возможен, а reject — один, на последнем тике окна, если каст так и не вышел.
- * - Прочие отказы — reject сразу, нажатие из буфера уходит.
- * - ЛКМ на перезарядке не отказывает никогда: просто стреляет, когда готова. Удержание ЛКМ без нажатия молчит.
+ * - Отказ «перезарядка» или «замах», который снимется не позже PRESS_BUFFER_TICKS тиков после нажатия, держит нажатие
+ *   в буфере: каст выходит на первом тике, когда он возможен, и отказа нет.
+ * - Отказ, который за окно не снимется (долгая перезарядка), и прочие отказы — reject сразу, на этом тике: отказ
+ *   читается мгновенно. Нажатие из буфера уходит. Если отказ сменился, пока нажатие ждало, он проверяется заново.
+ * - ЛКМ на перезарядке не отказывает никогда: не успевает за окно — нажатие молча уходит. Удержание ЛКМ без
+ *   нажатия молчит.
  * - Новое нажатие того же слота начинает окно заново; за тик слот пробует каст не больше одного раза.
- * Окно как у буфера прыжка: нажатие за 18 тиков до готовности ещё срабатывает, за 19 — уже нет.
+ * Окно как у буфера прыжка: нажатие за 18 тиков до готовности ещё срабатывает, за 19 — отказ сразу.
  */
 export function castSlots(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons, casts: Readonly<Record<Slot, TryCast>>): void {
   const m = u.mage!;
   const now = t.now;
   for (const slot of SLOTS) {
     if (pressed[slot]) m.pending[slot] = now;
-    const age = now - m.pending[slot];
-    const waiting = age <= PRESS_BUFFER_TICKS;
+    const at = m.pending[slot];
+    const waiting = now - at <= PRESS_BUFFER_TICKS;
     if (!waiting && !(slot === "primary" && inp.primary)) continue;
     const r = casts[slot](s, t, u, inp);
     if (r === null) m.pending[slot] = NEVER;
-    if (r === null || !waiting || (waits(r) && age < PRESS_BUFFER_TICKS)) continue;
+    if (r === null || !waiting) continue;
+    const legal = legalAt(m, slot, r, now);
+    if (legal !== null && legal <= at + PRESS_BUFFER_TICKS) continue; // успеет за окно — ждёт
     m.pending[slot] = NEVER;
     if (slot !== "primary" || r !== "cooldown") rejectCast(t, u, slot, r);
   }
