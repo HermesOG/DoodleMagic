@@ -30,6 +30,13 @@ const FIREBALL_CD = slotCooldownTicks("fire", "q"); // 480
 const DASH_CD = slotCooldownTicks("fire", "e"); // 480
 const DASH_TICKS = ticks(JD.durationS); // 12
 const DASH_SPEED = JD.distM / JD.durationS; // 40 м/с
+const DASH_STEP_M = DASH_SPEED * TICK_DT; // 0,667 м за тик
+/**
+ * Упор (правка контролёра после ревью китов): рывок кончается о стену, только если за тик продвинулся вдоль себя
+ * меньше этой доли шага (≈ 0,3 м из 0,667). Скольжение вдоль стены под 45° даёт ровно половину шага и идёт дальше;
+ * в лоб — около нуля, рывок встаёт у грани.
+ */
+const DASH_STALL_FRAC = 0.45;
 const TRAIL_TICKS = ticks(JD.trailS); // 120
 const WALL_CD = slotCooldownTicks("fire", "c"); // 720
 const WALL_TELEGRAPH_TICKS = ticks(FW.telegraphS); // 24
@@ -143,17 +150,21 @@ function fireWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRe
 /**
  * Шаг рывка: горизонтально, без гравитации, через moveBody со стенами (moveUnits мага в рывке пропускает).
  * Взгляд не отнимаем: stepPlayer в эти тики не идёт, поэтому yaw и pitch тела берём из ввода.
- * Стена на пути или последний тик — конец рывка.
+ * Скорость рывка ставится заново каждый тик: задетая вскользь стена гасит только свою составляющую, и маг скользит
+ * вдоль неё. Конец рывка — последний тик или упор: за тик продвинулся вдоль рывка меньше DASH_STALL_FRAC шага.
  */
 function stepDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   const d = u.mage!.dash!;
   const b = u.move.body;
+  const x0 = b.pos.x;
+  const z0 = b.pos.z;
   b.vel = { x: d.dirX * DASH_SPEED, y: 0, z: d.dirZ * DASH_SPEED };
   const r = moveBody(t.world, b, TICK_DT, u.move.onGround);
   Object.assign(u.move, { onGround: r.onGround, landVel: r.landVel, yaw: inp.yaw, pitch: inp.pitch });
   const trail = s.zones.find((z) => z.id === d.trailZone);
   if (trail && trail.shape.type === "segment") trail.shape.b = copy(b.pos);
-  if (r.hitWall || t.now + 1 >= d.endTick) endDash(s, t, u, t.now + 1 + TRAIL_TICKS);
+  const progress = (b.pos.x - x0) * d.dirX + (b.pos.z - z0) * d.dirZ;
+  if (progress < DASH_STALL_FRAC * DASH_STEP_M || t.now + 1 >= d.endTick) endDash(s, t, u, t.now + 1 + TRAIL_TICKS);
 }
 
 /** Слоты Огня для castSlots: он же держит буфер нажатий и пишет отказы. */
