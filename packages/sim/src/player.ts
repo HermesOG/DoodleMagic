@@ -1,4 +1,3 @@
-import { overlaps } from "./aabb";
 import { bodyBox, moveBody } from "./body";
 import {
   EYE_HEIGHT,
@@ -12,9 +11,10 @@ import {
   type Vec3,
 } from "./types";
 import { clamp, cloneVec } from "./vec";
-import type { World } from "./world";
+import { inVolume, type World } from "./world";
 
-export const DEFAULT_MOVE: MoveParams = {
+/** Параметры по умолчанию. Заморожены: это общий объект и параметр по умолчанию у stepPlayer. */
+export const DEFAULT_MOVE: Readonly<MoveParams> = Object.freeze({
   runSpeed: 6.5,
   groundAccel: 60,
   groundDecel: 50,
@@ -24,12 +24,19 @@ export const DEFAULT_MOVE: MoveParams = {
   coyoteTime: 0.1,
   jumpBufferTime: 0.12,
   maxFallSpeed: 40,
-};
+});
 
 const MAX_PITCH = Math.PI / 2 - 0.01;
 
-export const NO_INPUT: PlayerInput = { moveX: 0, moveZ: 0, jump: false, yaw: 0, pitch: 0 };
+/** Пустой ввод. Заморожен: это общий объект. */
+export const NO_INPUT: Readonly<PlayerInput> = Object.freeze({ moveX: 0, moveZ: 0, jump: false, yaw: 0, pitch: 0 });
 
+/**
+ * Новый игрок: стоит подошвой в pos, ещё не на земле. Первый тик на полу поэтому сообщает маленькое
+ * приземление, landVel = −g·dt/2 (около −0,17 м/с при 60 Гц): порог эффектов приземления должен быть больше.
+ * Точку появления нужно заранее проверить на свободу (isFree(world, bodyBox(...))): тело, утопленное в коллайдер
+ * глубже допуска, этот коллайдер не видит и может провалиться сквозь него (см. moveBody).
+ */
 export function createPlayer(pos: Vec3, yaw = 0): PlayerState {
   return {
     body: {
@@ -54,6 +61,42 @@ export function forwardXZ(yaw: number): { x: number; z: number } {
   return { x: -Math.sin(yaw), z: -Math.cos(yaw) };
 }
 
+const finiteOr = (v: number, fallback: number): number => (Number.isFinite(v) ? v : fallback);
+
+/**
+ * Ввод приходит от клиента, ему нельзя верить: NaN или ±Infinity навсегда отравили бы состояние
+ * (NaN в скорости даёт NaN подшагов, цикл не выполняется ни разу, и тело замирает навсегда).
+ * Нечисловое или бесконечное движение — 0, затем [−1, 1]; нечисловой или бесконечный взгляд — прежний
+ * (или 0, если и прежний не число), наклон — в допустимых пределах; прыжок — только если это ровно true.
+ * Возвращает новый объект, исходный не меняет.
+ */
+export function sanitizeInput(input: Readonly<PlayerInput>, prev: Readonly<PlayerState>): PlayerInput {
+  return {
+    moveX: clamp(finiteOr(input.moveX, 0), -1, 1),
+    moveZ: clamp(finiteOr(input.moveZ, 0), -1, 1),
+    jump: input.jump === true,
+    yaw: finiteOr(input.yaw, finiteOr(prev.yaw, 0)),
+    pitch: clamp(finiteOr(input.pitch, finiteOr(prev.pitch, 0)), -MAX_PITCH, MAX_PITCH),
+  };
+}
+
+/*
+ * Окна «койота» и буфера прыжка считаются в целых тиках. В секундах с вычитанием dt граница зависела бы от
+ * остатка округления: 0,1 − 6·(1/60) в double — не ноль, и его знак решал бы, сработает ли прыжок на 6-м тике.
+ * В PlayerState окна по-прежнему лежат в секундах (так в контракте types.ts), но всегда как целое число тиков × dt;
+ * на входе они округляются обратно в тики.
+ * - Окно в тиках — ⌊время / dt⌋ с допуском 1e-6 тика на погрешность деления: 0,1 с → 6 тиков, 0,12 с → 7 при 60 Гц.
+ * - Койот: прыжок принимается на первых N тиках, которые начинаются в воздухе после схода с края
+ *   (0,1 с: на 1-м…6-м, на 7-м уже нет).
+ * - Буфер: нажатие в воздухе срабатывает, если один из следующих M тиков начнётся на земле
+ *   (0,12 с: нажатие за 7 тиков до первого тика на земле срабатывает, за 8 — нет).
+ */
+const windowTicks = (seconds: number, dt: number): number => Math.max(0, Math.floor(seconds / dt + 1e-6));
+const storedTicks = (seconds: number, dt: number): number => {
+  const n = Math.round(seconds / dt);
+  return n > 0 ? n : 0;
+};
+
 /** Горизонтальная скорость к цели не быстрее maxDelta за шаг. */
 function approachXZ(v: Vec3, tx: number, tz: number, maxDelta: number): void {
   const dx = tx - v.x;
@@ -69,26 +112,36 @@ function approachXZ(v: Vec3, tx: number, tz: number, maxDelta: number): void {
 }
 
 /**
- * Один тик движения игрока. Детерминирован: результат зависит только от аргументов
- * (нет Math.random, часов и общего состояния), поэтому хост и клиент считают одно и то же.
- * Возвращает новое состояние, исходное не меняет.
+ * Один тик движения игрока. Чистая функция (state, input, world): нет Math.random, часов и общего состояния,
+ * аргументы не меняются, возвращается новое состояние. В одном JS-движке одинаковые аргументы дают результат,
+ * одинаковый до бита. Между движками (хост и браузер клиента) возможна разница в несколько ulp: Math.sin и
+ * Math.cos в forwardXZ не обязаны быть округлены одинаково. Её гасит согласование: хост авторитетен, клиент
+ * сверяет своё предсказание со снапшотом хоста с допуском.
+ *
+ * Ввод сначала проходит sanitizeInput, поэтому мусор от клиента состояние не портит.
+ * landVel в результате — средняя за тик вертикальная скорость тика приземления (гравитация по трапеции), поэтому
+ * она отличается от баллистической скорости касания не больше чем на g·dt/2.
  */
 export function stepPlayer(
-  state: PlayerState,
-  input: PlayerInput,
+  state: Readonly<PlayerState>,
+  rawInput: Readonly<PlayerInput>,
   dt: number,
   world: World,
-  p: MoveParams = DEFAULT_MOVE,
+  p: Readonly<MoveParams> = DEFAULT_MOVE,
 ): PlayerState {
+  const input = sanitizeInput(rawInput, state);
   const body: Body = { ...state.body, pos: cloneVec(state.body.pos), vel: cloneVec(state.body.vel) };
 
+  // Сколько тиков окна осталось, считая этот: 0 — окно закрыто.
   const pressed = input.jump && !state.jumpHeld;
-  let jumpBuffer = pressed ? p.jumpBufferTime : Math.max(0, state.jumpBuffer - dt);
-  let coyote = state.onGround ? p.coyoteTime : Math.max(0, state.coyote - dt);
+  const bufferIn = pressed ? windowTicks(p.jumpBufferTime, dt) + 1 : storedTicks(state.jumpBuffer, dt);
+  const coyoteIn = state.onGround ? windowTicks(p.coyoteTime, dt) + 1 : storedTicks(state.coyote, dt);
+  let bufferOut = Math.max(0, bufferIn - 1);
+  let coyoteOut = Math.max(0, coyoteIn - 1);
 
   // Желаемая скорость из ввода и поворота.
-  let ix = clamp(input.moveX, -1, 1);
-  let iz = clamp(input.moveZ, -1, 1);
+  let ix = input.moveX;
+  let iz = input.moveZ;
   const il = Math.sqrt(ix * ix + iz * iz);
   if (il > 1) {
     ix /= il;
@@ -103,17 +156,17 @@ export function stepPlayer(
   else if (hasInput) approachXZ(body.vel, wx, wz, p.groundAccel * p.airControl * dt);
 
   let onGround = state.onGround;
-  if (jumpBuffer > 0 && (onGround || coyote > 0)) {
+  if (bufferIn > 0 && (onGround || coyoteIn > 0)) {
     body.vel.y = Math.sqrt(2 * p.gravity * p.jumpHeight);
-    jumpBuffer = 0;
-    coyote = 0;
+    bufferOut = 0;
+    coyoteOut = 0;
     onGround = false;
   }
 
   // Поток задаёт скорость, с которой баллистика донесёт ровно до его высоты.
   const box = bodyBox(body);
   for (const v of world.volumes) {
-    if (v.kind !== "updraft" || !overlaps(box, v.box)) continue;
+    if (v.kind !== "updraft" || !inVolume(box, v)) continue;
     const rise = v.box.min.y + (v.liftM ?? 0) - body.pos.y;
     if (rise > 0) body.vel.y = Math.max(body.vel.y, Math.sqrt(2 * p.gravity * rise));
   }
@@ -129,11 +182,11 @@ export function stepPlayer(
   return {
     body,
     onGround: r.onGround,
-    coyote,
-    jumpBuffer,
+    coyote: coyoteOut * dt,
+    jumpBuffer: bufferOut * dt,
     jumpHeld: input.jump,
     yaw: input.yaw,
-    pitch: clamp(input.pitch, -MAX_PITCH, MAX_PITCH),
+    pitch: input.pitch,
     landVel: r.landVel,
   };
 }
