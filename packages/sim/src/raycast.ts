@@ -57,6 +57,9 @@ function slab(o: Vec3, d: Vec3, b: AABB, maxT: number, out: SlabHit): boolean {
     if (t1 < tFar) tFar = t1;
     if (tNear > tFar) return false;
   }
+  // При maxT = Infinity и ненормированном направлении (dir ≈ 5e-324) вход переполняется в Infinity: такого
+  // попадания нет, а точка на нём была бы NaN. Проверка здесь закрывает и сетку статики, и перебор динамики.
+  if (!(tNear < Infinity)) return false;
   out.t = tNear;
   out.axis = axis;
   out.sign = sign;
@@ -153,6 +156,7 @@ function gridRay(w: World, origin: Vec3, dir: Vec3, maxDist: number, kind: RayKi
  *
  * Завершается при любом конечном начале и направлении и любом maxDist, в том числе Infinity: вертикальный луч
  * проверяет только свою клетку. NaN или отрицательный maxDist и нечисловые начало или направление — промах (null).
+ * Попадание всегда на конечном расстоянии: вход в бокс, переполненный в Infinity, — промах.
  * Память выделяется только под две служебные записи и результат.
  */
 export function raycast(

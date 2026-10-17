@@ -4,6 +4,7 @@ import { groundBelow, lineOfSight, raycast, type RayStats } from "./raycast";
 import { AXES, normalize, vec3 } from "./vec";
 import type { Axis, Collider, Vec3 } from "./types";
 import { createWorld, type World } from "./world";
+import { withDynamic } from "./world";
 
 const col = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, extra: Partial<Collider> = {}): Collider => ({
   box: aabb(x0, y0, z0, x1, y1, z1),
@@ -298,5 +299,28 @@ describe("lineOfSight", () => {
     expect(lineOfSight(w, vec3(-5, -Infinity, 3), vec3(5, 1.6, 3))).toBe(false);
     expect(lineOfSight(w, vec3(-1e308, 4, 3), vec3(1e308, 4, 3))).toBe(false);
     expect(lineOfSight(w, vec3(-5, 1.6, 3), vec3(5, 1.6, 3))).toBe(true);
+  });
+});
+
+describe("raycast never reports a hit at infinity", () => {
+  // Ненормированное направление, которое при делении переполняется: вход в бокс уходит в t = Infinity,
+  // а точка попадания была бы NaN. Такой вход — промах, и для динамики, и для сетки статики.
+  const floor = col(-20, -1, -20, 20, 0, 20);
+  const box = col(-5, 0, -5, 5, 3, 5);
+
+  it("for a dynamic box", { timeout: 2000 }, () => {
+    const w = withDynamic(createWorld([floor]), [box]);
+    expect(raycast(w, vec3(-1e300, 1, 0), vec3(5e-324, 0, 0), Infinity)).toBeNull();
+    expect(raycast(withDynamic(createWorld([col(100, -1, 100, 101, 0, 101)]), [floor]), vec3(0, 1e300, 0), vec3(0, -5e-324, 0), Infinity)).toBeNull();
+  });
+
+  it("for a static box under a vertical ray", { timeout: 2000 }, () => {
+    expect(raycast(createWorld([floor]), vec3(0, 1e300, 0), vec3(0, -5e-324, 0), Infinity)).toBeNull();
+  });
+
+  it("but still finds ordinary hits with maxDist = Infinity", () => {
+    const hit = raycast(withDynamic(createWorld([floor]), [box]), vec3(-30, 1, 0), vec3(1, 0, 0), Infinity);
+    expect([hit?.dist, hit?.point, hit?.collider]).toEqual([25, { x: -5, y: 1, z: 0 }, 1]);
+    expect(raycast(createWorld([floor]), vec3(3, 7, 3), vec3(0, -1, 0), Infinity)?.dist).toBe(7);
   });
 });

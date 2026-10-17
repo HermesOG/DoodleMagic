@@ -164,4 +164,32 @@ describe("kills", () => {
     u2(s).alive = false;
     expect(hit(s, [], { damage: 50 })).toBe(0);
   });
+
+  it("«Кураж» during overheat ends it with an overheat-off event, and only then", () => {
+    for (const left of [50, 0]) {
+      const s = settled([mage("fire"), dummy(-10)]);
+      Object.assign(s.units[0]!.mage!, { heat: 40, overheatUntil: s.tick + left });
+      u2(s).hp = 10;
+      const ev: MatchEvent[] = [];
+      hit(s, ev, { ability: "fireFists", damage: 12 });
+      const off = { type: "overheat", unit: 1, on: false };
+      expect(ev.filter((e) => e.type === "overheat" || e.type === "courage")).toEqual([...(left > 0 ? [off] : []), { type: "courage", unit: 1 }]);
+    }
+  });
+});
+
+describe("control limits (GDD 2.2, CC_LIMITS)", () => {
+  it("clamp a slow to 40 % for 2 s and a root to 1 s, whatever the hit asks for", () => {
+    const s = settled([mage(), dummy(-10)]);
+    const ev: MatchEvent[] = [];
+    const t0 = s.tick;
+    hit(s, ev, { slow: { mul: 0.1, s: 9 }, rootS: 4 });
+    expect(u2(s).status).toMatchObject({ slowMul: 0.6, slowUntil: t0 + 120, rootUntil: t0 + 60, immuneUntil: t0 + 60 + 120 });
+    expect(ev.flatMap((e) => (e.type === "status" ? [[e.status, e.ticks]] : []))).toEqual([["root", 60], ["slow", 120]]);
+    hit(s, ev, { slow: { mul: 0.5, s: 2 } }); // повтор тоже не глубже 40 %
+    expect(u2(s).status.slowMul).toBe(0.6);
+    const fast = settled([mage(), dummy(-10)]);
+    hit(fast, [], { slow: { mul: 1.5, s: 1 } }); // «замедление» не ускоряет
+    expect(u2(fast).status.slowMul).toBe(1);
+  });
 });
