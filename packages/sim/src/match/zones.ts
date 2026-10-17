@@ -101,14 +101,17 @@ export function zoneTouches(shape: ZoneShape, u: Unit): boolean {
 
 const bodyCenter = (b: Body): Vec3 => ({ x: b.pos.x, y: b.pos.y + b.height / 2, z: b.pos.z });
 
-/** Касание: живой не-владелец в зоне без записи rehit (или с истёкшей) получает удар; запись — на rehitTicks вперёд. */
-function contact(s: MatchState, t: TickCtx, z: Zone, damage: number, rehitTicks: number, burn: boolean): void {
+/**
+ * Касание: живой не-владелец в зоне без записи rehit (или с истёкшей) получает удар; запись — на rehitTicks вперёд.
+ * Урон по времени (dot, камеру не трясёт): у следа рывка — каждый импульс (alwaysDot), у стены огня — повтор после первого удара.
+ */
+function contact(s: MatchState, t: TickCtx, z: Zone, damage: number, rehitTicks: number, burn: boolean, alwaysDot: boolean): void {
   const now = t.now;
   for (const u of s.units) {
     if (!u.alive || u.id === z.owner || !zoneTouches(z.shape, u)) continue;
     const rec = z.rehit.find((r) => r.unit === u.id);
     if (rec && rec.tick > now) continue;
-    applyHit(s, t, { source: z.owner, target: u.id, ability: z.ability, damage, pos: bodyCenter(u.move.body), dir: { x: 0, z: 0 }, burn });
+    applyHit(s, t, { source: z.owner, target: u.id, ability: z.ability, damage, pos: bodyCenter(u.move.body), dir: { x: 0, z: 0 }, burn, dot: alwaysDot || rec !== undefined });
     if (rec) rec.tick = now + rehitTicks;
     else z.rehit.push({ unit: u.id, tick: now + rehitTicks });
   }
@@ -192,8 +195,8 @@ export function stepZones(s: MatchState, t: TickCtx): void {
     }
     if (now === z.armTick) zoneEvent(t, z, "arm");
     if (now < z.armTick) continue;
-    if (z.kind === "fireWall") contact(s, t, z, FIRE.fireWall.contactDamage, FIRE_WALL_REHIT_TICKS, true);
-    else if (z.kind === "fireTrail") contact(s, t, z, TRAIL_PULSE_DAMAGE, TRAIL_PULSE_TICKS, false);
+    if (z.kind === "fireWall") contact(s, t, z, FIRE.fireWall.contactDamage, FIRE_WALL_REHIT_TICKS, true, false);
+    else if (z.kind === "fireTrail") contact(s, t, z, TRAIL_PULSE_DAMAGE, TRAIL_PULSE_TICKS, false, true);
     else if (now === z.armTick) (z.kind === "pillar" ? pillarStrike : quakeStrike)(s, t, z);
   }
 }
