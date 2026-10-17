@@ -117,7 +117,7 @@ describe("buildMatchInput", () => {
     const win = new EventTarget();
     vi.stubGlobal("document", doc);
     vi.stubGlobal("window", win);
-    const canvas = { requestPointerLock: () => Promise.resolve() };
+    const canvas = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
     const input = createInput(canvas as unknown as HTMLCanvasElement);
     const mouse = (type: "mousedown" | "mouseup", button: number, ctrlKey = false) =>
       doc.dispatchEvent(Object.assign(new Event(type), { button, ctrlKey, metaKey: false, altKey: false }));
@@ -138,6 +138,8 @@ describe("buildMatchInput", () => {
       expect(primary()).toBe(false);
       mouse("mousedown", 0);
       expect(primary()).toBe(true);
+      // тик прочёл нажатие (иначе отпускание дождалось бы его, см. input.test)
+      input.ticked();
       mouse("mouseup", 0);
       expect(primary()).toBe(false);
       mouse("mousedown", 0);
