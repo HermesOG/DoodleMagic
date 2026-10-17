@@ -1,7 +1,7 @@
 import type { Vec3 } from "@doodlemagic/sim";
 import { SOUND_IDS, type SoundId } from "../feel/effects";
 import { RECIPES, SOUND_ELEMENT, recipeLength } from "./recipes";
-import { createAudio, createVoiceKit, scheduleRecipe, type GameAudio } from "./synth";
+import { DEFAULT_VOLUME, createAudio, createVoiceKit, scheduleRecipe, type GameAudio } from "./synth";
 
 /**
  * Прослушка звуков без игры. Страница: `/src/audio/audition.html` в `pnpm dev:client` (в сборку не входит).
@@ -181,7 +181,7 @@ export function mountAudition(root: HTMLElement): GameAudio {
   };
   setInterval(refresh, 200);
 
-  const volume = el("input", { type: "range", min: "0", max: "1", step: "0.05", value: "0.8" });
+  const volume = el("input", { type: "range", min: "0", max: "1", step: "0.05", value: String(DEFAULT_VOLUME) });
   volume.addEventListener("input", () => audio.setVolume(Number(volume.value)));
   const mute = el("input", { type: "checkbox" });
   mute.addEventListener("change", () => audio.setMuted(mute.checked));
