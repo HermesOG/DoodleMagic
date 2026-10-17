@@ -50,6 +50,21 @@ describe("createWorld", () => {
     const w = createWorld([col(0, 0, 0, 12, 1, 1)]);
     expect(w.cells.filter((c) => c.includes(0))).toHaveLength(3);
   });
+
+  it("rejects a cell size that is not a finite positive number", () => {
+    for (const cell of [0, -0, -4, NaN, Infinity, -Infinity]) {
+      expect(() => createWorld([col(0, 0, 0, 1, 1, 1)], [], cell), String(cell)).toThrow(/cell size/);
+    }
+    expect(() => createWorld([], [], 0)).toThrow(RangeError);
+    expect(createWorld([], [], 0.5).cell).toBe(0.5);
+  });
+
+  it("rejects colliders with non-finite bounds and names the collider", () => {
+    expect(() => createWorld([col(0, 0, 0, 1, 1, 1), col(NaN, 0, 0, 1, 1, 1)])).toThrow(/collider 1/);
+    expect(() => createWorld([col(0, 0, 0, Infinity, 1, 1)])).toThrow(RangeError);
+    expect(() => createWorld([col(0, 0, -Infinity, 1, 1, 1)])).toThrow(/finite/);
+    expect(() => createWorld([{ box: { min: { x: 0, y: NaN, z: 0 }, max: { x: 1, y: 1, z: 1 } } }])).toThrow(/collider 0/);
+  });
 });
 
 describe("overlapping", () => {
@@ -100,5 +115,21 @@ describe("volumeAt", () => {
     ]);
     expect(volumeAt(w, aabb(1, -5, 1, 2, -3, 2), "kill")?.kind).toBe("kill");
     expect(volumeAt(w, aabb(1, -5, 1, 2, -3, 2), "grass")).toBeNull();
+  });
+
+  it("does not count a box that only touches a face, with the same tolerance as colliders", () => {
+    const vol = createWorld([], [{ kind: "kill", box: aabb(0, 0, 0, 4, 1, 4) }]);
+    const solid = createWorld([col(0, 0, 0, 4, 1, 4)]);
+    const probes = [
+      aabb(4, 0, 0, 5, 1, 1), // касается боковой грани
+      aabb(4 - 5e-7, 0, 0, 5, 1, 1), // заходит глубже касания, но меньше чем на OVERLAP_EPS
+      aabb(1, 1 - 5e-7, 1, 2, 2.8, 2), // стоит на верхней грани с погрешностью
+      aabb(1, -1.8, 1, 2, 0, 2), // упирается в нижнюю грань снизу
+      aabb(4 - 2e-6, 0, 0, 5, 1, 1), // заходит на 2 мкм
+      aabb(1, 0.5, 1, 2, 2.3, 2), // по пояс внутри
+    ];
+    const inside = probes.map((b) => volumeAt(vol, b, "kill") !== null);
+    expect(inside).toEqual([false, false, false, false, true, true]);
+    expect(inside).toEqual(probes.map((b) => overlapping(solid, b).length > 0));
   });
 });

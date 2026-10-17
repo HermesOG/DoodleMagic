@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { aabb } from "./aabb";
 import { groundBelow, lineOfSight, raycast, type RayStats } from "./raycast";
-import { normalize, vec3 } from "./vec";
-import type { Collider } from "./types";
-import { createWorld } from "./world";
+import { AXES, normalize, vec3 } from "./vec";
+import type { Axis, Collider, Vec3 } from "./types";
+import { createWorld, type World } from "./world";
 
 const col = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, extra: Partial<Collider> = {}): Collider => ({
   box: aabb(x0, y0, z0, x1, y1, z1),
@@ -22,26 +22,55 @@ function rng(seed: number): () => number {
   };
 }
 
-/** Эталон: перебор всех боксов. */
-function bruteForce(colliders: readonly Collider[], o: { x: number; y: number; z: number }, d: { x: number; y: number; z: number }, maxDist: number): number | null {
-  let best: number | null = null;
-  for (const c of colliders) {
+interface Expected {
+  dist: number;
+  collider: number;
+  normal: Vec3;
+}
+
+/**
+ * Эталон: перебор всех боксов. Соглашения те же, что у raycast: касание грани — попадание; нормаль — грань входа,
+ * против направления луча; (0, 0, 0) — луч начался внутри; при равном расстоянии побеждает меньший номер.
+ */
+function bruteForce(colliders: readonly Collider[], o: Vec3, d: Vec3, maxDist: number): Expected | null {
+  let best: Expected | null = null;
+  colliders.forEach((c, idx) => {
     let tNear = 0;
     let tFar = maxDist;
+    let entry: Axis | null = null;
     let hit = true;
-    for (const a of ["x", "y", "z"] as const) {
+    for (const a of AXES) {
       if (d[a] === 0) {
         if (o[a] < c.box.min[a] || o[a] > c.box.max[a]) hit = false;
         continue;
       }
       const t0 = (c.box.min[a] - o[a]) / d[a];
       const t1 = (c.box.max[a] - o[a]) / d[a];
-      tNear = Math.max(tNear, Math.min(t0, t1));
+      const near = Math.min(t0, t1);
+      if (near > tNear) {
+        tNear = near;
+        entry = a;
+      }
       tFar = Math.min(tFar, Math.max(t0, t1));
     }
-    if (hit && tNear <= tFar && (best === null || tNear < best)) best = tNear;
-  }
+    if (!hit || tNear > tFar || (best !== null && tNear >= best.dist)) return;
+    const normal = vec3();
+    if (entry) normal[entry] = d[entry] > 0 ? -1 : 1;
+    best = { dist: tNear, collider: idx, normal };
+  });
   return best;
+}
+
+/** Мир, который бросает исключение после limit обращений к клеткам: зависший луч роняет тест, а не весь прогон. */
+function guarded(w: World, limit = 100_000): World {
+  let visits = 0;
+  const cells = new Proxy(w.cells, {
+    get(target, key, receiver) {
+      if (++visits > limit) throw new Error(`raycast visited more than ${limit} cells`);
+      return Reflect.get(target, key, receiver) as unknown;
+    },
+  });
+  return { ...w, cells };
 }
 
 describe("raycast", () => {
@@ -94,7 +123,7 @@ describe("raycast", () => {
     expect(miss.tested).toBeLessThan(60);
   });
 
-  it("agrees with brute force on random scenes", () => {
+  it("agrees with brute force on random scenes: distance, collider and normal", () => {
     const rand = rng(7);
     const colliders: Collider[] = [];
     for (let k = 0; k < 150; k++) {
@@ -103,15 +132,134 @@ describe("raycast", () => {
       const y = rand() * 4;
       colliders.push(col(x, y, z, x + 0.2 + rand() * 6, y + 0.2 + rand() * 3, z + 0.2 + rand() * 6));
     }
-    const rw = createWorld(colliders);
-    for (let r = 0; r < 500; r++) {
-      const o = vec3(rand() * 80 - 40, rand() * 6 - 1, rand() * 80 - 40);
-      const d = normalize(vec3(rand() * 2 - 1, (rand() * 2 - 1) * 0.3, rand() * 2 - 1));
-      const expected = bruteForce(colliders, o, d, 120);
-      const got = raycast(rw, o, d, 120);
-      if (expected === null) expect(got).toBeNull();
-      else expect(got?.dist).toBeCloseTo(expected, 9);
+    const rw = guarded(createWorld(colliders), 1_000_000);
+    // Лучи вдоль осей (в том числе отрицательных и вертикальные, одна запись с −0) и в плоскостях осей.
+    const axisDirs: Vec3[] = [
+      vec3(1, 0, 0),
+      vec3(-1, 0, 0),
+      vec3(0, 1, 0),
+      vec3(0, -1, 0),
+      vec3(0, 0, 1),
+      vec3(0, 0, -1),
+      vec3(-0, -1, -0),
+    ];
+    const dirOf = (r: number): Vec3 => {
+      if (r % 4 === 0) return axisDirs[Math.floor(rand() * axisDirs.length)]!;
+      if (r % 4 === 1) return normalize(vec3(rand() * 2 - 1, 0, rand() * 2 - 1));
+      if (r % 4 === 2) {
+        return normalize(rand() < 0.5 ? vec3(rand() * 2 - 1, rand() * 2 - 1, 0) : vec3(0, rand() * 2 - 1, rand() * 2 - 1));
+      }
+      return normalize(vec3(rand() * 2 - 1, (rand() * 2 - 1) * 0.3, rand() * 2 - 1));
+    };
+    // Начала лучей: случайные и ровно на границах клеток, в том числе на краях сетки и за ними.
+    const onBoundary = (v0: number, count: number): number => v0 + (Math.floor(rand() * (count + 3)) - 1) * rw.cell;
+    const originOf = (r: number): Vec3 => {
+      const y = rand() * 6 - 1;
+      if (r % 3 === 0) return vec3(onBoundary(rw.x0, rw.cols), y, onBoundary(rw.z0, rw.rows));
+      if (r % 3 === 1) return vec3(onBoundary(rw.x0, rw.cols), y, rand() * 80 - 40);
+      return vec3(rand() * 80 - 40, y, rand() * 80 - 40);
+    };
+    let hits = 0;
+    for (let r = 0; r < 1500; r++) {
+      const o = originOf(r);
+      const d = dirOf(r);
+      const maxDist = r % 5 === 0 ? Infinity : 120;
+      const expected = bruteForce(colliders, o, d, maxDist);
+      const got = raycast(rw, o, d, maxDist);
+      if (expected === null) {
+        expect(got, `ray ${r}`).toBeNull();
+        continue;
+      }
+      hits++;
+      expect(got, `ray ${r}`).not.toBeNull();
+      expect({ dist: got!.dist, collider: got!.collider, normal: got!.normal }, `ray ${r}`).toEqual(expected);
     }
+    expect(hits).toBeGreaterThan(300);
+  });
+
+  it("gives the normal of the entry face, against the ray, on every axis and for zero-thickness boxes", () => {
+    const nw = createWorld([col(4, 0, -1, 5, 3, 1), col(-1, 2, -1, 1, 3, 1), col(8, 0, -1, 8, 3, 1), col(-1, 6, -1, 1, 6, 1)]);
+    const cast = (o: Vec3, d: Vec3): Expected | null => {
+      const h = raycast(nw, o, d, 100);
+      return h && { dist: h.dist, collider: h.collider, normal: h.normal };
+    };
+    expect(cast(vec3(0, 1, 0), vec3(1, 0, 0))).toEqual({ dist: 4, collider: 0, normal: { x: -1, y: 0, z: 0 } });
+    expect(cast(vec3(7, 1, 0), vec3(-1, 0, 0))).toEqual({ dist: 2, collider: 0, normal: { x: 1, y: 0, z: 0 } });
+    expect(cast(vec3(0, 0.5, 0), vec3(0, 1, 0))).toEqual({ dist: 1.5, collider: 1, normal: { x: 0, y: -1, z: 0 } });
+    expect(cast(vec3(0, 4, 0), vec3(0, -1, 0))).toEqual({ dist: 1, collider: 1, normal: { x: 0, y: 1, z: 0 } });
+    // плоские боксы: стенка x = 8 и плита y = 6
+    expect(cast(vec3(6, 1, 0), vec3(1, 0, 0))).toEqual({ dist: 2, collider: 2, normal: { x: -1, y: 0, z: 0 } });
+    expect(cast(vec3(10, 1, 0), vec3(-1, 0, 0))).toEqual({ dist: 2, collider: 2, normal: { x: 1, y: 0, z: 0 } });
+    expect(cast(vec3(0, 4, 0), vec3(0, 1, 0))).toEqual({ dist: 2, collider: 3, normal: { x: 0, y: -1, z: 0 } });
+    expect(cast(vec3(0, 9, 0), vec3(0, -1, 0))).toEqual({ dist: 3, collider: 3, normal: { x: 0, y: 1, z: 0 } });
+  });
+});
+
+describe("raycast with maxDist = Infinity", () => {
+  // пол с дырой x ∈ [8, 12] и крыша над x, z ∈ [−2, 2]
+  const w = createWorld([col(-20, -1, -20, 8, 0, 20), col(12, -1, -20, 20, 0, 20), col(-2, 4, -2, 2, 5, 2)]);
+
+  it("terminates for a vertical ray that hits nothing, up and down", { timeout: 2000 }, () => {
+    expect(raycast(guarded(w), vec3(10, 1, 0), vec3(0, -1, 0), Infinity)).toBeNull();
+    expect(raycast(guarded(w), vec3(10, 1, 0), vec3(0, 1, 0), Infinity)).toBeNull();
+    expect(raycast(guarded(w), vec3(5, 1, 0), vec3(0, 1, 0), Infinity)).toBeNull();
+    expect(raycast(guarded(w), vec3(5, -3, 0), vec3(0, -1, 0), Infinity)).toBeNull();
+  });
+
+  it("finds vertical hits, up and down", { timeout: 2000 }, () => {
+    expect(raycast(guarded(w), vec3(0, 1, 0), vec3(0, 1, 0), Infinity)).toEqual({
+      dist: 3,
+      point: { x: 0, y: 4, z: 0 },
+      normal: { x: 0, y: -1, z: 0 },
+      collider: 2,
+    });
+    expect(raycast(guarded(w), vec3(5, 3, 0), vec3(0, -1, 0), Infinity)).toEqual({
+      dist: 3,
+      point: { x: 5, y: 0, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      collider: 0,
+    });
+  });
+
+  it("terminates for slanted rays", { timeout: 2000 }, () => {
+    expect(raycast(guarded(w), vec3(0, 1, 0), normalize(vec3(1, 1, 1)), Infinity)).toBeNull();
+    expect(raycast(guarded(w), vec3(0, 1, 0), normalize(vec3(1, -1, 0)), Infinity)?.collider).toBe(0);
+  });
+
+  it("works in groundBelow", { timeout: 2000 }, () => {
+    expect(groundBelow(guarded(w), vec3(5, 30, 0), Infinity)).toBe(0);
+    expect(groundBelow(guarded(w), vec3(10, 30, 0), Infinity)).toBeNull();
+  });
+});
+
+describe("raycast input checks", () => {
+  const w = guarded(createWorld([col(-5, -1, -5, 5, 0, 5)]));
+
+  it("returns null for a NaN or negative maxDist and for a non-finite origin or direction", { timeout: 2000 }, () => {
+    expect(raycast(w, vec3(0, 1, 0), vec3(0, -1, 0), NaN)).toBeNull();
+    expect(raycast(w, vec3(0, 1, 0), vec3(0, -1, 0), -1)).toBeNull();
+    expect(raycast(w, vec3(0, NaN, 0), vec3(0, -1, 0), 10)).toBeNull();
+    expect(raycast(w, vec3(0, 1, 0), vec3(NaN, -1, 0), 10)).toBeNull();
+    expect(raycast(w, vec3(Infinity, 1, 0), vec3(0, -1, 0), 10)).toBeNull();
+  });
+});
+
+describe("groundBelow", () => {
+  const w = createWorld([col(-5, -1, -5, 5, 0.3, 5), col(6, 0, -1, 7, 1, 1)]);
+
+  it("returns the exact top of the support", () => {
+    expect(groundBelow(w, vec3(0, 5.1, 0))).toBe(0.3);
+    expect(groundBelow(w, vec3(1.7, 123.456, -2.9), Infinity)).toBe(0.3);
+    expect(groundBelow(w, vec3(-4.9, 0.30000000000000004, 4.9))).toBe(0.3);
+    expect(groundBelow(w, vec3(6.5, 3.3, 0))).toBe(1);
+  });
+
+  it("returns the point's own height when the point is inside a box", () => {
+    expect(groundBelow(w, vec3(6.5, 0.5, 0))).toBe(0.5);
+  });
+
+  it("respects maxDrop", () => {
+    expect(groundBelow(w, vec3(0, 5.1, 0), 4.7)).toBeNull();
   });
 });
 
