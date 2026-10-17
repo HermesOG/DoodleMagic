@@ -44,7 +44,8 @@ describe("zones", () => {
     const id = zone(s, wallZone(aabb(-5, 0, -10.3, 5, 2.5, -9.7)));
     expect(hitsOn(step(s, 24), 2)).toHaveLength(0);
     const ev = step(s, 61);
-    expect([hitsOn(ev, 2).map((e) => e.amount), byId(s, 2).status.burnPulses > 0]).toEqual([[30, 30], true]);
+    const wall = ev.flatMap((e) => (e.type === "hit" && e.target === 2 && e.ability === "fireWall" ? [[e.amount, e.dot]] : []));
+    expect([wall, byId(s, 2).status.burnPulses > 0]).toEqual([[[30, false], [30, true]], true]);
     expect(ev).toContainEqual(expect.objectContaining({ type: "zone", zone: id, phase: "arm" }));
   });
 
@@ -52,7 +53,8 @@ describe("zones", () => {
     const s = createMatchState([mage(), dummy(2, 0, -10), dummy(3, 0, -12)]);
     zone(s, { owner: 1, kind: "fireTrail", ability: "jetDash", shape: { type: "segment", a: { x: -3, y: 0, z: -10 }, b: { x: 3, y: 0, z: -10 }, halfW: 0.75 }, bornTick: 0, armTick: 0, endTick: 120 });
     const ev = step(s, 130);
-    expect([hitsOn(ev, 2).reduce((a, e) => a + e.amount, 0), hitsOn(ev, 3).length]).toEqual([12, 0]);
+    const trail = (id: number) => ev.flatMap((e) => (e.type === "hit" && e.target === id && e.ability === "jetDash" ? [e] : []));
+    expect([trail(2).reduce((a, e) => a + e.amount, 0), trail(2).every((e) => e.dot), trail(3).length]).toEqual([12, true, 0]);
   });
 
   it("pillar: strikes after 0.6 s for 35, launches to 3.5 m, leaves a solid pillar for 4 s", () => {
