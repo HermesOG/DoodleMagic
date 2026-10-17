@@ -22,6 +22,7 @@ function data(over: Partial<LinkTestData> = {}): LinkTestData {
     route: "direct",
     rtts: Array.from({ length: 1000 }, () => 60),
     arrivals: Array.from({ length: 12000 }, (_, i) => i * 50),
+    endedAt: 600_000,
     sent: 1000,
     received: 1000,
     disconnects: 0,
@@ -84,7 +85,7 @@ describe("lossPct", () => {
 
 describe("judge", () => {
   it("passes a healthy run", () => {
-    expect(judge(buildResult(data(), meta))).toEqual({ ok: true, reasons: [] });
+    expect(judge(buildResult(data(), meta))).toEqual({ ok: true, full: true, reasons: [] });
   });
 
   it("does not fail a run just because it went through TURN", () => {
@@ -99,9 +100,50 @@ describe("judge", () => {
   });
 
   it("fails on a stall", () => {
-    const v = judge(buildResult(data({ arrivals: [0, 50, 100, 2100, 2150] }), meta));
+    const v = judge(buildResult(data({ arrivals: [0, 50, 100, 2100, 2150], endedAt: 2200 }), meta));
     expect(v.ok).toBe(false);
     expect(v.reasons.join(" ")).toContain("зависаний дольше 1 с: 1");
+  });
+
+  it("counts a freeze that lasts until the end of the run as a stall", () => {
+    const arrivals = Array.from({ length: 6001 }, (_, i) => i * 50); // last message at 300000 ms
+    const r = buildResult(data({ arrivals, endedAt: 600_000 }), meta);
+    expect(r.stalls).toBe(1);
+    expect(r.worstGapMs).toBe(300_000);
+    expect(judge(r).ok).toBe(false);
+  });
+
+  it("does not add a trailing stall when the host never sent anything", () => {
+    const r = buildResult(data({ arrivals: [], endedAt: 600_000 }), meta);
+    expect(r.stalls).toBe(0);
+  });
+
+  it("passes p95 exactly at the limit and fails just above it", () => {
+    const flat = (ms: number) => Array.from({ length: 100 }, () => ms);
+    expect(judge(buildResult(data({ rtts: flat(120) }), meta)).ok).toBe(true);
+    expect(judge(buildResult(data({ rtts: flat(121) }), meta)).ok).toBe(false);
+  });
+
+  it("fails closed when a remote report has a null p95 but some pings", () => {
+    const r = buildResult(data(), meta);
+    const wire = JSON.parse(JSON.stringify({ ...r, rtt: { ...r.rtt, p95: Number.NaN } }));
+    expect(wire.rtt.p95).toBeNull();
+    expect(isNettestResult(wire)).toBe(true);
+    const v = judge(wire);
+    expect(v.ok).toBe(false);
+    expect(v.reasons).toContain("пинг p95 неизвестен");
+  });
+
+  it("marks a short run as not full without failing it", () => {
+    const v = judge(buildResult(data({ durationS: 180 }), meta));
+    expect(v.full).toBe(false);
+    expect(v.ok).toBe(true);
+    expect(v.reasons).toEqual([]);
+  });
+
+  it("treats 570 s as the shortest full run", () => {
+    expect(judge(buildResult(data({ durationS: 570 }), meta)).full).toBe(true);
+    expect(judge(buildResult(data({ durationS: 569 }), meta)).full).toBe(false);
   });
 
   it("fails on disconnects, loss and a hidden tab", () => {
@@ -126,6 +168,13 @@ describe("formatReport", () => {
   it("names the host and the route", () => {
     const r = buildResult(data({ route: "relay" }), meta);
     expect(formatReport(r, judge(r))).toContain("Связь с хостом Хост: через ретранслятор (TURN)");
+  });
+
+  it("says that a short test does not count toward 9 of 10", () => {
+    const short = buildResult(data({ durationS: 180 }), meta);
+    expect(formatReport(short, judge(short))).toContain("Короткий тест: в итог «9 из 10» не идёт");
+    const full = buildResult(data(), meta);
+    expect(formatReport(full, judge(full))).not.toContain("Короткий тест");
   });
 });
 
@@ -159,8 +208,28 @@ describe("formatSummary", () => {
     expect(text).toContain("OK   Аня");
     expect(text).toContain("FAIL Боря · TURN");
     expect(text).toContain("• обрывов связи: 1");
-    expect(text).toContain("Прошли 1 из 2 (50 %). Порог: 90 %.");
+    expect(text).toContain("Прошли 1 из 2 полных тестов (50 %). Порог: 90 %.");
     expect(text).toContain("Через ретранслятор (TURN): 1 из 2.");
+    expect(text).not.toContain("Коротких тестов");
+  });
+
+  it("keeps short runs out of the 9-of-10 count and tags them", () => {
+    const good = buildResult(data(), meta);
+    const bad = buildResult(data({ disconnects: 1 }), { ...meta, name: "Боря" });
+    const short = buildResult(data({ durationS: 180, route: "relay" }), { ...meta, name: "Вася" });
+    const text = formatSummary([good, bad, short]);
+    expect(text).toContain("Прошли 1 из 2 полных тестов (50 %). Порог: 90 %.");
+    expect(text).toContain("Коротких тестов (не в зачёт): 1.");
+    expect(text).toContain("OK   Вася · короткий · TURN");
+    expect(text).not.toContain("OK   Аня · короткий");
+    expect(text).toContain("Через ретранслятор (TURN): 1 из 3.");
+  });
+
+  it("reports 0 % when there are no full runs", () => {
+    const short = buildResult(data({ durationS: 60 }), meta);
+    const text = formatSummary([short]);
+    expect(text).toContain("Прошли 0 из 0 полных тестов (0 %). Порог: 90 %.");
+    expect(text).toContain("Коротких тестов (не в зачёт): 1.");
   });
 
   it("shows missing ping values after a JSON round trip as dashes", () => {

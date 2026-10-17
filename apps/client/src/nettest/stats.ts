@@ -6,6 +6,9 @@ export const CRITERIA = {
   maxLossPct: 2,
   maxDisconnects: 0,
   maxHiddenS: 5,
+  /** Тест короче этого не идёт в итог «9 из 10» (10 минут минус запас на старт и разброс таймеров). */
+  minDurationS: 570,
+  passShare: 0.9,
 } as const;
 
 export type Route = "direct" | "relay" | "?";
@@ -23,6 +26,8 @@ export interface LinkTestData {
   route: Route;
   rtts: number[];
   arrivals: number[];
+  /** Момент окончания прогона: хвост без сообщений от хоста тоже считается зависанием. */
+  endedAt: number;
   sent: number;
   received: number;
   disconnects: number;
@@ -54,7 +59,10 @@ export interface NettestResult extends ResultMeta {
 }
 
 export interface Verdict {
+  /** Качество связи в порядке. Короткий тест сам по себе не делает его false. */
   ok: boolean;
+  /** Тест длился достаточно долго, чтобы идти в итог «9 из 10». */
+  full: boolean;
   reasons: string[];
 }
 
@@ -109,7 +117,10 @@ export function lossPct(sent: number, received: number): number {
 }
 
 export function buildResult(d: LinkTestData, meta: ResultMeta): NettestResult {
-  const { stalls, worstGapMs } = countStalls(d.arrivals, CRITERIA.stallGapMs);
+  // Если хост молчал до самого конца, последний промежуток тоже считается; без единого
+  // сообщения его не с чем мерить — это уже ловит «хост не ответил ни разу».
+  const times = d.arrivals.length > 0 ? [...d.arrivals, d.endedAt] : d.arrivals;
+  const { stalls, worstGapMs } = countStalls(times, CRITERIA.stallGapMs);
   return {
     v: 2,
     ...meta,
@@ -129,18 +140,24 @@ export function buildResult(d: LinkTestData, meta: ResultMeta): NettestResult {
 export function judge(r: NettestResult): Verdict {
   const reasons: string[] = [];
   if (r.rtt.count === 0) reasons.push("хост не ответил ни разу");
-  else if (r.rtt.p95 > CRITERIA.maxP95Ms) {
-    reasons.push(`пинг p95 ${Math.round(r.rtt.p95)} мс — выше ${CRITERIA.maxP95Ms}`);
+  // Отчёт пришёл по сети: после JSON NaN становится null, а `null <= 120` в JS — true.
+  // Поэтому проверяем конечность явно: непонятное значение считается провалом.
+  else if (!(Number.isFinite(r.rtt.p95) && r.rtt.p95 <= CRITERIA.maxP95Ms)) {
+    reasons.push(
+      Number.isFinite(r.rtt.p95)
+        ? `пинг p95 ${Math.round(r.rtt.p95)} мс — выше ${CRITERIA.maxP95Ms}`
+        : "пинг p95 неизвестен",
+    );
   }
   if (r.stalls > CRITERIA.maxStalls) {
-    reasons.push(`зависаний дольше 1 с: ${r.stalls} (худшее ${r.worstGapMs} мс)`);
+    reasons.push(`зависаний дольше ${CRITERIA.stallGapMs / 1000} с: ${r.stalls} (худшее ${r.worstGapMs} мс)`);
   }
   if (r.disconnects > CRITERIA.maxDisconnects) reasons.push(`обрывов связи: ${r.disconnects}`);
   if (r.lossPct > CRITERIA.maxLossPct) reasons.push(`потеряно ${r.lossPct.toFixed(1)}% пакетов`);
   if (r.hiddenS > CRITERIA.maxHiddenS) {
     reasons.push(`вкладка была свёрнута ${r.hiddenS} с — результат неточный, лучше повторить`);
   }
-  return { ok: reasons.length === 0, reasons };
+  return { ok: reasons.length === 0, full: r.durationS >= CRITERIA.minDurationS, reasons };
 }
 
 export function formatReport(r: NettestResult, v: Verdict): string {
@@ -152,6 +169,7 @@ export function formatReport(r: NettestResult, v: Verdict): string {
     `Потери ${r.lossPct.toFixed(1)}% · зависаний ${r.stalls} · обрывов ${r.disconnects}`,
   ];
   for (const reason of v.reasons) lines.push(`• ${reason}`);
+  if (!v.full) lines.push("Короткий тест: в итог «9 из 10» не идёт");
   return lines.join("\n");
 }
 
@@ -175,26 +193,29 @@ export function isNettestResult(x: unknown): x is NettestResult {
   );
 }
 
-/** Сводка для хоста: строка на участника и итог по критерию «9 из 10». */
+/** Сводка для хоста: строка на участника и итог по критерию «9 из 10» (только полные тесты). */
 export function formatSummary(results: readonly NettestResult[]): string {
   if (results.length === 0) return "Пока нет результатов.";
   const lines: string[] = [];
   let passed = 0;
+  let full = 0;
   let relayed = 0;
   for (const r of results) {
     const v = judge(r);
-    if (v.ok) passed++;
+    if (v.full) {
+      full++;
+      if (v.ok) passed++;
+    }
     if (r.route === "relay") relayed++;
     lines.push(
-      `${v.ok ? "OK  " : "FAIL"} ${r.name || "—"} · ${ROUTE_SHORT[r.route]} · p50 ${fmtMs(r.rtt.p50)} · p95 ${fmtMs(r.rtt.p95)} · зав ${r.stalls} · обр ${r.disconnects} · пот ${r.lossPct.toFixed(1)}% · ${r.durationS} с`,
+      `${v.ok ? "OK  " : "FAIL"} ${r.name || "—"}${v.full ? "" : " · короткий"} · ${ROUTE_SHORT[r.route]} · p50 ${fmtMs(r.rtt.p50)} · p95 ${fmtMs(r.rtt.p95)} · зав ${r.stalls} · обр ${r.disconnects} · пот ${r.lossPct.toFixed(1)}% · ${r.durationS} с`,
     );
     for (const reason of v.reasons) lines.push(`     • ${reason}`);
   }
-  const pct = Math.round((passed / results.length) * 100);
-  lines.push(
-    "",
-    `Прошли ${passed} из ${results.length} (${pct} %). Порог: 90 %.`,
-    `Через ретранслятор (TURN): ${relayed} из ${results.length}.`,
-  );
+  const short = results.length - full;
+  const pct = full === 0 ? 0 : Math.round((passed / full) * 100);
+  lines.push("", `Прошли ${passed} из ${full} полных тестов (${pct} %). Порог: ${Math.round(CRITERIA.passShare * 100)} %.`);
+  if (short > 0) lines.push(`Коротких тестов (не в зачёт): ${short}.`);
+  lines.push(`Через ретранслятор (TURN): ${relayed} из ${results.length}.`);
   return lines.join("\n");
 }
