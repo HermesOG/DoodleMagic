@@ -1066,7 +1066,13 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
     });
 
     const connect = () => {
-      const c = me.connect(hostPeerId(o.room), CONN_OPTIONS);
+      if (finished) return;
+      // PeerJS 1.5.5 возвращает undefined, пока нет связи с сигналингом: просто пробуем позже
+      const c = me.connect(hostPeerId(o.room), CONN_OPTIONS) as DataConnection | undefined;
+      if (!c) {
+        setTimeout(connect, RECONNECT_DELAY_MS);
+        return;
+      }
       conn = c;
       let opened = false;
       c.on("open", () => {
