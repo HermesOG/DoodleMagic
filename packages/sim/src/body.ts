@@ -1,5 +1,5 @@
 import type { AABB, Body, MoveResult } from "./types";
-import { overlapping, type World } from "./world";
+import { colliderAt, overlapping, type World } from "./world";
 
 export const MAX_SUBSTEPS = 8;
 /** Насколько глубоко ниже подошвы ищем опору, чтобы считать тело стоящим, м. */
@@ -34,7 +34,7 @@ function sweepAxis(w: World, b: Body, axis: "x" | "y" | "z", d: number): boolean
   let limit = b.pos[axis];
   let blocked = false;
   for (const idx of overlapping(w, bodyBox(b), scratch)) {
-    const box = w.colliders[idx]!.box;
+    const box = colliderAt(w, idx).box;
     if (d > 0 && box.min[axis] >= beforeMax - AHEAD_TOL) {
       const p = box.min[axis] - hi;
       if (p < limit) {

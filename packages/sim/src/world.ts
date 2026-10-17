@@ -27,7 +27,19 @@ export interface World {
   readonly rows: number;
   /** Номера коллайдеров в клетке (i, j) лежат в cells[j * cols + i]. */
   readonly cells: readonly (readonly number[])[];
+  /** Динамические коллайдеры поверх сетки (рельеф Земли, стены огня), перебором. Номер в overlapping и raycast — colliders.length + индекс. */
+  readonly dynamic?: readonly Collider[];
 }
+
+/** Коллайдер по номеру из overlapping или raycast: статический или динамический. */
+export function colliderAt(w: World, idx: number): Collider {
+  const n = w.colliders.length;
+  const c = idx < n ? w.colliders[idx] : w.dynamic?.[idx - n];
+  if (!c) throw new RangeError(`colliderAt: no collider ${idx}`);
+  return c;
+}
+/** Тот же мир с другим набором динамики: сетка и статика общие, ничего не копируется. */
+export const withDynamic = (w: World, dynamic: readonly Collider[]): World => ({ ...w, dynamic });
 
 const finiteBox = (b: AABB): boolean =>
   Number.isFinite(b.min.x) &&
@@ -104,6 +116,8 @@ export function overlapping(w: World, box: AABB, out: number[] = [], kind: RayKi
       }
     }
   }
+  const dyn = w.dynamic;
+  if (dyn) for (let k = 0; k < dyn.length; k++) if (blocks(dyn[k]!, kind) && overlaps(box, dyn[k]!.box, OVERLAP_EPS)) out.push(w.colliders.length + k);
   return out;
 }
 

@@ -1,6 +1,6 @@
 import type { AABB, Axis, RayKind, Vec3 } from "./types";
 import { AXES, length, sub, vec3 } from "./vec";
-import { blocks, type World } from "./world";
+import { blocks, colliderAt, type World } from "./world";
 
 export interface RayHit {
   /** Расстояние от начала луча, м. 0 — луч начался внутри бокса. */
@@ -11,7 +11,7 @@ export interface RayHit {
    * у плоских боксов (min = max). (0, 0, 0), если луч начался внутри бокса или на его грани.
    */
   normal: Vec3;
-  /** Номер коллайдера в world.colliders. */
+  /** Номер коллайдера: статический — в world.colliders, динамический — colliders.length + индекс в world.dynamic (см. colliderAt). */
   collider: number;
 }
 
@@ -65,32 +65,27 @@ function slab(o: Vec3, d: Vec3, b: AABB, maxT: number, out: SlabHit): boolean {
 
 const finite3 = (v: Vec3): boolean => Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
 
-/**
- * Луч по сетке мира (DDA по клеткам XZ, алгоритм Amanatides–Woo): проверяются только боксы в клетках,
- * через которые луч проходит. `dir` — единичный вектор. Возвращает ближайшее попадание не дальше maxDist;
- * при равном расстоянии — коллайдер с меньшим номером.
- *
- * Завершается при любом конечном начале и направлении и любом maxDist, в том числе Infinity: вертикальный луч
- * проверяет только свою клетку. NaN или отрицательный maxDist и нечисловые начало или направление — промах (null).
- * Память выделяется только под одну служебную запись и результат.
- */
-export function raycast(
-  w: World,
-  origin: Vec3,
-  dir: Vec3,
-  maxDist: number,
-  kind: RayKind = "shot",
-  stats?: RayStats,
-): RayHit | null {
-  if (!(maxDist >= 0) || !finite3(origin) || !finite3(dir)) return null;
+/** Лучшее попадание луча на сейчас: номер коллайдера (−1 — нет), расстояние и грань входа. */
+interface BestHit {
+  idx: number;
+  t: number;
+  axis: Axis | null;
+  sign: number;
+}
 
+/**
+ * Луч по сетке статики (DDA по клеткам XZ, алгоритм Amanatides–Woo): проверяются только боксы в клетках,
+ * через которые луч проходит. Ближайшее попадание не дальше best.t пишет в best; при равном расстоянии —
+ * коллайдер с меньшим номером. h — служебная запись для slab.
+ */
+function gridRay(w: World, origin: Vec3, dir: Vec3, maxDist: number, kind: RayKind, stats: RayStats | undefined, h: SlabHit, best: BestHit): void {
   // Обрезаем луч прямоугольником сетки по XZ.
   const gx1 = w.x0 + w.cols * w.cell;
   const gz1 = w.z0 + w.rows * w.cell;
   let tStart = 0;
   let tEnd = maxDist;
   if (dir.x === 0) {
-    if (origin.x < w.x0 || origin.x > gx1) return null;
+    if (origin.x < w.x0 || origin.x > gx1) return;
   } else {
     const ta = (w.x0 - origin.x) / dir.x;
     const tb = (gx1 - origin.x) / dir.x;
@@ -98,7 +93,7 @@ export function raycast(
     tEnd = Math.min(tEnd, Math.max(ta, tb));
   }
   if (dir.z === 0) {
-    if (origin.z < w.z0 || origin.z > gz1) return null;
+    if (origin.z < w.z0 || origin.z > gz1) return;
   } else {
     const ta = (w.z0 - origin.z) / dir.z;
     const tb = (gz1 - origin.z) / dir.z;
@@ -107,7 +102,7 @@ export function raycast(
   }
   // При крайних, но конечных данных (dir ≈ 5e-324, начало в 1e300) вход в сетку переполняется в Infinity:
   // такой луч в сетку не попадает, а дальше дал бы NaN в номере клетки.
-  if (!(tStart <= tEnd && tStart < Infinity)) return null;
+  if (!(tStart <= tEnd && tStart < Infinity)) return;
 
   const px = origin.x + dir.x * tStart;
   const pz = origin.z + dir.z * tStart;
@@ -120,11 +115,6 @@ export function raycast(
   const tDeltaX = stepI === 0 ? Infinity : w.cell / Math.abs(dir.x);
   const tDeltaZ = stepJ === 0 ? Infinity : w.cell / Math.abs(dir.z);
 
-  const h: SlabHit = { t: 0, axis: null, sign: 0 };
-  let bestIdx = -1;
-  let bestT = maxDist;
-  let bestAxis: Axis | null = null;
-  let bestSign = 0;
   for (;;) {
     const cell = w.cells[j * w.cols + i]!;
     for (let n = 0; n < cell.length; n++) {
@@ -132,19 +122,19 @@ export function raycast(
       const c = w.colliders[idx]!;
       if (!blocks(c, kind)) continue;
       if (stats) stats.tested++;
-      // slab ищет вход не дальше bestT, поэтому h.t ≤ bestT; при равенстве оставляем меньший номер.
-      if (!slab(origin, dir, c.box, bestT, h) || (bestIdx >= 0 && h.t === bestT && idx > bestIdx)) continue;
-      bestIdx = idx;
-      bestT = h.t;
-      bestAxis = h.axis;
-      bestSign = h.sign;
+      // slab ищет вход не дальше best.t, поэтому h.t ≤ best.t; при равенстве оставляем меньший номер.
+      if (!slab(origin, dir, c.box, best.t, h) || (best.idx >= 0 && h.t === best.t && idx > best.idx)) continue;
+      best.idx = idx;
+      best.t = h.t;
+      best.axis = h.axis;
+      best.sign = h.sign;
     }
     const cellExit = Math.min(tMaxX, tMaxZ);
     // Всё, что лежит дальше по лучу, начинается не ближе выхода из клетки: найденное попадание уже ближайшее
     // (при равенстве идём дальше — там может быть коллайдер с меньшим номером). Луч кончился в этой клетке —
     // тоже стоп. Выхода нет совсем (вертикальный луч) — клетка была единственной: без этой проверки при
     // maxDist = Infinity цикл шагал бы на Infinity вечно.
-    if ((bestIdx >= 0 && bestT < cellExit) || cellExit > tEnd || !(cellExit < Infinity)) break;
+    if ((best.idx >= 0 && best.t < cellExit) || cellExit > tEnd || !(cellExit < Infinity)) break;
     if (tMaxX < tMaxZ) {
       i += stepI;
       tMaxX += tDeltaX;
@@ -154,14 +144,50 @@ export function raycast(
     }
     if (i < 0 || j < 0 || i >= w.cols || j >= w.rows) break;
   }
-  if (bestIdx < 0) return null;
+}
+
+/**
+ * Луч по миру: сначала по сетке статики (см. gridRay), затем перебором по динамике (world.dynamic) — даже если
+ * луч сетку не задел. `dir` — единичный вектор. Возвращает ближайшее попадание не дальше maxDist; при равном
+ * расстоянии — коллайдер с меньшим номером (статика раньше динамики).
+ *
+ * Завершается при любом конечном начале и направлении и любом maxDist, в том числе Infinity: вертикальный луч
+ * проверяет только свою клетку. NaN или отрицательный maxDist и нечисловые начало или направление — промах (null).
+ * Память выделяется только под две служебные записи и результат.
+ */
+export function raycast(
+  w: World,
+  origin: Vec3,
+  dir: Vec3,
+  maxDist: number,
+  kind: RayKind = "shot",
+  stats?: RayStats,
+): RayHit | null {
+  if (!(maxDist >= 0) || !finite3(origin) || !finite3(dir)) return null;
+  const h: SlabHit = { t: 0, axis: null, sign: 0 };
+  const best: BestHit = { idx: -1, t: maxDist, axis: null, sign: 0 };
+  gridRay(w, origin, dir, maxDist, kind, stats, h, best);
+  const dyn = w.dynamic;
+  if (dyn) {
+    for (let k = 0; k < dyn.length; k++) {
+      if (!blocks(dyn[k]!, kind)) continue;
+      if (stats) stats.tested++;
+      // При равном расстоянии остаётся найденный раньше: статика или динамика с меньшим номером.
+      if (!slab(origin, dir, dyn[k]!.box, best.t, h) || (best.idx >= 0 && h.t === best.t)) continue;
+      best.idx = w.colliders.length + k;
+      best.t = h.t;
+      best.axis = h.axis;
+      best.sign = h.sign;
+    }
+  }
+  if (best.idx < 0) return null;
   const normal = vec3();
-  if (bestAxis) normal[bestAxis] = bestSign;
+  if (best.axis) normal[best.axis] = best.sign;
   return {
-    dist: bestT,
-    point: { x: origin.x + dir.x * bestT, y: origin.y + dir.y * bestT, z: origin.z + dir.z * bestT },
+    dist: best.t,
+    point: { x: origin.x + dir.x * best.t, y: origin.y + dir.y * best.t, z: origin.z + dir.z * best.t },
     normal,
-    collider: bestIdx,
+    collider: best.idx,
   };
 }
 
@@ -187,5 +213,5 @@ export function lineOfSight(w: World, a: Vec3, b: Vec3): boolean {
 export function groundBelow(w: World, p: Vec3, maxDrop = 50): number | null {
   const hit = raycast(w, p, { x: 0, y: -1, z: 0 }, maxDrop, "move");
   if (!hit) return null;
-  return hit.normal.y === 1 ? w.colliders[hit.collider]!.box.max.y : hit.point.y;
+  return hit.normal.y === 1 ? colliderAt(w, hit.collider).box.max.y : hit.point.y;
 }
