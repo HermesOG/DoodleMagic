@@ -4,6 +4,8 @@ export const NETTEST_VERSION = 3;
 export const SNAPSHOT_HZ = 20;
 export const SNAPSHOT_PAD_BYTES = 800;
 export const MAX_NAME_LEN = 24;
+/** Причина в `error`, когда версии страниц хоста и участника не совпали. */
+export const OUTDATED_REASON = "обновите страницу";
 /** Лимит длины строки сообщения в символах: отчёт участника весит около 1–2 тыс. символов. */
 export const MAX_MSG_CHARS = 8192;
 
@@ -86,7 +88,7 @@ export function pong(msg: PingMsg, now: number): PongMsg {
 }
 
 export function welcome(msg: HelloMsg, info: RoomInfo): WelcomeMsg | ErrorMsg {
-  if (msg.v !== NETTEST_VERSION) return { t: "error", reason: "обновите страницу" };
+  if (msg.v !== NETTEST_VERSION) return { t: "error", reason: OUTDATED_REASON };
   return { t: "welcome", v: NETTEST_VERSION, ...info };
 }
 

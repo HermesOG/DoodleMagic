@@ -7,6 +7,7 @@ import {
   fmtMs,
   formatReport,
   formatSummary,
+  hostErrorText,
   judge,
   parseHostSave,
   summarizeRtt,
@@ -375,6 +376,15 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number, relayOnly:
       outcome.close();
       byId(root, "nt-live").hidden = true;
       errorLine.textContent = "Хост не найден. Проверь ссылку или попроси организатора открыть комнату, потом нажми «Начать» ещё раз.";
+      setInputsDisabled(false);
+      return;
+    }
+
+    // хост отказал (например, версии страниц разные): мерить нечего, результат в зачёт не идёт
+    if (outcome.hostError !== null) {
+      outcome.close();
+      byId(root, "nt-live").hidden = true;
+      errorLine.textContent = hostErrorText(outcome.hostError);
       setInputsDisabled(false);
       return;
     }

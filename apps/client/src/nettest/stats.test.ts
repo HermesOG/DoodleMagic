@@ -5,6 +5,7 @@ import {
   fmtMs,
   formatReport,
   formatSummary,
+  hostErrorText,
   isNettestResult,
   judge,
   lossPct,
@@ -439,6 +440,21 @@ describe("formatSummary", () => {
     expect(text).toContain("Проверок только через TURN (не в зачёт): 3, прошли 1.");
     expect(text).toContain("Через ретранслятор (TURN): 0 из 1.");
     expect(text.split("\n").at(-1)).toBe("Критерий (≥ 90 % в зачёте): выполнен ✓");
+  });
+});
+
+describe("hostErrorText", () => {
+  it("explains a version mismatch: the host page is older than this one", () => {
+    expect(hostErrorText("обновите страницу")).toBe("Хост на старой версии страницы — попроси его обновить страницу");
+  });
+
+  it("shows any other reason as is, trimmed and limited", () => {
+    expect(hostErrorText("  комната закрыта ")).toBe("комната закрыта");
+    expect(hostErrorText("x".repeat(500))).toHaveLength(200);
+  });
+
+  it("has a fallback for an empty reason", () => {
+    expect(hostErrorText("  ")).toBe("Хост прервал тест");
   });
 });
 

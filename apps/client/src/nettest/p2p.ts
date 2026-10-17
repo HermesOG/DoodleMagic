@@ -235,6 +235,8 @@ export interface PeerRunOptions {
 export interface PeerOutcome {
   hostFound: boolean;
   hostName: string;
+  /** Хост ответил `error` (например, другая версия страницы): тест прерван, считать нечего. */
+  hostError: string | null;
   data: LinkTestData;
   /** true — хост подтвердил получение за ACK_TIMEOUT_MS; false — не подтвердил или канал уже закрыт. */
   sendReport(r: NettestResult): Promise<boolean>;
@@ -267,6 +269,7 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
     let conn: DataConnection | null = null;
     let connected = false;
     let hostName = "";
+    let hostError: string | null = null;
     let finished = false;
     let hiddenSince: number | null = document.hidden ? start : null;
     /** Ждёт подтверждения доставки отчёта; ack приходит уже после конца теста. */
@@ -366,6 +369,9 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
           }
         } else if (msg?.t === "snap") {
           data.snaps++;
+        } else if (msg?.t === "error") {
+          hostError = typeof msg.reason === "string" ? msg.reason : "";
+          finish(true);
         }
       });
       c.on("close", () => {
@@ -444,7 +450,7 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
       data.received = data.sent - lost;
       data.durationS = (now - start) / 1000;
       data.endedAt = now;
-      resolve({ hostFound, hostName, data, sendReport, close: () => me.destroy() });
+      resolve({ hostFound, hostName, hostError, data, sendReport, close: () => me.destroy() });
     }
 
     connect();

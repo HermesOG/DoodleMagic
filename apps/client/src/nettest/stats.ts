@@ -1,4 +1,4 @@
-import { SNAPSHOT_HZ, parsePeerTag, type PeerTag } from "@doodlemagic/protocol";
+import { OUTDATED_REASON, SNAPSHOT_HZ, parsePeerTag, type PeerTag } from "@doodlemagic/protocol";
 
 /** Критерии из GDD, раздел 10: «9 из 10 играют 10 минут без зависаний, пинг p95 ≤ 120 мс». */
 export const CRITERIA = {
@@ -316,6 +316,15 @@ export function formatSummary(results: readonly NettestResult[], extras: Summary
       : `Критерий (≥ ${threshold} % в зачёте): ${passed / counted >= CRITERIA.passShare ? "выполнен ✓" : "не выполнен ✗"}`,
   );
   return lines.join("\n");
+}
+
+/**
+ * Текст для участника, когда хост ответил `error`. Хост шлёт OUTDATED_REASON, если версии не совпали; v3 — новейшая,
+ * поэтому участнику с этой страницей такое приходит только от хоста со старой. Причину пишет чужой браузер — режем.
+ */
+export function hostErrorText(reason: string): string {
+  if (reason === OUTDATED_REASON) return "Хост на старой версии страницы — попроси его обновить страницу";
+  return reason.trim().slice(0, 200) || "Хост прервал тест";
 }
 
 /** Что страница хоста хранит в localStorage, чтобы результаты пережили перезагрузку. */

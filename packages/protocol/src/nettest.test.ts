@@ -3,6 +3,7 @@ import {
   MAX_MSG_CHARS,
   MAX_NAME_LEN,
   NETTEST_VERSION,
+  OUTDATED_REASON,
   SNAPSHOT_PAD_BYTES,
   ack,
   makeSnapshot,
@@ -82,6 +83,7 @@ describe("welcome", () => {
 
   it("asks an outdated participant to reload", () => {
     expect(welcome({ t: "hello", v: 1, name: "x" }, info)).toEqual({ t: "error", reason: "обновите страницу" });
+    expect(OUTDATED_REASON).toBe("обновите страницу");
   });
 
   it("treats a v2 participant as outdated: v3 changed the report and the host messages", () => {
