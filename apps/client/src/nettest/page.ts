@@ -13,6 +13,8 @@ import {
 } from "./stats";
 
 const NAME_KEY = "nettest_name";
+// у хоста своё поле: иначе участник в том же браузере получит предзаполненное «Хост»
+const HOST_NAME_KEY = "nettest_host_name";
 
 function safeGet(key: string): string | null {
   try {
@@ -40,23 +42,58 @@ function byId<T extends HTMLElement = HTMLElement>(root: HTMLElement, id: string
   return node;
 }
 
-async function keepAwake(): Promise<WakeLockSentinel | null> {
-  try {
-    return await navigator.wakeLock.request("screen");
-  } catch {
-    return null;
-  }
+// Экран не гаснет, пока вкладка видна. Браузер сам снимает блокировку, когда вкладка скрывается,
+// поэтому при возвращении запрашиваем её заново. Ошибки игнорируем: в части браузеров API нет.
+function holdWakeLock(): { release(): void } {
+  let sentinel: WakeLockSentinel | null = null;
+  let released = false;
+
+  const acquire = async (): Promise<void> => {
+    try {
+      const s = await navigator.wakeLock.request("screen");
+      if (released || sentinel) {
+        void s.release().catch(() => undefined);
+        return;
+      }
+      sentinel = s;
+      s.addEventListener("release", () => {
+        if (sentinel === s) sentinel = null;
+      });
+    } catch {
+      // нет поддержки или отказ браузера: тест идёт и без этого
+    }
+  };
+  const onVisible = (): void => {
+    if (document.visibilityState === "visible" && !sentinel) void acquire();
+  };
+
+  document.addEventListener("visibilitychange", onVisible);
+  void acquire();
+  return {
+    release() {
+      released = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      const s = sentinel;
+      sentinel = null;
+      void s?.release().catch(() => undefined);
+    },
+  };
 }
 
 function copyOnClick(btn: HTMLButtonElement, text: () => string): void {
+  const label = btn.textContent;
+  let resetTimer: ReturnType<typeof setTimeout> | undefined;
+  const flash = (message: string): void => {
+    btn.textContent = message;
+    clearTimeout(resetTimer);
+    resetTimer = setTimeout(() => {
+      btn.textContent = label;
+    }, 2000);
+  };
   btn.addEventListener("click", () => {
     void navigator.clipboard.writeText(text()).then(
-      () => {
-        btn.textContent = "Скопировано ✓";
-      },
-      () => {
-        btn.textContent = "Не вышло — выдели текст вручную";
-      },
+      () => flash("Скопировано ✓"),
+      () => flash("Не вышло — выдели текст вручную"),
     );
   });
 }
@@ -99,7 +136,7 @@ function mountHost(root: HTMLElement, room: string): void {
   byId(root, "nt-room").textContent = room;
   byId(root, "nt-link").textContent = shareLink;
   byId(root, "nt-summary").textContent = summary;
-  nameInput.value = safeGet(NAME_KEY) ?? "";
+  nameInput.value = safeGet(HOST_NAME_KEY) ?? "";
   copyOnClick(byId<HTMLButtonElement>(root, "nt-copy-link"), () => shareLink);
   copyOnClick(byId<HTMLButtonElement>(root, "nt-copy-summary"), () => summary);
 
@@ -109,7 +146,7 @@ function mountHost(root: HTMLElement, room: string): void {
 
   async function open(): Promise<void> {
     const name = nameInput.value.trim().slice(0, 24) || "Хост";
-    safeSet(NAME_KEY, name);
+    safeSet(HOST_NAME_KEY, name);
     openBtn.disabled = true;
     nameInput.disabled = true;
     status.textContent = "Открываем комнату…";
@@ -130,7 +167,8 @@ function mountHost(root: HTMLElement, room: string): void {
       nameInput.disabled = false;
       return;
     }
-    await keepAwake();
+    const wake = holdWakeLock();
+    window.addEventListener("pagehide", () => wake.release(), { once: true });
     status.textContent = "Комната открыта ✓ Не закрывай и не сворачивай эту вкладку.";
     byId(root, "nt-room-card").hidden = false;
   }
@@ -196,9 +234,10 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
     setInputsDisabled(true);
     errorLine.textContent = "";
     byId(root, "nt-live").hidden = false;
-    const wake = await keepAwake();
+    const wake = holdWakeLock();
 
-    const started = performance.now();
+    // часы стартуют с первого тика, а не с нажатия кнопки: подключение к сигналингу в тест не входит
+    let started: number | null = null;
     let lastSummaryAt = 0;
     let outcome: PeerOutcome;
     try {
@@ -208,11 +247,15 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
         durationS: Number(durSelect.value),
         onTick: (d, connected, hostName) => {
           const now = performance.now();
+          started ??= now;
           byId(root, "nt-elapsed").textContent = fmtClock((now - started) / 1000);
           byId(root, "nt-last").textContent = fmtMs(d.rtts.at(-1));
+          const neverConnected = d.arrivals.length === 0 && !hostName;
           byId(root, "nt-status").textContent = connected
             ? `Связь с хостом ${hostName || "…"} есть`
-            : "Связь с хостом потеряна, переподключаемся…";
+            : neverConnected
+              ? "Подключаемся к хосту…"
+              : "Связь с хостом потеряна, переподключаемся…";
           if (now - lastSummaryAt > 1000) {
             lastSummaryAt = now;
             byId(root, "nt-p95").textContent = fmtMs(summarizeRtt(d.rtts).p95);
@@ -221,13 +264,13 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
         },
       });
     } catch (e) {
-      await wake?.release().catch(() => undefined);
+      wake.release();
       byId(root, "nt-live").hidden = true;
       errorLine.textContent = `Не удалось подключиться к сигналингу PeerJS (${(e as { type?: string }).type ?? String(e)}). Проверь интернет и нажми «Начать» ещё раз.`;
       setInputsDisabled(false);
       return;
     }
-    await wake?.release().catch(() => undefined);
+    wake.release();
 
     if (!outcome.hostFound) {
       outcome.close();
@@ -253,6 +296,8 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
     verdictEl.textContent = verdict.ok ? "Связь в порядке ✓" : "Есть проблемы";
     verdictEl.className = verdict.ok ? "ok" : "bad";
     byId(root, "nt-report").textContent = reportText;
+    // последний тик в onTick не приходит, и живой счётчик зависаний не видит хвостовой разрыв: итог показывает только отчёт
+    byId(root, "nt-live").hidden = true;
     byId(root, "nt-result").hidden = false;
     byId(root, "nt-sent").textContent = outcome.sendReport(result)
       ? "Результат отправлен хосту ✓"

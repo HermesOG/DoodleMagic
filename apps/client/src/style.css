@@ -15,8 +15,11 @@
     --muted: #a39d8f;
     --card: #1f1d17;
     --line: #38352c;
+    --accent: #ff6b5e;
     --good: #5fbf7a;
   }
+  /* светлый акцент как фон кнопки: белый текст на нём даёт 2.8:1, тёмный — 6.6:1 */
+  .btn:not(.secondary) { color: var(--bg); }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
