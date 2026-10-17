@@ -6,6 +6,14 @@ if (!app) throw new Error("#app missing");
 
 if (location.pathname.startsWith("/nettest")) {
   mountNettest(app);
+} else if (location.pathname.startsWith("/render-test")) {
+  // three.js грузится отдельным чанком только для игровых страниц
+  import("./render/testPage")
+    .then((m) => m.mountRenderTest(app))
+    .catch((err: unknown) => {
+      app.textContent = `Не удалось загрузить рендер: ${err instanceof Error ? err.message : String(err)}`;
+      console.error(err);
+    });
 } else {
   app.innerHTML = `
     <section class="card">
