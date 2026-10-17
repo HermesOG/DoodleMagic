@@ -235,6 +235,8 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
       // PeerJS 1.5.5 не шлёт close для соединения, которое так и не открылось (ICE, потерянный offer): обрываем попытку сами.
       const attemptTimer = setTimeout(() => {
         if (finished || opened || conn !== c) return;
+        // до первого открытия медленный ICE (TURN) не обрываем: срок задаёт OPEN_TIMEOUT_MS, а ошибки ловит c.on("error")
+        if (!everOpened) return;
         c.close();
         scheduleReconnect();
       }, ATTEMPT_TIMEOUT_MS);
