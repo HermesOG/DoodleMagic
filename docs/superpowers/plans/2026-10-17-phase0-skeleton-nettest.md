@@ -843,6 +843,13 @@ git add apps/client pnpm-lock.yaml
 git commit -m "feat(client): nettest statistics, route detection and host summary" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**Правки после ревью** (отдельный коммит `fix(client): nettest verdict enforces full runs and trailing stalls`). Код выше дополнен так:
+- **`LinkTestData`** получил поле `endedAt` (момент конца прогона). Пауза от последнего сообщения до конца тоже считается зависанием.
+- **`CRITERIA`** получил `minDurationS: 570` и `passShare: 0.9`.
+- **`Verdict`** получил поле `full`: короткий прогон не провал, но в итог «9 из 10» не идёт. Об этом пишут и `formatReport`, и `formatSummary`.
+- **Проверка p95** не проходит, если значение неизвестно.
+- **Строки с порогами** берутся из `CRITERIA`.
+
 ---
 
 ### Task 4: P2P-сессии: хост и участник
@@ -1030,6 +1037,7 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
       disconnects: 0,
       hiddenMs: 0,
       durationS: 0,
+      endedAt: 0,
     };
     const start = performance.now();
     const endAt = start + o.durationS * 1000;
@@ -1138,6 +1146,7 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
       data.sent = seq - recent;
       data.received = data.sent - lost;
       data.durationS = (now - start) / 1000;
+      data.endedAt = now;
       resolve({
         hostFound,
         hostName,
