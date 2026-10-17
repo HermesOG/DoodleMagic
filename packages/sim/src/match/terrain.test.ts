@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { aabb } from "../aabb";
 import { bodyBox } from "../body";
-import { isFree } from "../world";
+import { DEFAULT_MOVE, NO_INPUT, stepPlayer } from "../player";
+import { TICK_DT } from "../types";
+import { isFree, withDynamic } from "../world";
 import { buildTickWorld } from "./dynamic";
 import { testContext } from "./fixtures";
 import { createDummyUnit, createMageUnit, createMatchState } from "./state";
-import { damageTerrain, spawnTerrain, stepTerrain, type TerrainSpec } from "./terrain";
+import { damageTerrain, pushOut, spawnTerrain, stepTerrain, type TerrainSpec } from "./terrain";
 import type { MatchEvent, MatchState, TickCtx } from "./types";
 
 const ctx = testContext();
@@ -76,5 +78,55 @@ describe("terrain", () => {
     const flyer = s.units[2]!.move.body;
     expect(flyer.pos.y).toBe(2.5);
     expect(2.5 + (flyer.vel.y * flyer.vel.y) / 40).toBeCloseTo(1.5 + (8 * 8) / 40, 9); // вершина та же
+  });
+});
+
+describe("push-out of a body that is already rising (Earth Q «под себя»)", () => {
+  /**
+   * Как в stepMatch: кит дал магу подъём vy = √(2g·2,8) и вырастил под ним столб со смещением offX; дальше тики
+   * stepPlayer → stepTerrain. Столб твердеет через 12 тиков, когда ступни на ≈ 1,717 м и ещё летят вверх.
+   */
+  function selfLift(offX: number) {
+    const s = createMatchState([createMageUnit(1, "earth", { pos: { x: 0, y: 0, z: 0 }, yaw: 0 })]);
+    const u = s.units[0]!;
+    for (let k = 0; k < 5; k++) u.move = stepPlayer(u.move, NO_INPUT, TICK_DT, ctx.world);
+    const T = 10;
+    Object.assign(u.move, { onGround: false, coyote: 0 });
+    u.move.body.vel.y = Math.sqrt(2 * DEFAULT_MOVE.gravity * 2.8);
+    spawnTerrain(s, tick(s, T), 1, "pillar", aabb(offX - 0.6, 0, -0.6, offX + 0.6, 2.5, 0.6), PILLAR_SPEC);
+    let feetAtSolid = NaN;
+    for (let now = T + 1; now < T + 120; now++) {
+      const t = tick(s, now);
+      u.move = stepPlayer(u.move, NO_INPUT, TICK_DT, t.world);
+      if (now === T + PILLAR_SPEC.solidTicks) feetAtSolid = u.move.body.pos.y;
+      stepTerrain(s, t);
+    }
+    return { feetAtSolid, move: u.move };
+  }
+
+  it("lands an off-centre caster on top of its own pillar instead of shoving it aside", () => {
+    for (const off of [0, 0.4, 0.8]) {
+      const { feetAtSolid, move } = selfLift(off);
+      expect(feetAtSolid).toBeCloseTo(1.717, 3);
+      expect([Number(move.body.pos.x.toFixed(9)), move.body.pos.y, move.body.pos.z, move.onGround]).toEqual([0, 2.5, 0, true]);
+    }
+  });
+
+  it("still takes the shortest way out for a standing, a falling or a slowly rising body", () => {
+    const world = withDynamic(ctx.world, [{ box: PILLAR }]);
+    const cases = [
+      { y: 0, vy: 0, off: 0.4, want: [1, 0] }, // стоит: вбок 0,6 короче, чем вверх 2,5
+      { y: 1.717, vy: -3, off: 0.4, want: [1, 1.717] }, // падает: вбок 0,6 короче, чем вверх 0,783
+      { y: 1.717, vy: -3, off: 0, want: [0, 2.5] }, // падает по центру: вверх 0,783 короче, чем вбок 1
+      { y: 1.717, vy: 2, off: 0.4, want: [1, 1.717] }, // взлетает всего на 0,1 м: вверх остаётся 0,683, вбок 0,6
+    ];
+    for (const c of cases) {
+      const u = dummy(2, c.off, c.y, 0);
+      u.move.body.vel.y = c.vy;
+      expect(pushOut(world, u, PILLAR)).toBe(true);
+      const p = u.move.body.pos;
+      expect([Number(p.x.toFixed(9)), Number(p.y.toFixed(9)), p.z]).toEqual([...c.want, 0]);
+      expect(isFree(world, bodyBox(u.move.body))).toBe(true);
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { DEFAULT_MOVE } from "../player";
 import { TICK_HZ, type Vec3 } from "../types";
-import { DUMMY, EARTH, KNOCKBACK, MAGE_REGEN, MATCH, STATUS, ticks } from "./defs";
+import { CC_LIMITS, DUMMY, EARTH, KNOCKBACK, MAGE_REGEN, MATCH, STATUS, ticks } from "./defs";
 import { unitById } from "./state";
 import type { DamageSource, Knockback, MatchState, TickCtx, Unit, UnitId } from "./types";
 
@@ -40,10 +40,18 @@ const BURN_PULSE_DAMAGE = STATUS.burning.dps * STATUS.burning.pulseS; // 3
 const MAGE_REGEN_DELAY = ticks(MAGE_REGEN.delayS); // 240
 const DUMMY_REGEN_DELAY = ticks(DUMMY.regenDelayS); // 180
 
-/** Тик возрождения: манекен через 3 с (Р12), маг через 1 с (Р17). */
-const respawnAt = (u: Unit, now: number): number => now + ticks(u.mage ? MATCH.mageRespawnS : DUMMY.respawnS);
+/** Самое сильное замедление: множитель скорости не ниже 0,6 (GDD 2.2). */
+const SLOW_MIN_MUL = 1 - CC_LIMITS.slowMaxFrac;
+/** Длительность контроля в секундах в пределах [0, max]; NaN и отрицательное — 0. */
+const ccSeconds = (s: number, max: number): number => (s > 0 ? Math.min(s, max) : 0);
 
-/** Толчок: канал вбок с потолком 12 м, подброс — как прыжок, точной высоты upM. */
+/** Тик возрождения после смерти или сброса: манекен через 3 с (Р12), маг через 1 с (Р17). */
+export const respawnAt = (u: Unit, now: number): number => now + ticks(u.mage ? MATCH.mageRespawnS : DUMMY.respawnS);
+
+/**
+ * Толчок: канал вбок с потолком 12 м, подброс — как прыжок, точной высоты upM. Подброшенный манекен теряет свою
+ * скорость шага: в воздухе его несёт только канал kb, а не 2 м/с патруля (у мага своя скорость — его управление).
+ */
 function push(u: Unit, dir: { x: number; z: number }, k: Knockback): void {
   const v0 = knockbackSpeed(k.distM, k.upM);
   u.kb.x += dir.x * v0;
@@ -51,7 +59,9 @@ function push(u: Unit, dir: { x: number; z: number }, k: Knockback): void {
   const sp = Math.sqrt(u.kb.x * u.kb.x + u.kb.z * u.kb.z);
   if (sp > KB_CAP) Object.assign(u.kb, { x: (u.kb.x * KB_CAP) / sp, z: (u.kb.z * KB_CAP) / sp });
   if (k.upM > 0) {
-    u.move.body.vel.y = Math.max(u.move.body.vel.y, Math.sqrt(2 * G * k.upM));
+    const vel = u.move.body.vel;
+    vel.y = Math.max(vel.y, Math.sqrt(2 * G * k.upM));
+    if (u.dummy) Object.assign(vel, { x: 0, z: 0 });
     Object.assign(u.move, { onGround: false, coyote: 0 });
   }
 }
@@ -96,17 +106,19 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     st.immuneUntil = st.noControlUntil + IMMUNE_TICKS;
     status("airborne", NO_CONTROL_TICKS);
   }
+  // Пределы контроля GDD 2.2 (CC_LIMITS) — страховка от данных: обездвиживание ≤ 1 с, замедление ≤ 40 % и ≤ 2 с.
   if (h.rootS !== undefined && h.rootS > 0 && now >= st.immuneUntil) {
-    const n = ticks(h.rootS);
+    const n = ticks(ccSeconds(h.rootS, CC_LIMITS.rootMaxS));
     st.rootUntil = now + n;
     st.immuneUntil = st.rootUntil + IMMUNE_TICKS;
     Object.assign(u.move.body.vel, { x: 0, z: 0 });
     status("root", n);
   }
   if (h.slow) {
-    const n = ticks(h.slow.s);
+    const n = ticks(ccSeconds(h.slow.s, CC_LIMITS.slowMaxS));
+    const mul = h.slow.mul >= SLOW_MIN_MUL ? Math.min(1, h.slow.mul) : SLOW_MIN_MUL;
     // Истёкшее замедление stepStatuses сбрасывает в 1, но удар может прийти раньше него в том же тике.
-    st.slowMul = now < st.slowUntil ? Math.min(st.slowMul, h.slow.mul) : h.slow.mul;
+    st.slowMul = now < st.slowUntil ? Math.min(st.slowMul, mul) : mul;
     st.slowUntil = Math.max(st.slowUntil, now + n);
     status("slow", n);
   }
@@ -133,11 +145,15 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
   return amount;
 }
 
-/** «Кураж» (пассивка Огня): убийство или засчитанный сброс снимает жар и перезаряжает E. */
+/**
+ * «Кураж» (пассивка Огня): убийство или засчитанный сброс снимает жар и перезаряжает E. Идущий перегрев он
+ * обрывает сам и сам же сообщает об этом (overheat off): кит после обнуления overheatUntil конца перегрева не увидит.
+ */
 export function courage(t: TickCtx, killer: Unit): void {
   const m = killer.mage;
   if (!m || m.element !== "fire") return;
   m.heat = 0;
+  if (t.now < m.overheatUntil) t.ev.push({ type: "overheat", unit: killer.id, on: false });
   m.overheatUntil = 0;
   m.ready.e = Math.min(m.ready.e, t.now);
   t.ev.push({ type: "courage", unit: killer.id });
