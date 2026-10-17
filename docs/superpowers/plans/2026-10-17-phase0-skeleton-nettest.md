@@ -968,8 +968,9 @@ export async function hostRoom(room: string, hostName: string, onUpdate: (s: Hos
   const peer = await openPeer(hostPeerId(room));
   keepSignalling(peer);
   const names = new Map<DataConnection, string>();
-  const reports: NettestResult[] = [];
-  const emit = () => onUpdate({ peers: [...names.values()], reports: [...reports] });
+  /** Один результат на участника: при повторном прохождении остаётся последний. */
+  const reports = new Map<string, NettestResult>();
+  const emit = () => onUpdate({ peers: [...names.values()], reports: [...reports.values()] });
 
   peer.on("connection", (conn: DataConnection) => {
     let snapTimer: ReturnType<typeof setInterval> | undefined;
@@ -990,7 +991,7 @@ export async function hostRoom(room: string, hostName: string, onUpdate: (s: Hos
         send(welcome(msg, { room, host: hostName, peers: names.size }));
         emit();
       } else if (isNettestResult(msg.data)) {
-        reports.push(msg.data);
+        reports.set(msg.data.name || conn.peer, msg.data);
         emit();
       }
     });
