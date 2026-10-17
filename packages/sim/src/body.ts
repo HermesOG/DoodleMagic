@@ -106,6 +106,8 @@ function moveHorizontal(w: World, b: Body, dx: number, dz: number, canStep: bool
  *
  * landVel — это body.vel.y в момент касания. stepPlayer передаёт сюда среднюю за тик скорость (гравитация по
  * трапеции), поэтому через stepPlayer landVel отличается от баллистической скорости касания не больше чем на g·dt/2.
+ * Приземление сообщается всегда, в том числе когда подшаг кончился над опорой ближе GROUND_PROBE_M, не коснувшись её:
+ * тогда подошва ставится точно на верх опоры.
  *
  * Тело, утопленное в коллайдер глубже AHEAD_TOL (0,1 мм), этот коллайдер не видит: может из него выйти, но может
  * и провалиться сквозь него вниз. Поэтому точки появления и телепорта нужно заранее проверять: isFree(w, bodyBox(b)).
@@ -136,6 +138,15 @@ export function moveBody(w: World, b: Body, dt: number, wasOnGround: boolean): M
       b.vel.y = 0;
     } else if (b.vel.y <= 0 && supported(w, b)) {
       onGround = true;
+      if (!grounded) {
+        // Подшаг в воздухе кончился над опорой ближе GROUND_PROBE_M, не коснувшись её: это тоже приземление.
+        // Ставим подошву точно на опору (без этого тело зависало бы и оседало несколько тиков) и отдаём landVel,
+        // как при касании. Если опора — бокс, в который тело утоплено глубже AHEAD_TOL, сдвиг его не видит: стоим где были.
+        const y0 = b.pos.y;
+        if (!sweepAxis(w, b, "y", -GROUND_PROBE_M)) b.pos.y = y0;
+        res.landVel = Math.min(res.landVel, b.vel.y);
+        b.vel.y = 0;
+      }
     } else if (grounded && b.vel.y <= 0 && b.stepHeight > 0) {
       // Прилипание: сошли со ступеньки вниз — опускаемся на неё, а не летим.
       const y0 = b.pos.y;
