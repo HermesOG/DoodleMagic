@@ -1,4 +1,4 @@
-import { ShaderMaterial, Vector3, type IUniform } from "three";
+import { ShaderMaterial, Vector3, type IUniform, type Matrix4 } from "three";
 import { SUN_DIR } from "./palette";
 
 /**
@@ -12,13 +12,37 @@ uniform vec3 uSunDir;
 varying vec3 vViewNormal;
 varying float vTone;
 
+// Нормаль через матрицу m при любом масштабе — неравномерном (сплюснутая варежка, растянутый эффект), зеркальном
+// и вырожденном (ось сжата в ноль): присоединённая матрица cof(m) = det(m)·(m⁻¹)ᵀ без деления на det, знак det
+// возвращает сторону у зеркала. mat3(m) * n верна только при равномерном масштабе. Копия — cofactorNormal ниже.
+vec3 worldNormal(mat3 m, vec3 n) {
+  mat3 cof = mat3(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
+  float side = dot(m[0], cof[0]) < 0.0 ? -1.0 : 1.0;
+  return normalize(side * (cof * n));
+}
+
 void main() {
-  vec3 n = normalize(mat3(modelMatrix) * normal);
-  vTone = dot(n, uSunDir) * 0.5 + 0.5;
-  vViewNormal = normalize(normalMatrix * normal);
+  vTone = dot(worldNormal(mat3(modelMatrix), normal), uSunDir) * 0.5 + 0.5;
+  vViewNormal = worldNormal(mat3(modelViewMatrix), normal);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
+
+/**
+ * То же, что worldNormal в GBUFFER_VERT, на JS (для тестов): нормаль n через верхнюю 3×3 матрицы m по
+ * присоединённой матрице — верно при неравномерном, зеркальном и вырожденном масштабе.
+ */
+export function cofactorNormal(m: Matrix4, n: Vector3): Vector3 {
+  const e = m.elements;
+  const c0 = new Vector3(e[0], e[1], e[2]);
+  const c1 = new Vector3(e[4], e[5], e[6]);
+  const c2 = new Vector3(e[8], e[9], e[10]);
+  const k0 = new Vector3().crossVectors(c1, c2);
+  const k1 = new Vector3().crossVectors(c2, c0);
+  const k2 = new Vector3().crossVectors(c0, c1);
+  const side = c0.dot(k0) < 0 ? -1 : 1;
+  return k0.multiplyScalar(n.x).addScaledVector(k1, n.y).addScaledVector(k2, n.z).multiplyScalar(side).normalize();
+}
 
 export const GBUFFER_FRAG = /* glsl */ `
 uniform float uInk;
