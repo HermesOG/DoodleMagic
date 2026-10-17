@@ -29,7 +29,27 @@ export interface World {
   readonly cells: readonly (readonly number[])[];
 }
 
+const finiteBox = (b: AABB): boolean =>
+  Number.isFinite(b.min.x) &&
+  Number.isFinite(b.min.y) &&
+  Number.isFinite(b.min.z) &&
+  Number.isFinite(b.max.x) &&
+  Number.isFinite(b.max.y) &&
+  Number.isFinite(b.max.z);
+
+/**
+ * Строит мир. Бросает RangeError, если размер клетки — не конечное положительное число или у коллайдера
+ * есть нечисловая или бесконечная координата: такая сетка не строится или строится неверно.
+ */
 export function createWorld(colliders: readonly Collider[], volumes: readonly Volume[] = [], cell = DEFAULT_CELL_M): World {
+  if (!(Number.isFinite(cell) && cell > 0)) {
+    throw new RangeError(`createWorld: cell size must be a finite positive number, got ${cell}`);
+  }
+  colliders.forEach((c, idx) => {
+    if (!finiteBox(c.box)) {
+      throw new RangeError(`createWorld: collider ${idx}${c.tag ? ` (${c.tag})` : ""} has non-finite bounds`);
+    }
+  });
   let minX = 0;
   let minZ = 0;
   let maxX = cell;
@@ -92,8 +112,16 @@ export function isFree(w: World, box: AABB): boolean {
   return overlapping(w, box).length === 0;
 }
 
-/** Первый объём вида `kind`, который пересекает бокс, или null. */
+/**
+ * Внутри ли бокс объёма. Допуск тот же, что у коллайдеров (OVERLAP_EPS): тело, которое только касается грани
+ * объёма, в том числе с погрешностью до микрона, в нём не находится.
+ */
+export function inVolume(box: AABB, v: Volume): boolean {
+  return overlaps(box, v.box, OVERLAP_EPS);
+}
+
+/** Первый объём вида `kind`, внутри которого бокс (см. inVolume), или null. */
 export function volumeAt(w: World, box: AABB, kind: VolumeKind): Volume | null {
-  for (const v of w.volumes) if (v.kind === kind && overlaps(box, v.box)) return v;
+  for (const v of w.volumes) if (v.kind === kind && inVolume(box, v)) return v;
   return null;
 }
