@@ -13,6 +13,7 @@ import {
   WebGLRenderTarget,
   WebGLRenderer,
   type ShaderMaterial,
+  type Texture,
 } from "three";
 import { PRESETS, lineRadiusFor, pixelRatioFor, type Preset, type PresetId } from "./quality";
 import { OVERLAY_DEPTH_RANGE, createStyleMaterial, inverseDepth } from "./stylePass";
@@ -26,16 +27,35 @@ export const WORLD_FOV = 70;
 export const HANDS_FOV = 60;
 
 /**
+ * Проход света магии (решение Р1): сцены, которые рисуются после стилевого прохода прямо на экран, с ручной
+ * проверкой глубины по G-буферу. `world` — камерой мира, `palm` — камерой рук (эффекты у ладоней).
+ */
+export interface FxLayers {
+  world: Scene;
+  palm: Scene;
+}
+
+/** G-буфер для прохода света: поверхность (тон, чернила, нормаль), глубина и её раскодировка камерой мира. */
+export interface GBufferView {
+  surface: Texture;
+  depth: DepthTexture;
+  /** 1 / D = x − y·d для глубины мира; обновляется каждый кадр перед проходом света. */
+  invDepth: Vector2;
+}
+
+/**
  * Рендер «Тушь и свет»: G-буфер (RGBA8 + глубина float) и один стилевой проход на экран.
  * Второй слой (руки) рисуется в тот же G-буфер со своей камерой и диапазоном глубины [0; OVERLAY_DEPTH_RANGE]:
  * он всегда перед миром и потому не уходит в стену, но сам себя перекрывает правильно. Глубину мира при этом
- * не стираем — она нужна стилевому проходу.
+ * не стираем — она нужна стилевому проходу. Третьим проходом (необязательно) — свет магии поверх кадра.
  */
 export class StyleRenderer {
   readonly gl: WebGLRenderer;
   readonly camera = new PerspectiveCamera(WORLD_FOV, 1, NEAR, FAR);
   readonly overlayCamera = new PerspectiveCamera(HANDS_FOV, 1, NEAR, FAR);
   preset: Preset;
+  /** Общие объекты G-буфера для материалов прохода света: те же самые на всё время жизни рендера. */
+  readonly gbuffer: GBufferView;
   private readonly target: WebGLRenderTarget;
   private readonly post: ShaderMaterial;
   private readonly quad: Mesh<PlaneGeometry, ShaderMaterial>;
@@ -66,6 +86,7 @@ export class StyleRenderer {
       stencilBuffer: false,
       depthTexture: depth,
     });
+    this.gbuffer = { surface: this.target.texture, depth, invDepth: new Vector2(1, 0) };
     this.post = createStyleMaterial(this.target.texture, depth);
     this.quad = new Mesh(new PlaneGeometry(2, 2), this.post);
     this.quad.frustumCulled = false;
@@ -140,8 +161,11 @@ export class StyleRenderer {
     };
   }
 
-  /** Кадр: мир и (необязательно) руки в G-буфер, потом стилевой проход на экран. */
-  render(world: Scene, overlay?: Scene): void {
+  /**
+   * Кадр: мир и (необязательно) руки в G-буфер, потом стилевой проход на экран и (необязательно) проход света.
+   * У холста нет своего буфера глубины: материалы света сами сверяются с G-буфером (depthTest и depthWrite выключены).
+   */
+  render(world: Scene, overlay?: Scene, fx?: FxLayers): void {
     const gl = this.gl;
     gl.info.reset();
     gl.setRenderTarget(this.target);
@@ -164,19 +188,29 @@ export class StyleRenderer {
     inverseDepth(this.camera.near, this.camera.far, 1, u.uWorldInvDepth!.value);
     inverseDepth(this.overlayCamera.near, this.overlayCamera.far, OVERLAY_DEPTH_RANGE, u.uOverlayInvDepth!.value);
     gl.render(this.postScene, this.postCamera);
+    if (fx) {
+      inverseDepth(this.camera.near, this.camera.far, 1, this.gbuffer.invDepth);
+      gl.render(fx.world, this.camera);
+      gl.render(fx.palm, this.overlayCamera);
+    }
   }
 
   /**
    * Прогрев: компилирует все шейдеры до первого кадра (с тем же целевым буфером, что и в игре, чтобы
    * three не собрал программу заново) и рисует один кадр, чтобы геометрия ушла в видеопамять.
    */
-  async warmUp(world: Scene, overlay?: Scene): Promise<void> {
+  async warmUp(world: Scene, overlay?: Scene, fx?: FxLayers): Promise<void> {
     this.gl.setRenderTarget(this.target);
     await this.gl.compileAsync(world, this.camera);
     if (overlay) await this.gl.compileAsync(overlay, this.overlayCamera);
     this.gl.setRenderTarget(null);
     await this.gl.compileAsync(this.postScene, this.postCamera);
-    this.render(world, overlay);
+    // свет магии рисуется прямо на экран — и компилируется под экран, своей камерой у каждого слоя
+    if (fx) {
+      await this.gl.compileAsync(fx.world, this.camera);
+      await this.gl.compileAsync(fx.palm, this.overlayCamera);
+    }
+    this.render(world, overlay, fx);
   }
 
   /** Вызовы отрисовки за последний кадр (все проходы). */
