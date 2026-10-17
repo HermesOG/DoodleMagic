@@ -177,6 +177,13 @@ describe("formatReport", () => {
     expect(formatReport(full, judge(full))).not.toContain("Короткий тест");
   });
 
+  it("has no «не идёт» note for a failed short run, because it counts as a failure", () => {
+    const shortBad = buildResult(data({ durationS: 180, disconnects: 1 }), meta);
+    const text = formatReport(shortBad, judge(shortBad));
+    expect(text).not.toContain("не идёт");
+    expect(text).toContain("обрывов связи: 1");
+  });
+
   it("marks a healthy short run in the headline", () => {
     const short = buildResult(data({ durationS: 180 }), meta);
     const first = formatReport(short, judge(short)).split("\n")[0];

@@ -169,7 +169,8 @@ export function formatReport(r: NettestResult, v: Verdict): string {
     `Потери ${r.lossPct.toFixed(1)}% · зависаний ${r.stalls} · обрывов ${r.disconnects}`,
   ];
   for (const reason of v.reasons) lines.push(`• ${reason}`);
-  if (!v.full) lines.push("Короткий тест: в итог «9 из 10» не идёт");
+  // Короткий, но неудачный прогон в итог идёт — как провал, причины уже перечислены выше.
+  if (v.ok && !v.full) lines.push("Короткий тест: в итог «9 из 10» не идёт");
   return lines.join("\n");
 }
 
