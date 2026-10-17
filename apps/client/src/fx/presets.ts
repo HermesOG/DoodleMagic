@@ -127,7 +127,7 @@ const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
   ],
   fireballBoom: [
     L("core", 10, "sphere", [0, 2], [0.12, 0.25], [1.0, 1.6], [2.4, 3.4]),
-    L("flame", 34, "sphere", [2.5, 6], [0.35, 0.6], [0.6, 0.9], [1.3, 1.9], { up: 1.5, r0: 0.6 }),
+    L("flame", 34, "sphere", [2.5, 6], [0.32, 0.62], [0.6, 0.9], [1.3, 1.9], { up: 1.5, r0: 0.6, gravity: -3.4 }),
     L("ember", 24, "sphere", [6, 13], [0.3, 0.6], [0.06, 0.1], [0.03, 0.04], { gravity: 9, up: 2 }),
     L("smoke", 12, "sphere", [1.5, 3.5], [0.8, 1.3], [0.6, 0.9], [1.9, 2.7], { up: 1, r0: 0.6 }),
   ],

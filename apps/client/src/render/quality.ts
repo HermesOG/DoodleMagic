@@ -133,3 +133,69 @@ export function createAutoQuality(start: PresetId = "high", o: AutoQualityOption
     },
   };
 }
+
+export interface QualityWatchdogOptions {
+  /** Окно — столько мс засчитанных кадров; окна идут встык. */
+  windowMs: number;
+  /** Кадр дольше этого — медленный. */
+  slowFrameMs: number;
+  /** Пресет ниже, если медленных кадров в окне не меньше этой доли. */
+  slowShare: number;
+  /** Между сменами пресета — не меньше стольких мс (и от старта сторожа). */
+  minGapMs: number;
+  /** Кадр дольше этого — заминка (вкладка из фона, GC, alt-tab), а не нагрузка: не считаем. */
+  hitchMs: number;
+}
+
+export const QUALITY_WATCHDOG: QualityWatchdogOptions = {
+  windowMs: 4000,
+  slowFrameMs: 18,
+  slowShare: 0.3,
+  minGapMs: 8000,
+  hitchMs: 250,
+};
+
+export interface QualityWatchdog {
+  readonly preset: PresetId;
+  /**
+   * Время очередного кадра, мс; counting — кадр боя (мышь захвачена), иначе он только двигает часы между сменами.
+   * Возвращает пресет ниже, если пора спуститься, иначе null.
+   */
+  push(frameMs: number, counting: boolean): PresetId | null;
+}
+
+/**
+ * Сторож качества после автовыбора: автовыбор судит по первым секундам на экране выбора стихии, а бой тяжелее.
+ * Только спускается: окна по ~4 с из кадров с захваченной мышью; если в окне не меньше 30 % кадров дольше 18 мс —
+ * пресет на ступень ниже, но не чаще раза в 8 с (первая смена — не раньше 8 с после старта сторожа).
+ */
+export function createQualityWatchdog(start: PresetId, o: QualityWatchdogOptions = QUALITY_WATCHDOG): QualityWatchdog {
+  let preset = start;
+  let sinceStep = 0;
+  let counted = 0;
+  let countedMs = 0;
+  let slow = 0;
+  return {
+    get preset() {
+      return preset;
+    },
+    push(frameMs, counting) {
+      // NaN, ноль и отрицательные — мусор таймера
+      if (!(frameMs > 0)) return null;
+      sinceStep += frameMs;
+      if (!counting || frameMs > o.hitchMs || preset === PRESET_ORDER[0]) return null;
+      counted++;
+      countedMs += frameMs;
+      if (frameMs > o.slowFrameMs) slow++;
+      if (countedMs < o.windowMs) return null;
+      const slowWindow = slow >= o.slowShare * counted;
+      counted = 0;
+      countedMs = 0;
+      slow = 0;
+      if (!slowWindow || sinceStep < o.minGapMs) return null;
+      preset = PRESET_ORDER[PRESET_ORDER.indexOf(preset) - 1]!;
+      sinceStep = 0;
+      return preset;
+    },
+  };
+}

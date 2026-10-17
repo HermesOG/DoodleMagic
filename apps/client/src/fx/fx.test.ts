@@ -17,7 +17,7 @@ import { BURST_SHARE, FX_COLOR, MAGIC_LIGHTS, PARTICLE_BUDGET, burstParticles, p
 import { terrainVisualBox } from "./terrainMeshes";
 
 const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => ({ min: { x: x0, y: y0, z: z0 }, max: { x: x1, y: y1, z: z1 } });
-const rng = (seed = 7) => () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+const rng = (seed = 11) =>() => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
 const pose: DummyPose = { pos: { x: 0, y: 0, z: 0 }, yaw: 0, leanX: 0, leanZ: 0, flinch: 0, squash: 1, flash: false, bob: 0 };
 const O = { x: 0, y: 1, z: 0 };
 

@@ -34,7 +34,7 @@ varying vec3 vInfo;
 varying float vSoft;
 varying float vNear;
 const float DRAG = 2.6;
-const float STREAK_S = 0.03;
+const float STREAK_S = 0.04;
 // не больше этой доли высоты кадра на глубине частицы: вплотную к камере квадрат не заливает экран
 const float MAX_SCREEN = 0.35;
 
