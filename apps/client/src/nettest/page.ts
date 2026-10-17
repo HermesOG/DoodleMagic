@@ -1,5 +1,5 @@
 import { cleanRoom, deviceKind, netKind } from "../config";
-import { hostRoom, runPeerTest, type HostSession, type HostState, type PeerOutcome } from "./p2p";
+import { TURN_SERVERS, hostRoom, runPeerTest, type HostSession, type HostState, type PeerOutcome } from "./p2p";
 import {
   CRITERIA,
   buildResult,
@@ -288,9 +288,17 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number, relayOnly:
   const startBtn = byId<HTMLButtonElement>(root, "nt-start");
   const errorLine = byId(root, "nt-error");
   const device = deviceKind(navigator.userAgent);
+  // без настроенного TURN прогон «только через ретранслятор» не откроется никогда: не даём его начать
+  const turnMissing = relayOnly && TURN_SERVERS.length === 0;
   let reportText = "";
   byId(root, "nt-room").textContent = room;
-  byId(root, "nt-mode").hidden = !relayOnly;
+  const modeLine = byId(root, "nt-mode");
+  modeLine.hidden = !relayOnly;
+  if (turnMissing) {
+    modeLine.textContent = "Проверка TURN недоступна: ретранслятор пока не настроен";
+    modeLine.className = "small bad";
+    startBtn.disabled = true;
+  }
   nameInput.value = safeGet(NAME_KEY) ?? "";
   const durations: Array<[number, string]> = [
     [600, "10 минут — полный тест"],
@@ -311,6 +319,7 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number, relayOnly:
   });
 
   async function run(): Promise<void> {
+    if (turnMissing) return;
     const name = nameInput.value.trim().slice(0, 24);
     // хост ведёт результаты по имени и устройству: без имени их не отличить
     if (!name) {

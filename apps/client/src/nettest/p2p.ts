@@ -38,22 +38,21 @@ const ROUTE_CHECK_DELAY_MS = 1500;
 const SIGNALLING_RETRY_MIN_MS = 1000;
 const SIGNALLING_RETRY_MAX_MS = 15_000;
 
-/** Как в Doodle District: STUN от Google и Cloudflare и бесплатный публичный TURN на случай строгого NAT. */
+/**
+ * TURN-ретрансляторы для строгих NAT. Публичный openrelay.metered.ca, как в Doodle District, закрыли в 2026 году
+ * (его DNS отдаёт 192.0.2.1), поэтому список пока пуст. Сюда можно добавить бесплатный TURN, например
+ * Cloudflare Realtime: временные логин и пароль для него будет выдавать функция на Vercel.
+ */
+export const TURN_SERVERS: RTCIceServer[] = [];
+
+/** STUN от Google и Cloudflare; TURN — из TURN_SERVERS, когда он настроен. */
 export const PEER_OPTIONS = {
   config: {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun.cloudflare.com:3478" },
-      {
-        urls: [
-          "turn:openrelay.metered.ca:80",
-          "turn:openrelay.metered.ca:443",
-          "turn:openrelay.metered.ca:443?transport=tcp",
-        ],
-        username: "openrelayproject",
-        credential: "openrelayproject",
-      },
+      ...TURN_SERVERS,
     ],
   },
 };
