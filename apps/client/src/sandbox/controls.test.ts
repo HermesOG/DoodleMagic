@@ -10,6 +10,9 @@ import {
   lookRate,
   moveAxes,
 } from "./controls";
+import { vi } from "vitest";
+import { buildMatchInput } from "./controls";
+import { createInput } from "./input";
 
 describe("moveAxes", () => {
   it("maps WASD by physical key codes", () => {
@@ -97,5 +100,55 @@ describe("clampSensitivity", () => {
     expect(clampSensitivity(10)).toBe(3);
     expect(clampSensitivity(0)).toBe(0.2);
     expect(clampSensitivity(Number.NaN)).toBe(1);
+  });
+});
+
+describe("buildMatchInput", () => {
+  it("adds LMB and Q / E / C by physical code", () => {
+    expect(buildMatchInput(new Set(["Mouse0", "KeyQ", "KeyW"]), { yaw: 0, pitch: 0 })).toEqual({
+      moveX: 0, moveZ: 1, jump: false, yaw: 0, pitch: 0, primary: true, q: true, e: false, c: false,
+    });
+    expect(Object.values(KEYS)).toEqual(expect.arrayContaining(["Mouse0", "KeyQ", "KeyE", "KeyC", "KeyX"]));
+  });
+
+  // первый клик только захватывает мышь: выстрел — лишь при захваченной мыши, и кнопка гаснет вместе с клавишами
+  it("holds LMB only while the mouse is locked and forgets it with the keys", () => {
+    const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
+    const win = new EventTarget();
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("window", win);
+    const canvas = { requestPointerLock: () => Promise.resolve() };
+    const input = createInput(canvas as unknown as HTMLCanvasElement);
+    const mouse = (type: "mousedown" | "mouseup", button: number, ctrlKey = false) =>
+      doc.dispatchEvent(Object.assign(new Event(type), { button, ctrlKey, metaKey: false, altKey: false }));
+    const lock = (on: boolean) => {
+      doc.pointerLockElement = on ? canvas : null;
+      doc.dispatchEvent(new Event("pointerlockchange"));
+    };
+    const primary = () => buildMatchInput(input.down, { yaw: 0, pitch: 0 }).primary;
+    try {
+      // клик «Играть» до захвата не стреляет, его mouseup после захвата ничего не ломает
+      mouse("mousedown", 0);
+      lock(true);
+      expect(primary()).toBe(false);
+      mouse("mouseup", 0);
+      // правая кнопка и Ctrl + клик ни на что не назначены
+      mouse("mousedown", 2);
+      mouse("mousedown", 0, true);
+      expect(primary()).toBe(false);
+      mouse("mousedown", 0);
+      expect(primary()).toBe(true);
+      mouse("mouseup", 0);
+      expect(primary()).toBe(false);
+      mouse("mousedown", 0);
+      win.dispatchEvent(new Event("blur"));
+      expect(primary()).toBe(false);
+      mouse("mousedown", 0);
+      lock(false);
+      expect(primary()).toBe(false);
+    } finally {
+      input.dispose();
+      vi.unstubAllGlobals();
+    }
   });
 });
