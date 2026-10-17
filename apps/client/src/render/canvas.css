@@ -1,0 +1,44 @@
+/* Полноэкранный холст игры. Подключается только игровыми страницами, /nettest не трогает. */
+body.game {
+  margin: 0;
+  overflow: hidden;
+  background: #f2ede0;
+  color: #1d1b16;
+  overscroll-behavior: none;
+}
+body.game #app {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+.game-canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+  cursor: crosshair;
+}
+.game-corner {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(29, 27, 22, 0.72);
+  color: #f6f3ea;
+  font: 13px/1.4 ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: pre;
+}
+.game-loading {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 600 20px/1.4 system-ui, sans-serif;
+  color: #1d1b16;
+  background: #f2ede0;
+}
