@@ -47,6 +47,18 @@ describe("effectsFor", () => {
     expect(kinds({ type: "reject", unit: 1, slot: "q", reason: "notGrounded" })).toEqual(expect.arrayContaining(["palm", "sound", "toast"]));
     expect(kinds({ type: "reject", unit: 1, slot: "q", reason: "cooldown" })).toEqual(["deny"]);
   });
+
+  // выпуск камня ≈ 1,9 раза в секунду: крошка у рук, а не в глазах; добивание горением — тоже убийство
+  it("drops the stone crumble by the hands, not in my eyes, and marks a kill by burning", () => {
+    const eye = V(0, 1.6, 0);
+    const rel = fx({ type: "release", unit: 1, ability: "stoneShot", projectile: 1000, pos: eye, dir: V(0, 0, -1) });
+    const crumble = rel.find((e) => e.kind === "burst");
+    expect(crumble?.kind === "burst" && [crumble.preset, crumble.pos.z < eye.z - 0.5, crumble.pos.y < eye.y - 0.2]).toEqual(["stoneCrumble", true, true]);
+    const burnKill = fx(hitOn(2, { ability: "burning", amount: 3, dot: true, killed: true }));
+    expect(burnKill).toContainEqual(expect.objectContaining({ kind: "hitmarker", kill: true }));
+    expect(burnKill.map((e) => e.kind)).not.toContain("hitstop");
+    expect(kinds(hitOn(2, { ability: "burning", amount: 3, dot: true }))).toEqual(["number"]);
+  });
 });
 
 describe("camera feel", () => {

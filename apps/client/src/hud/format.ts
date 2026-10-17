@@ -16,10 +16,17 @@ export interface FloatingNumber {
   updated: number;
 }
 
-/** Окно слияния урона по времени: импульсы ближе 0,4 с к прошлому — одна растущая цифра (round2/03, п. 7). */
-export const DOT_MERGE_S = 0.4;
+/**
+ * Окно слияния урона по времени: импульс не позже 0,6 с после прошлого — одна растущая цифра (round2/03, п. 7).
+ * Горение и след рывка бьют раз в 0,5 с (Р10): их импульсы складываются.
+ */
+export const DOT_MERGE_S = 0.6;
 
-/** Новая цифра; урон по времени прибавляется к последней цифре урона по времени той же цели, если она свежая. */
+/**
+ * Новая цифра; урон по времени прибавляется к последней цифре урона по времени той же цели, если она свежая.
+ * Слитая цифра переезжает к точке нового импульса: она идёт за целью (подброшенной, патрулирующей), а не висит
+ * там, где был первый; скачок прячет подскок цифры при прибавке.
+ */
 export function mergeNumbers(
   list: FloatingNumber[],
   e: { target: UnitId; amount: number; dot: boolean; air: boolean; pos: Vec3 },
@@ -30,7 +37,7 @@ export function mergeNumbers(
       const n = list[k]!;
       if (!n.dot || n.target !== e.target) continue;
       if (nowS - n.updated > DOT_MERGE_S) break;
-      const merged: FloatingNumber = { ...n, amount: n.amount + e.amount, air: n.air || e.air, updated: nowS };
+      const merged: FloatingNumber = { ...n, amount: n.amount + e.amount, air: n.air || e.air, pos: { ...e.pos }, updated: nowS };
       return [...list.slice(0, k), merged, ...list.slice(k + 1)];
     }
   }

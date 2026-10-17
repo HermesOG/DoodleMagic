@@ -7,9 +7,11 @@ const speed = (v: number): string => v.toFixed(1).replace(".", ",");
 const KEY_OF: Readonly<Record<string, Element>> = { Digit1: "fire", Numpad1: "fire", Digit2: "earth", Numpad2: "earth" };
 
 /**
- * Экран «Выбери стихию» (GDD 4.1, 9): две карточки из ELEMENT_INFO, initial подсвечена. 1 / 2 или клик — выбор;
- * через autoS секунд подтверждается подсвеченная (byClick: false). byClick: true — выбор кликом: этот клик даёт
- * странице право захватить мышь и включить звук.
+ * Экран «Выбери стихию» (GDD 4.1, 9): две карточки из ELEMENT_INFO, initial подсвечена и в фокусе (Enter или
+ * пробел выбирают её). 1 / 2 или клик — выбор; через autoS секунд подтверждается подсвеченная (byClick: false).
+ * byClick: true — выбрал сам игрок кликом или клавишей: это жест пользователя, и в его обработчике странице
+ * можно сразу захватить мышь и включить звук (keydown в Chrome — такой же жест, как клик). Выбор по таймеру —
+ * не жест: после него нужен клик «Играть».
  */
 export function showElementSelect(root: HTMLElement, initial: Element, autoS = 10): Promise<{ element: Element; byClick: boolean }> {
   const auto = Number.isFinite(autoS) && autoS > 0 ? autoS : 0;
@@ -49,11 +51,13 @@ export function showElementSelect(root: HTMLElement, initial: Element, autoS = 1
       const element = KEY_OF[e.code];
       if (!element) return;
       e.preventDefault();
-      done(element, false);
+      done(element, true);
     };
+    // Enter и пробел на кнопке в фокусе приходят сюда же как click
     for (const b of screen.querySelectorAll<HTMLButtonElement>(".es-card")) {
       b.addEventListener("click", () => done(b.dataset.element === "earth" ? "earth" : "fire", true));
     }
+    screen.querySelector<HTMLButtonElement>(".es-card.is-on")?.focus({ preventScroll: true });
     window.addEventListener("keydown", onKey);
     if (auto) timer = setTimeout(() => done(initial, false), auto * 1000);
   });
