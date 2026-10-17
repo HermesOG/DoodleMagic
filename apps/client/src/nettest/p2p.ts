@@ -1,5 +1,6 @@
 import { Peer, type DataConnection } from "peerjs";
 import { NETTEST_VERSION, SNAPSHOT_HZ, makeSnapshot, parseClientMsg, pong, welcome, type HostMsg } from "@doodlemagic/protocol";
+import { hostPeerId } from "../config";
 import { routeFromStats, type StatsEntry } from "./route";
 import { isNettestResult, type LinkTestData, type NettestResult } from "./stats";
 
@@ -39,10 +40,6 @@ export const PEER_OPTIONS = {
 const CONN_OPTIONS = { serialization: "raw", reliable: false };
 
 type PeerError = Error & { type?: string };
-
-export function hostPeerId(room: string): string {
-  return `doodlemagic-nt-${room.toLowerCase()}-host`;
-}
 
 function openPeer(id: string | null): Promise<Peer> {
   return new Promise((resolve, reject) => {
