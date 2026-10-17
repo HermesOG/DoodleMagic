@@ -1,5 +1,5 @@
-import { cleanRoom } from "../config";
-import { hostRoom, runPeerTest, type PeerOutcome } from "./p2p";
+import { cleanRoom, deviceKind, netKind } from "../config";
+import { hostRoom, runPeerTest, type HostSession, type HostState, type PeerOutcome } from "./p2p";
 import {
   CRITERIA,
   buildResult,
@@ -8,6 +8,7 @@ import {
   formatReport,
   formatSummary,
   judge,
+  parseHostSave,
   summarizeRtt,
   type ResultMeta,
 } from "./stats";
@@ -28,13 +29,21 @@ function safeSet(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
   } catch {
-    // приватный режим: имя просто не запомнится
+    // приватный режим или переполнение: значение просто не запомнится
+  }
+}
+
+function safeRemove(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // хранилище недоступно — удалять нечего
   }
 }
 
 const fmtClock = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-const connType = (): string =>
-  (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType ?? "?";
+const navConnection = () =>
+  (navigator as Navigator & { connection?: { type?: string; effectiveType?: string } }).connection;
 
 function byId<T extends HTMLElement = HTMLElement>(root: HTMLElement, id: string): T {
   const node = root.querySelector<T>(`#${id}`);
@@ -102,13 +111,16 @@ export function mountNettest(root: HTMLElement): void {
   const params = new URLSearchParams(location.search);
   const room = cleanRoom(params.get("room"));
   if (params.get("host") === "1") mountHost(root, room);
-  else mountPeer(root, room, Number(params.get("dur")));
+  else mountPeer(root, room, Number(params.get("dur")), params.get("relay") === "1");
 }
 
 // ---------------------------------------------------------------- хост
 
 function mountHost(root: HTMLElement, room: string): void {
   const shareLink = `${location.origin}/nettest?room=${encodeURIComponent(room)}`;
+  // результаты переживают перезагрузку вкладки хоста; у каждой комнаты свои
+  const saveKey = `nettest_host_${room}`;
+  const saved = parseHostSave(safeGet(saveKey));
   root.innerHTML = `
     <section class="card">
       <h1>Тест связи: ты хост</h1>
@@ -124,21 +136,74 @@ function mountHost(root: HTMLElement, room: string): void {
       <button id="nt-copy-link" class="btn secondary" type="button">Скопировать ссылку</button>
       <h2>Сейчас в тесте: <span id="nt-count">0</span></h2>
       <p class="muted small" id="nt-peers"></p>
+      <p class="small" id="nt-hidden"></p>
       <h2>Результаты</h2>
       <pre id="nt-summary"></pre>
-      <button id="nt-copy-summary" class="btn secondary" type="button">Скопировать сводку</button>
+      <div class="actions">
+        <button id="nt-copy-summary" class="btn secondary" type="button">Скопировать сводку</button>
+        <button id="nt-clear" class="btn secondary" type="button">Очистить результаты</button>
+      </div>
     </section>`;
 
   const nameInput = byId<HTMLInputElement>(root, "nt-name");
   const openBtn = byId<HTMLButtonElement>(root, "nt-open");
   const status = byId(root, "nt-status");
-  let summary = formatSummary([]);
+  const hiddenLine = byId(root, "nt-hidden");
+  let summary = "";
+  let session: HostSession | null = null;
+  let state: HostState = { peers: [], reports: saved.reports, failedOpens: saved.failedOpens };
+  // Скрытая вкладка хоста: браузер душит её таймеры, и снапшоты идут реже. Считаем с открытия комнаты.
+  let hiddenBeforeS = saved.hostHiddenS;
+  let hiddenSince: number | null = null;
+  const hostHiddenS = (): number =>
+    Math.round(hiddenBeforeS + (hiddenSince === null ? 0 : (performance.now() - hiddenSince) / 1000));
+
+  const render = (): void => {
+    const hidden = hostHiddenS();
+    summary = formatSummary(state.reports, { failedOpens: state.failedOpens, hostHiddenS: hidden });
+    byId(root, "nt-summary").textContent = summary;
+    byId(root, "nt-count").textContent = String(state.peers.length);
+    byId(root, "nt-peers").textContent = state.peers.join(", ");
+    hiddenLine.textContent =
+      hidden > 0 ? `Вкладка хоста была скрыта ${hidden} с — результаты за это время ненадёжны` : "Вкладка хоста не скрывалась ✓";
+    hiddenLine.className = hidden > 0 ? "small bad" : "small ok";
+  };
+  const save = (): void => {
+    safeSet(
+      saveKey,
+      JSON.stringify({ reports: state.reports, failedOpens: state.failedOpens, hostHiddenS: hostHiddenS() }),
+    );
+  };
+  const onVisibility = (): void => {
+    const now = performance.now();
+    if (document.hidden) hiddenSince ??= now;
+    else if (hiddenSince !== null) {
+      hiddenBeforeS += (now - hiddenSince) / 1000;
+      hiddenSince = null;
+    }
+    render();
+    save();
+  };
+
   byId(root, "nt-room").textContent = room;
   byId(root, "nt-link").textContent = shareLink;
-  byId(root, "nt-summary").textContent = summary;
   nameInput.value = safeGet(HOST_NAME_KEY) ?? "";
+  render();
+  const restored = saved.reports.length + saved.failedOpens.length;
+  if (restored > 0) {
+    status.textContent = `Сохранены результаты прошлого запуска: ${restored}. Они будут в сводке, когда откроешь комнату.`;
+  }
   copyOnClick(byId<HTMLButtonElement>(root, "nt-copy-link"), () => shareLink);
   copyOnClick(byId<HTMLButtonElement>(root, "nt-copy-summary"), () => summary);
+  byId<HTMLButtonElement>(root, "nt-clear").addEventListener("click", () => {
+    if (!confirm("Удалить все результаты этой комнаты? Вернуть их будет нельзя.")) return;
+    hiddenBeforeS = 0;
+    hiddenSince = null;
+    state = { ...state, reports: [], failedOpens: [] };
+    session?.clear();
+    safeRemove(saveKey);
+    render();
+  });
 
   openBtn.addEventListener("click", () => {
     void open();
@@ -151,12 +216,16 @@ function mountHost(root: HTMLElement, room: string): void {
     nameInput.disabled = true;
     status.textContent = "Открываем комнату…";
     try {
-      await hostRoom(room, name, (s) => {
-        byId(root, "nt-count").textContent = String(s.peers.length);
-        byId(root, "nt-peers").textContent = s.peers.join(", ");
-        summary = formatSummary(s.reports);
-        byId(root, "nt-summary").textContent = summary;
-      });
+      session = await hostRoom(
+        room,
+        name,
+        (s) => {
+          state = s;
+          render();
+          save();
+        },
+        { reports: saved.reports, failedOpens: saved.failedOpens },
+      );
     } catch (e) {
       const type = (e as { type?: string }).type;
       status.textContent =
@@ -168,19 +237,30 @@ function mountHost(root: HTMLElement, room: string): void {
       return;
     }
     const wake = holdWakeLock();
-    window.addEventListener("pagehide", () => wake.release(), { once: true });
+    window.addEventListener(
+      "pagehide",
+      () => {
+        wake.release();
+        save();
+      },
+      { once: true },
+    );
+    if (document.hidden) hiddenSince = performance.now();
+    document.addEventListener("visibilitychange", onVisibility);
     status.textContent = "Комната открыта ✓ Не закрывай и не сворачивай эту вкладку.";
     byId(root, "nt-room-card").hidden = false;
+    render();
   }
 }
 
 // ---------------------------------------------------------------- участник
 
-function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
+function mountPeer(root: HTMLElement, room: string, debugDur: number, relayOnly: boolean): void {
   root.innerHTML = `
     <section class="card">
       <h1>Тест связи</h1>
       <p class="muted">Проверяем, потянет ли твой интернет онлайн-игру DoodleMagic. Тест идёт 10 минут: не закрывай и не сворачивай вкладку, не давай компьютеру уснуть.</p>
+      <p class="small" id="nt-mode" hidden><b>Режим: только через ретранслятор (TURN)</b></p>
       <label>Как тебя зовут <input id="nt-name" maxlength="24" autocomplete="nickname" placeholder="Например, Аня" /></label>
       <label>Длительность <select id="nt-dur"></select></label>
       <p class="muted small">Комната: <b id="nt-room"></b></p>
@@ -207,8 +287,10 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
   const durSelect = byId<HTMLSelectElement>(root, "nt-dur");
   const startBtn = byId<HTMLButtonElement>(root, "nt-start");
   const errorLine = byId(root, "nt-error");
+  const device = deviceKind(navigator.userAgent);
   let reportText = "";
   byId(root, "nt-room").textContent = room;
+  byId(root, "nt-mode").hidden = !relayOnly;
   nameInput.value = safeGet(NAME_KEY) ?? "";
   const durations: Array<[number, string]> = [
     [600, "10 минут — полный тест"],
@@ -230,6 +312,12 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
 
   async function run(): Promise<void> {
     const name = nameInput.value.trim().slice(0, 24);
+    // хост ведёт результаты по имени и устройству: без имени их не отличить
+    if (!name) {
+      errorLine.textContent = "Впиши имя, чтобы хост тебя узнал";
+      nameInput.focus();
+      return;
+    }
     safeSet(NAME_KEY, name);
     setInputsDisabled(true);
     errorLine.textContent = "";
@@ -244,6 +332,8 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
       outcome = await runPeerTest({
         room,
         name,
+        device,
+        relayOnly,
         durationS: Number(durSelect.value),
         onTick: (d, connected, hostName) => {
           const now = performance.now();
@@ -285,8 +375,11 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
       room,
       host: outcome.hostName,
       ua: navigator.userAgent.slice(0, 160),
-      conn: connType(),
+      conn: navConnection()?.effectiveType ?? "?",
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      device,
+      net: netKind(navConnection()),
+      relayOnly,
     };
     const result = buildResult(outcome.data, meta);
     const verdict = judge(result);
@@ -299,9 +392,14 @@ function mountPeer(root: HTMLElement, room: string, debugDur: number): void {
     // последний тик в onTick не приходит, и живой счётчик зависаний не видит хвостовой разрыв: итог показывает только отчёт
     byId(root, "nt-live").hidden = true;
     byId(root, "nt-result").hidden = false;
-    byId(root, "nt-sent").textContent = outcome.sendReport(result)
-      ? "Результат отправлен хосту ✓"
-      : "Связь с хостом уже закрыта — скопируй текст и пришли в чат";
-    setTimeout(() => outcome.close(), 1500);
+    const sentLine = byId(root, "nt-sent");
+    sentLine.textContent = "Отправляем результат хосту…";
+    // peer живёт, пока хост не подтвердит получение или не выйдет срок ожидания
+    const delivered = await outcome.sendReport(result);
+    outcome.close();
+    sentLine.textContent = delivered
+      ? "Результат доставлен хосту ✓"
+      : "Хост не подтвердил получение — скопируй текст и пришли в чат";
+    sentLine.className = delivered ? "small ok" : "small bad";
   }
 }

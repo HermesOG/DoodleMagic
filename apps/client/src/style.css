@@ -50,3 +50,4 @@ pre {
 }
 .ok { color: var(--good); }
 .bad { color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }

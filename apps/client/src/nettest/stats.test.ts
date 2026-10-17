@@ -8,13 +8,24 @@ import {
   isNettestResult,
   judge,
   lossPct,
+  parseHostSave,
   percentile,
   summarizeRtt,
   type LinkTestData,
   type ResultMeta,
 } from "./stats";
 
-const meta: ResultMeta = { name: "Аня", room: "FRIENDS", host: "Хост", ua: "test", conn: "4g", tz: "Asia/Tashkent" };
+const meta: ResultMeta = {
+  name: "Аня",
+  room: "FRIENDS",
+  host: "Хост",
+  ua: "test",
+  conn: "4g",
+  tz: "Asia/Tashkent",
+  device: "ПК",
+  net: "wifi",
+  relayOnly: false,
+};
 
 /** 10 минут здоровой связи: пинг 60 мс, сообщение от хоста каждые 50 мс. */
 function data(over: Partial<LinkTestData> = {}): LinkTestData {
@@ -28,6 +39,8 @@ function data(over: Partial<LinkTestData> = {}): LinkTestData {
     disconnects: 0,
     hiddenMs: 0,
     durationS: 600,
+    opened: true,
+    snaps: 12000,
     ...over,
   };
 }
@@ -57,13 +70,20 @@ describe("percentile", () => {
 
 describe("summarizeRtt", () => {
   it("summarizes samples kept in arrival order", () => {
-    expect(summarizeRtt([30, 10, 20])).toEqual({ count: 3, p50: 20, p95: 30, max: 30, jitter: 15 });
+    expect(summarizeRtt([30, 10, 20])).toEqual({ count: 3, p50: 20, p95: 30, p99: 30, max: 30, jitter: 15 });
+  });
+
+  it("reports the p99 tail separately from p95", () => {
+    const s = summarizeRtt(Array.from({ length: 100 }, (_, i) => i + 1));
+    expect(s.p95).toBe(95);
+    expect(s.p99).toBe(99);
   });
 
   it("handles no samples", () => {
     const s = summarizeRtt([]);
     expect(s.count).toBe(0);
     expect(s.p95).toBeNaN();
+    expect(s.p99).toBeNaN();
   });
 });
 
@@ -80,6 +100,18 @@ describe("lossPct", () => {
 
   it("is zero when nothing was sent", () => {
     expect(lossPct(0, 0)).toBe(0);
+  });
+});
+
+describe("buildResult", () => {
+  it("is a v3 result with device, network, open flag and snapshot rate", () => {
+    const r = buildResult(data(), meta);
+    expect(r).toMatchObject({ v: 3, device: "ПК", net: "wifi", relayOnly: false, opened: true, snapRate: 20 });
+  });
+
+  it("rounds the snapshot rate to tenths", () => {
+    expect(buildResult(data({ snaps: 10_799 }), meta).snapRate).toBe(18);
+    expect(buildResult(data({ snaps: 100, durationS: 0 }), meta).snapRate).toBe(0);
   });
 });
 
@@ -149,10 +181,38 @@ describe("judge", () => {
   it("fails on disconnects, loss and a hidden tab", () => {
     const v = judge(buildResult(data({ disconnects: 1, sent: 100, received: 90, hiddenMs: 30_000 }), meta));
     expect(v.reasons).toHaveLength(3);
+    expect(v.reasons).toContain("пинги без ответа: 10.0%");
   });
 
-  it("fails when the host never answered", () => {
-    expect(judge(buildResult(data({ rtts: [] }), meta)).reasons).toContain("хост не ответил ни разу");
+  it("fails when the host never answered on an open channel", () => {
+    expect(judge(buildResult(data({ rtts: [] }), meta)).reasons).toEqual(["хост не ответил ни разу"]);
+  });
+
+  it("says the P2P channel never opened when no connection opened", () => {
+    const r = buildResult(data({ rtts: [], arrivals: [], snaps: 0, opened: false }), meta);
+    expect(judge(r)).toEqual({
+      ok: false,
+      full: true,
+      reasons: ["канал с хостом не открылся (P2P не прошёл даже через TURN)"],
+    });
+  });
+
+  it("fails when host snapshots came too rarely", () => {
+    const v = judge(buildResult(data({ snaps: 6000 }), meta));
+    expect(v.ok).toBe(false);
+    expect(v.reasons).toEqual([
+      "снапшоты от хоста приходили 10.0/с вместо 20 — хост тормозил или его вкладка была скрыта",
+    ]);
+  });
+
+  it("accepts a snapshot rate of exactly 18 per second and fails just below", () => {
+    expect(judge(buildResult(data({ snaps: 10_800 }), meta)).ok).toBe(true);
+    expect(judge(buildResult(data({ snaps: 10_740 }), meta)).ok).toBe(false);
+  });
+
+  it("fails closed when a remote report has a null snapshot rate", () => {
+    const wire = JSON.parse(JSON.stringify({ ...buildResult(data(), meta), snapRate: Number.NaN }));
+    expect(judge(wire).reasons.join(" ")).toContain("снапшоты от хоста приходили ?/с");
   });
 });
 
@@ -162,7 +222,22 @@ describe("formatReport", () => {
     const text = formatReport(r, judge(r));
     expect(text).toContain("ПРОБЛЕМЫ");
     expect(text).toContain("p50 60 мс");
+    expect(text).toContain("p99 60 мс");
     expect(text).toContain("обрывов связи: 2");
+  });
+
+  it("names unanswered pings honestly and shows the snapshot rate, device and network", () => {
+    const r = buildResult(data(), meta);
+    const text = formatReport(r, judge(r));
+    expect(text).toContain("Имя: Аня · ПК · сеть wifi · комната FRIENDS · 600 с");
+    expect(text).toContain("Пинги без ответа 0.0% · зависаний 0 · обрывов 0 · снапшоты 20.0/с");
+    expect(text).not.toContain("Потери");
+    expect(text).not.toContain("Режим:");
+  });
+
+  it("marks a forced-TURN check", () => {
+    const r = buildResult(data({ route: "relay" }), { ...meta, relayOnly: true });
+    expect(formatReport(r, judge(r))).toContain("Режим: только через ретранслятор (TURN)");
   });
 
   it("names the host and the route", () => {
@@ -211,9 +286,15 @@ describe("isNettestResult", () => {
   it.each([
     ["null", null],
     ["old version", { ...buildResult(data(), meta), v: 1 }],
+    ["v2 report", { ...buildResult(data(), meta), v: 2 }],
     ["missing rtt", { ...buildResult(data(), meta), rtt: undefined }],
     ["string stalls", { ...buildResult(data(), meta), stalls: "0" }],
     ["unknown route", { ...buildResult(data(), meta), route: "satellite" }],
+    ["missing device", { ...buildResult(data(), meta), device: undefined }],
+    ["numeric net", { ...buildResult(data(), meta), net: 4 }],
+    ["string opened", { ...buildResult(data(), meta), opened: "true" }],
+    ["string relayOnly", { ...buildResult(data(), meta), relayOnly: "false" }],
+    ["missing snapRate", { ...buildResult(data(), meta), snapRate: undefined }],
   ])("rejects %s", (_label, value) => {
     expect(isNettestResult(value)).toBe(false);
   });
@@ -228,8 +309,8 @@ describe("formatSummary", () => {
     const good = buildResult(data(), meta);
     const bad = buildResult(data({ route: "relay", disconnects: 1 }), { ...meta, name: "Боря" });
     const text = formatSummary([good, bad]);
-    expect(text).toContain("OK   Аня");
-    expect(text).toContain("FAIL Боря · TURN");
+    expect(text).toContain("OK   Аня · ПК · напрямую");
+    expect(text).toContain("FAIL Боря · ПК · TURN");
     expect(text).toContain("• обрывов связи: 1");
     expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).toContain("Через ретранслятор (TURN): 1 из 2.");
@@ -243,8 +324,8 @@ describe("formatSummary", () => {
     const text = formatSummary([good, bad, short]);
     expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).toContain("Коротких тестов (не в зачёт): 1.");
-    expect(text).toContain("OK   Вася · короткий · TURN");
-    expect(text).not.toContain("OK   Аня · короткий");
+    expect(text).toContain("OK   Вася · ПК · короткий · TURN");
+    expect(text).not.toContain("OK   Аня · ПК · короткий");
     expect(text).toContain("Через ретранслятор (TURN): 1 из 3.");
   });
 
@@ -254,7 +335,7 @@ describe("formatSummary", () => {
     const text = formatSummary([good, shortBad]);
     expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
     expect(text).not.toContain("Коротких тестов");
-    expect(text).toContain("FAIL Вася · короткий");
+    expect(text).toContain("FAIL Вася · ПК · короткий");
     expect(text).toContain("• обрывов связи: 1");
   });
 
@@ -274,5 +355,105 @@ describe("formatSummary", () => {
   it("shows missing ping values after a JSON round trip as dashes", () => {
     const r = JSON.parse(JSON.stringify(buildResult(data({ rtts: [] }), meta)));
     expect(formatSummary([r])).toContain("p50 —");
+  });
+
+  it("shows the device, p99 and unanswered pings in each row", () => {
+    const phone = buildResult(data(), { ...meta, device: "телефон" });
+    const text = formatSummary([phone]);
+    expect(text).toContain(
+      "OK   Аня · телефон · напрямую · p50 60 мс · p95 60 мс · p99 60 мс · зав 0 · обр 0 · без ответа 0.0% · 600 с",
+    );
+    expect(text).not.toContain("пот ");
+  });
+
+  it("counts participants whose channel never opened as failures", () => {
+    const good = buildResult(data(), meta);
+    const text = formatSummary([good], { failedOpens: [{ name: "Вася", device: "телефон", relayOnly: false }] });
+    expect(text).toContain("FAIL Вася · телефон · канал не открылся");
+    expect(text).toContain("Прошли 1 из 2 в зачёте (50 %). Порог: 90 %.");
+    expect(text).toContain("Через ретранслятор (TURN): 0 из 1.");
+  });
+
+  it("lists failed opens even without any report", () => {
+    const text = formatSummary([], { failedOpens: [{ name: "Вася", device: "ПК", relayOnly: false }] });
+    expect(text).toContain("FAIL Вася · ПК · канал не открылся");
+    expect(text).toContain("Прошли 0 из 1 в зачёте (0 %).");
+    expect(text.split("\n").at(-1)).toBe("Критерий (≥ 90 % в зачёте): не выполнен ✗");
+  });
+
+  it("warns when the host tab was hidden", () => {
+    const r = buildResult(data(), meta);
+    expect(formatSummary([r], { hostHiddenS: 42 })).toContain(
+      "Вкладка хоста была скрыта 42 с — результаты за это время ненадёжны",
+    );
+    expect(formatSummary([r], { hostHiddenS: 0 })).not.toContain("Вкладка хоста");
+    expect(formatSummary([], { hostHiddenS: 7 })).toContain("Вкладка хоста была скрыта 7 с");
+  });
+
+  it("ends with an explicit verdict on the 90 % rule", () => {
+    const good = (name: string) => buildResult(data(), { ...meta, name });
+    const bad = (name: string) => buildResult(data({ disconnects: 1 }), { ...meta, name });
+    const names = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    const nine = formatSummary([...names.map(good), good("I"), bad("J")]);
+    expect(nine).toContain("Прошли 9 из 10 в зачёте (90 %).");
+    expect(nine.split("\n").at(-1)).toBe("Критерий (≥ 90 % в зачёте): выполнен ✓");
+    const eight = formatSummary([...names.map(good), bad("I"), bad("J")], { hostHiddenS: 3 });
+    expect(eight.split("\n").at(-1)).toBe("Критерий (≥ 90 % в зачёте): не выполнен ✗");
+  });
+
+  it("cannot judge the rule while nothing counts", () => {
+    const short = buildResult(data({ durationS: 60 }), meta);
+    expect(formatSummary([short]).split("\n").at(-1)).toBe("Критерий: пока не оценить — нет результатов в зачёте");
+  });
+
+  it("keeps forced-TURN checks out of the 9-of-10 count and the natural TURN share", () => {
+    const good = buildResult(data(), meta);
+    const turnOk = buildResult(data({ route: "relay" }), { ...meta, name: "Боря", relayOnly: true });
+    const turnBad = buildResult(data({ route: "relay", rtts: Array.from({ length: 100 }, () => 300) }), {
+      ...meta,
+      name: "Вася",
+      relayOnly: true,
+    });
+    const text = formatSummary([good, turnOk, turnBad], {
+      failedOpens: [{ name: "Гена", device: "ПК", relayOnly: true }],
+    });
+    expect(text).toContain("OK   Боря · ПК · проверка TURN · TURN");
+    expect(text).toContain("FAIL Вася · ПК · проверка TURN · TURN");
+    expect(text).toContain("FAIL Гена · ПК · проверка TURN · канал не открылся");
+    expect(text).toContain("Прошли 1 из 1 в зачёте (100 %).");
+    expect(text).toContain("Проверок только через TURN (не в зачёт): 3, прошли 1.");
+    expect(text).toContain("Через ретранслятор (TURN): 0 из 1.");
+    expect(text.split("\n").at(-1)).toBe("Критерий (≥ 90 % в зачёте): выполнен ✓");
+  });
+});
+
+describe("parseHostSave", () => {
+  const empty = { reports: [], failedOpens: [], hostHiddenS: 0 };
+
+  it("is empty without saved data or with broken JSON", () => {
+    expect(parseHostSave(null)).toEqual(empty);
+    expect(parseHostSave("{")).toEqual(empty);
+    expect(parseHostSave("[]")).toEqual(empty);
+  });
+
+  it("restores what the host page saved", () => {
+    const saved = {
+      reports: [buildResult(data(), meta)],
+      failedOpens: [{ name: "Вася", device: "телефон", relayOnly: false }],
+      hostHiddenS: 42,
+    };
+    expect(parseHostSave(JSON.stringify(saved))).toEqual(JSON.parse(JSON.stringify(saved)));
+  });
+
+  it("drops reports of another version and malformed entries", () => {
+    const raw = JSON.stringify({
+      reports: [{ ...buildResult(data(), meta), v: 2 }, "junk", buildResult(data(), { ...meta, name: "Боря" })],
+      failedOpens: [null, "Вася", { name: " Гена ", device: "ПК" }],
+      hostHiddenS: -5,
+    });
+    const s = parseHostSave(raw);
+    expect(s.reports.map((r) => r.name)).toEqual(["Боря"]);
+    expect(s.failedOpens).toEqual([{ name: "Гена", device: "ПК", relayOnly: false }]);
+    expect(s.hostHiddenS).toBe(0);
   });
 });
