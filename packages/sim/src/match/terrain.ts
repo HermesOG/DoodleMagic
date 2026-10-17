@@ -87,10 +87,16 @@ export function stepTerrain(s: MatchState, t: TickCtx): void {
   }
 }
 
+/** Гравитация движения юнитов: та же, что у stepPlayer (маги и манекены идут от DEFAULT_MOVE). */
+const G = DEFAULT_MOVE.gravity;
+
 /**
  * Выталкивание из рельефа, выросшего в теле (Р16): кратчайший свободный путь из box — вверх на верх бокса, ±x, ±z
- * (при равной длине — в этом порядке). Вверх — без прибавки к вершине полёта: взлетающему телу скорость
- * уменьшается на набранную высоту. Возвращает true, если тело сдвинуто.
+ * (при равной длине — в этом порядке). Путь вверх считается за вычетом собственного подъёма тела v²/2g: взлетающее
+ * тело (подъём «под себя» на столбе) и так поднимется выше, поэтому выйти на верх ему почти ничего не стоит, и вбок
+ * его не сносит, даже если маг стоял не по центру столба. Стоящему и падающему телу подъёма нет — путь как есть.
+ * Вверх — без прибавки к вершине полёта: взлетающему телу скорость уменьшается на набранную высоту.
+ * Возвращает true, если тело сдвинуто.
  */
 export function pushOut(world: World, u: Unit, box: AABB): boolean {
   const b = u.move.body;
@@ -103,10 +109,11 @@ export function pushOut(world: World, u: Unit, box: AABB): boolean {
     { dx: 0, dy: 0, dz: box.max.z + b.halfW - p.z },
     { dx: 0, dy: 0, dz: box.min.z - b.halfW - p.z },
   ];
+  const rise = b.vel.y > 0 ? (b.vel.y * b.vel.y) / (2 * G) : 0;
   let best: (typeof options)[number] | null = null;
   let bestLen = Infinity;
   for (const o of options) {
-    const len = Math.abs(o.dx) + Math.abs(o.dy) + Math.abs(o.dz);
+    const len = Math.abs(o.dx) + Math.abs(o.dz) + (o.dy > 0 ? Math.max(0, o.dy - rise) : Math.abs(o.dy));
     if (len < bestLen && isFree(world, bodyBox({ ...b, pos: { x: p.x + o.dx, y: p.y + o.dy, z: p.z + o.dz } }))) {
       best = o;
       bestLen = len;
@@ -117,7 +124,7 @@ export function pushOut(world: World, u: Unit, box: AABB): boolean {
   p.y += best.dy;
   p.z += best.dz;
   if (best.dy > 0) {
-    if (b.vel.y > 0) b.vel.y = Math.sqrt(Math.max(0, b.vel.y * b.vel.y - 2 * DEFAULT_MOVE.gravity * best.dy));
+    if (b.vel.y > 0) b.vel.y = Math.sqrt(Math.max(0, b.vel.y * b.vel.y - 2 * G * best.dy));
     u.move.onGround = b.vel.y <= 0;
   }
   return true;
