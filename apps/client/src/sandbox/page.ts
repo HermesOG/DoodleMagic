@@ -9,7 +9,7 @@ import { buildArenaMeshes } from "../render/arenaMeshes";
 import { FPS_METER_MAX_FRAME_MS, createFpsMeter } from "../render/fpsMeter";
 import { createAutoQuality, type AutoQuality } from "../render/quality";
 import { StyleRenderer } from "../render/styleRenderer";
-import { KEYS, applyLook, buildInput, type Look } from "./controls";
+import { KEYS, applyLook, buildInput, lookRate, type Look } from "./controls";
 import { advanceClock } from "./fixedStep";
 import { CONTEXT_LOST_MESSAGE, createHud } from "./hud";
 import { createInput } from "./input";
@@ -47,8 +47,6 @@ export function mountSandbox(root: HTMLElement): void {
   let prev = cur;
   let look: Look = { yaw: cur.yaw, pitch: 0 };
   let acc = 0;
-  /** Самое сильное приземление за кадр (все тики кадра); руки читают его и обнуляют. */
-  let landVel = 0;
   let auto: AutoQuality | null = settings.quality === "auto" ? createAutoQuality("high") : null;
   const meter = createFpsMeter();
 
@@ -93,24 +91,39 @@ export function mountSandbox(root: HTMLElement): void {
     last = now;
 
     const mouse = input.takeMouse();
+    const lookBefore = look;
     look = applyLook(look, mouse.dx, mouse.dy, settings.sensitivity, rawMs);
+    // рукам — скорость поворота, который взгляд действительно получил (с множителем, без выброшенных скачков);
+    // сброс взгляда при респауне ниже сюда не попадает
+    const turn = lookRate(lookBefore, look, rawMs / 1000);
     const keys = input.locked ? input.down : new Set<string>();
 
     // после зависания advanceClock не догоняет: больше 5 тиков за кадр не делает
     const clock = advanceClock(acc, rawMs / 1000, TICK_DT);
     acc = clock.acc;
+    /** Самое сильное приземление за тики кадра и номер его тика. */
+    let landVel = 0;
+    let landTick = 0;
+    let respawned = false;
     for (let k = 0; k < clock.ticks; k++) {
       prev = cur;
       cur = stepPlayer(cur, buildInput(keys, look), TICK_DT, world);
-      if (cur.landVel < 0) landVel = Math.min(landVel, cur.landVel);
+      if (cur.landVel < landVel) {
+        landVel = cur.landVel;
+        landTick = k;
+      }
       if (shouldRespawn(world, cur, arena)) {
         spawnIndex = nextSpawnIndex(spawnIndex, arena.spawns.length);
         // зажатый с прыжка пробел не должен подбросить мага сразу после появления
         cur = respawnPlayer(arena, spawnIndex, cur);
         prev = cur;
         look = { yaw: cur.yaw, pitch: 0 };
+        landVel = 0;
+        respawned = true;
       }
     }
+    // руки после респауна — в покое, а не с отставанием и креном от падения
+    if (respawned) handRig = createHandRig();
 
     // камера — между двумя последними тиками, взгляд — сразу по мыши
     const p = lerpVec(prev.body.pos, cur.body.pos, clock.alpha);
@@ -120,7 +133,10 @@ export function mountSandbox(root: HTMLElement): void {
     cam.updateMatrixWorld();
 
     // руки: приземление ниже LAND_MIN_SPEED (в том числе −0,17 м/с на первом тике после появления) они не замечают;
-    // шаг по времени motion сам обрезает и чинит, поэтому сюда идёт сырое время кадра
+    // шаг по времени motion сам обрезает и чинит, поэтому сюда идёт сырое время кадра.
+    // Возраст приземления — от момента, который камера показывает сейчас (она на тик позади: между prev и cur),
+    // до тика приземления; если камера до него ещё не дошла — толчок в конце кадра
+    const landAge = Math.max(0, (clock.ticks - 2 - landTick) * TICK_DT + clock.acc);
     const hands = updateHandRig(
       handRig,
       {
@@ -128,13 +144,13 @@ export function mountSandbox(root: HTMLElement): void {
         speed: Math.hypot(cur.body.vel.x, cur.body.vel.z),
         onGround: cur.onGround,
         landVel,
-        lookDx: mouse.dx,
-        lookDy: mouse.dy,
+        landAge,
+        yawRate: turn.yaw,
+        pitchRate: turn.pitch,
       },
       DEFAULT_MOVE.runSpeed,
     );
     handRig = hands.rig;
-    landVel = 0;
     mittens.update(hands.pose, cam.matrixWorldInverse);
 
     renderer.render(scene, mittens.scene);
