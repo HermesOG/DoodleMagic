@@ -54,7 +54,17 @@ describe("Fire kit", () => {
     const { log } = play([at(-10)], 500, (k) => ({ q: k === 0 || k === 100 || k === 480, pitch: pitchTo(10) }));
     expect([ticksOf(log, "cast", "fireball"), ticksOf(log, "release", "fireball")[0], hitsOf(log, "burning").length]).toEqual([[0, 480], 15, 6]);
     expect(hitsOf(log, "fireball")[0]!.e).toMatchObject({ amount: 50, target: 2 });
-    expect(log).toContainEqual(reject(100, "q", "cooldown"));
+    expect(log).toContainEqual(reject(118, "q", "cooldown")); // нажатие на 100 ждёт в буфере 0,3 с, отказ — по его концу
+  });
+
+  it("buffers a press for 0.3 s: a fireball pressed 0.1 s before its cooldown ends casts at the cooldown end", () => {
+    const { log } = play([], 500, (k) => ({ q: k === 0 || k === 474 }));
+    expect([ticksOf(log, "cast", "fireball"), log.filter(({ e }) => e.type === "reject")]).toEqual([[0, 480], []]);
+  });
+
+  it("a press still refused after 0.3 s in the buffer gives exactly one reject, when the buffer runs out", () => {
+    const { log } = play([], 60, (k) => ({ q: k === 0 || k === 10 }));
+    expect(log.filter(({ e }) => e.type === "reject")).toEqual([reject(28, "q", "cooldown")]);
   });
 
   it("jet dash: 8 m in 0.2 s along the strafe, leaving a 2 s burning trail", () => {
@@ -108,11 +118,12 @@ describe("Fire kit", () => {
 
   it("the fireball windup blocks the fists and the wall but not the dash; a rooted mage cannot dash", () => {
     const { log } = play([], 30, (k) => ({ q: k === 0, primary: k >= 3, c: k === 4, e: k === 5 }));
-    expect(log).toContainEqual(reject(3, "primary", "busy"));
-    expect(log).toContainEqual(reject(4, "c", "busy"));
+    // ЛКМ и C в замахе ждут в буфере и выходят сразу после выпуска шара, без отказов
+    expect([ticksOf(log, "cast", "fireWall"), log.filter(({ e }) => e.type === "reject")]).toEqual([[16], []]);
     expect([ticksOf(log, "cast", "jetDash"), ticksOf(log, "release", "fireball"), ticksOf(log, "cast", "fireFists")[0]]).toEqual([[5], [15], 16]);
+    // нажатие ЛКМ на перезарядке не отказывает: ждёт в буфере и стреляет, когда кулак готов
     const tap = play([], 20, (k) => ({ primary: k < 2 || k === 6 }));
-    expect([ticksOf(tap.log, "cast", "fireFists"), tap.log.filter(({ e }) => e.type === "reject").map(({ t }) => t)]).toEqual([[0], [6]]);
+    expect([ticksOf(tap.log, "cast", "fireFists"), tap.log.filter(({ e }) => e.type === "reject").map(({ t }) => t)]).toEqual([[0, 12], []]);
     const rooted = play([], 1, (k, st) => {
       if (k === 0) st.units[0]!.status.rootUntil = st.tick + 30;
       return { e: true };

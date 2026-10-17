@@ -51,10 +51,27 @@ describe("Earth kit", () => {
     const { log } = play([at(-12)], 700, (k) => ({ jump: k === 0, q: k === 5 || k === 100 || k === 640, pitch: pitchTo(12, 0.5) }));
     expect(log).toContainEqual(reject(5, "q", "notGrounded"));
     expect(ticksOf(log, "cast", "stonePillar")).toEqual([100]);
-    expect(log).toContainEqual(reject(640, "q", "cooldown"));
+    expect(log).toContainEqual(reject(658, "q", "cooldown")); // нажатие на 640 ждёт в буфере 0,3 с, отказ — по его концу
     const self = play([], 120, (k) => ({ q: k === 0, pitch: -1.5 }));
     expect(self.log.some(({ e }) => e.type === "hit")).toBe(false);
     expect([self.s.units[0]!.move.onGround, Number(self.s.units[0]!.move.body.pos.y.toFixed(6))]).toEqual([true, 2.5]);
+  });
+
+  it("pillar «под себя» within 1 m: an aim 0.95 m away lifts the caster onto the top, 1.2 m away strikes there", () => {
+    const centre = (s: MatchState) => {
+      const b = s.terrain.find((q) => q.kind === "pillar")!.box;
+      return [(b.min.x + b.max.x) / 2, (b.min.z + b.max.z) / 2].map((v) => Number(v.toFixed(6)));
+    };
+    const feet = (s: MatchState) => [s.units[0]!.move.onGround, Number(s.units[0]!.move.body.pos.y.toFixed(6))];
+    const near = play([], 120, (k) => ({ q: k === 0, pitch: -Math.atan2(1.6, 0.95) }));
+    expect([centre(near.s), feet(near.s)]).toEqual([[0, 0], [true, 2.5]]);
+    const far = play([], 120, (k) => ({ q: k === 0, pitch: -Math.atan2(1.6, 1.2) }));
+    expect([centre(far.s), feet(far.s)]).toEqual([[0, -1.2], [true, 0]]);
+  });
+
+  it("buffers a Q pressed during the stone windup while LMB is held and casts it when the windup ends", () => {
+    const { log } = play([], 40, (k) => ({ primary: true, q: k === 4, pitch: pitchTo(12, 0.5) }));
+    expect([ticksOf(log, "release", "stoneShot"), ticksOf(log, "cast", "stonePillar"), log.filter(({ e }) => e.type === "reject")]).toEqual([[12], [13], []]);
   });
 
   it("stone wall: 2 m ahead, 4 × 2.5 × 0.6, solid after 0.2 s, holds stones until 250 HP are gone", () => {
@@ -80,11 +97,14 @@ describe("Earth kit", () => {
     const w = play([], 1, () => ({ e: true })).s.terrain[0]!;
     expect([w.kind, w.growTicks, w.solidTick - w.bornTick, w.endTick - w.bornTick, w.hp, w.maxHp]).toEqual(["wall", 18, 12, 360, 250, 250]);
     const air = play([], 730, (k) => ({ jump: k === 0, e: k === 5 || k === 723 || k === 725 }));
-    expect([ticksOf(air.log, "cast", "stoneWall"), air.log.filter(({ e }) => e.type === "reject")]).toEqual([[5, 725], [reject(723, "e", "cooldown")]]);
+    // нажатие на 723 ждёт в буфере и выходит на 725, когда E готова: отказа нет
+    expect([ticksOf(air.log, "cast", "stoneWall"), air.log.filter(({ e }) => e.type === "reject")]).toEqual([[5, 725], []]);
     const busy = play([], 870, (k) => ({ primary: k === 0, q: k === 6, c: k === 6 || k === 20 || k === 858 || k === 860 }));
-    expect([ticksOf(busy.log, "cast", "earthquake"), busy.log.filter(({ e }) => e.type === "reject")]).toEqual([
-      [20, 860],
-      [reject(6, "q", "busy"), reject(6, "c", "busy"), reject(858, "c", "cooldown")],
+    // Q и C в замахе камня (выпуск на 12) ждут в буфере и выходят на 13; C на 20 ждёт 0,3 с и отказывает на 38
+    expect([ticksOf(busy.log, "cast", "stonePillar"), ticksOf(busy.log, "cast", "earthquake"), busy.log.filter(({ e }) => e.type === "reject")]).toEqual([
+      [13],
+      [13, 858],
+      [reject(38, "c", "cooldown")],
     ]);
     const edge = play([], 2, () => ({ q: true, yaw: -Math.PI / 2 }), { pos: { x: 18, y: 0, z: 0 }, yaw: -Math.PI / 2 });
     expect(edge.log).toContainEqual(reject(0, "q", "noTarget"));

@@ -173,10 +173,12 @@ const closestOnBox = (b: AABB, p: Vec3): Vec3 => ({ x: clamp(p.x, b.min.x, b.max
  * Взрыв огненного шара в pos (событие explosion, радиус 3 м). Живой не-владелец в радиусе получает урон и толчок
  * с линейным спадом f = 1 − (1 − край / центр) · d / R от 50 в центре до 20 по краю и Горение; d — до бокса тела,
  * у прямого попадания (direct) — 0. Кроме прямого попадания, взрыв не бьёт сквозь стену: нужен свободный луч "shot"
- * до ближайшей точки тела. Толкает от взрыва к центру тела, ровно над или под ним — по fallbackDir.
+ * до ближайшей точки тела. Прямое попадание толкает по горизонтали полёта шара travelDir: цель уходит туда, куда
+ * целились, даже если шар задел её краем. Остальных — от взрыва к центру тела, ровно над или под ним — по travelDir.
  * Рельеф в радиусе получает урон с тем же спадом.
  */
-export function explodeFireball(s: MatchState, t: TickCtx, owner: UnitId, pos: Vec3, direct: UnitId, fallbackDir: { x: number; z: number }): void {
+export function explodeFireball(s: MatchState, t: TickCtx, owner: UnitId, pos: Vec3, direct: UnitId, travelDir: { x: number; z: number }): void {
+  const travel = travelDir.x !== 0 || travelDir.z !== 0;
   const fb = FIRE.fireball;
   const R = fb.radiusM;
   const falloff = (d: number) => 1 - ((1 - fb.damageEdge / fb.damageCenter) * d) / R;
@@ -196,9 +198,10 @@ export function explodeFireball(s: MatchState, t: TickCtx, owner: UnitId, pos: V
     const f = falloff(d);
     const c = centerOf(box);
     const away = horizontalDir({ x: c.x - pos.x, z: c.z - pos.z });
+    const radial = away.x !== 0 || away.z !== 0;
     applyHit(s, t, {
       source: owner, target: u.id, ability: "fireball", damage: fb.damageCenter * f, pos: q,
-      dir: away.x === 0 && away.z === 0 ? fallbackDir : away,
+      dir: (u.id === direct && travel) || !radial ? travelDir : away,
       knock: { distM: fb.knockback.distM * f, upM: fb.knockback.upM * f }, burn: true,
     });
   }

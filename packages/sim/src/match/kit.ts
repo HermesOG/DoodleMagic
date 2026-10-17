@@ -1,13 +1,15 @@
 import { aabb } from "../aabb";
 import { forwardXZ, sanitizeInput } from "../player";
 import type { AABB, Vec3 } from "../types";
+import { PRESS_BUFFER_S, ticks } from "./defs";
 import { aimDir, eyeOf } from "./state";
-import type { AbilityId, Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
+import { NEVER, SLOTS, type AbilityId, type Buttons, type MatchInput, type MatchState, type RejectReason, type Slot, type TickCtx, type Unit } from "./types";
 
 /**
  * Кит стихии: как маг кастует. stepMatch зовёт input раз в тик для каждого живого мага (pressed — фронты кнопок,
  * inp — уже очищенный ввод с удержанием), затем tick для каждого живого мага — до движения юнитов.
  * Киты меняют состояние на месте (stepMatch отдаёт им свою копию) и пишут события в t.ev.
+ * Нажатия слотов киты разбирают через castSlots: он держит буфер нажатий и решает, когда слать reject.
  */
 export interface Kit {
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void;
@@ -66,4 +68,41 @@ export function emitCast(t: TickCtx, u: Unit, ability: AbilityId, slot: Slot, ai
 /** Событие reject: нажатие отклонено. */
 export function rejectCast(t: TickCtx, u: Unit, slot: Slot, reason: RejectReason): void {
   t.ev.push({ type: "reject", unit: u.id, slot, reason });
+}
+
+/**
+ * Попытка каста слота: null — каст принят (кит уже записал cast и поставил перезарядку), иначе причина отказа.
+ * Событие reject пишет не она, а castSlots.
+ */
+export type TryCast = (s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => RejectReason | null;
+
+/** Сколько тиков после нажатия оно ждёт в буфере: 0,3 с → 18. */
+export const PRESS_BUFFER_TICKS = ticks(PRESS_BUFFER_S);
+/** Эти отказы снимет само время: нажатие с ними ждёт в буфере. Остальные (нет опоры, цели, обездвижен) — сразу. */
+const waits = (r: RejectReason): boolean => r === "cooldown" || r === "busy";
+
+/**
+ * Нажатия тика по слотам в порядке SLOTS (ЛКМ, Q, E, C). Слот пробует каст, если его кнопку нажали на этом тике,
+ * если прежнее нажатие ещё ждёт в буфере, а ЛКМ — и пока она удержана (темп карточки, как раньше).
+ * - Отказ «перезарядка» или «замах» держит нажатие в буфере до PRESS_BUFFER_TICKS тиков после него: каст выходит
+ *   на первом тике, когда он возможен, а reject — один, на последнем тике окна, если каст так и не вышел.
+ * - Прочие отказы — reject сразу, нажатие из буфера уходит.
+ * - ЛКМ на перезарядке не отказывает никогда: просто стреляет, когда готова. Удержание ЛКМ без нажатия молчит.
+ * - Новое нажатие того же слота начинает окно заново; за тик слот пробует каст не больше одного раза.
+ * Окно как у буфера прыжка: нажатие за 18 тиков до готовности ещё срабатывает, за 19 — уже нет.
+ */
+export function castSlots(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons, casts: Readonly<Record<Slot, TryCast>>): void {
+  const m = u.mage!;
+  const now = t.now;
+  for (const slot of SLOTS) {
+    if (pressed[slot]) m.pending[slot] = now;
+    const age = now - m.pending[slot];
+    const waiting = age <= PRESS_BUFFER_TICKS;
+    if (!waiting && !(slot === "primary" && inp.primary)) continue;
+    const r = casts[slot](s, t, u, inp);
+    if (r === null) m.pending[slot] = NEVER;
+    if (r === null || !waiting || (waits(r) && age < PRESS_BUFFER_TICKS)) continue;
+    m.pending[slot] = NEVER;
+    if (slot !== "primary" || r !== "cooldown") rejectCast(t, u, slot, r);
+  }
 }

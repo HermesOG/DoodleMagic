@@ -4,6 +4,8 @@ import { DUMMY, ELEMENT_INFO } from "./defs";
 import { NEVER, NOBODY, type DummySpot, type Element, type MatchInput, type MatchState, type Statuses, type Unit, type UnitId } from "./types";
 
 export const NO_MATCH_INPUT: Readonly<MatchInput> = Object.freeze({ moveX: 0, moveZ: 0, jump: false, yaw: 0, pitch: 0, primary: false, q: false, e: false, c: false });
+/** Ввод мага, от которого на этом тике ничего не пришло: стоит, кнопки отпущены, смотрит, куда смотрел. */
+export const idleInput = (u: Readonly<Unit>): MatchInput => ({ ...NO_MATCH_INPUT, yaw: u.move.yaw, pitch: u.move.pitch });
 export const freshStatuses = (): Statuses => ({ burnPulses: 0, burnNext: 0, burnBy: NOBODY, slowUntil: 0, slowMul: 1, rootUntil: 0, airborne: false, noControlUntil: 0, immuneUntil: 0 });
 
 function baseUnit(id: UnitId, kind: Unit["kind"], pos: Vec3, yaw: number, hp: number): Unit {
@@ -12,7 +14,8 @@ function baseUnit(id: UnitId, kind: Unit["kind"], pos: Vec3, yaw: number, hp: nu
 export function createMageUnit(id: UnitId, element: Element, spawn: Spawn): Unit {
   const u = baseUnit(id, "mage", spawn.pos, spawn.yaw, ELEMENT_INFO[element].hp);
   u.mage = {
-    element, ready: { primary: 0, q: 0, e: 0, c: 0 }, held: { primary: false, q: false, e: false, c: false }, windup: null,
+    element, ready: { primary: 0, q: 0, e: 0, c: 0 }, held: { primary: false, q: false, e: false, c: false },
+    pending: { primary: NEVER, q: NEVER, e: NEVER, c: NEVER }, windup: null,
     heat: 0, overheatUntil: 0, lastShotTick: NEVER, dash: null, spawn: { pos: { ...spawn.pos }, yaw: spawn.yaw }, stats: { damage: 0, kills: 0, falls: 0 },
   };
   return u;

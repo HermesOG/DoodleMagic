@@ -3,16 +3,17 @@ import { sanitizeInput } from "../player";
 import { TICK_DT, type Vec3 } from "../types";
 import { aimGround } from "./aim";
 import { FIRE, slotCooldownTicks, ticks } from "./defs";
-import { castAim, emitCast, moveDirXZ, rejectCast, snappedWallBox, type Kit } from "./kit";
+import { castAim, castSlots, emitCast, moveDirXZ, snappedWallBox, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
-import type { Buttons, MatchInput, MatchState, TickCtx, Unit } from "./types";
+import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
 import { mageMoveParams } from "./units";
 import { spawnZone } from "./zones";
 
 /**
  * Кит Огня «Напор» (GDD 4.3; решения Р5, Р14, Р15): ЛКМ «Огненные кулаки» с жаром и мягким перегревом,
  * Q «Огненный шар» с замахом, E «Реактивный рывок» со следом (и в воздухе), C «Стена огня». «Кураж» — в combat.ts.
- * Каждый принятый каст — событие cast на тике нажатия; перезарядка ставится на нажатии (Р14).
+ * Каждый принятый каст — событие cast на тике, когда он принят: на нажатии или позже, когда нажатие выходит из буфера
+ * (castSlots, до 0,3 с); перезарядка ставится там же (Р14).
  */
 
 const FF = FIRE.fireFists;
@@ -43,17 +44,14 @@ function release(t: TickCtx, u: Unit, ability: "fireFists" | "fireball", project
 }
 
 /**
- * ЛКМ: стреляет, пока зажата и готова. Жар +8 за выстрел; на 100 — перегрев на 1,5 с: темп ×0,5, выстрелы не греют
- * (Р5). Отказ — только на нажатии: удержание на перезарядке или в замахе молчит.
+ * ЛКМ: стреляет, пока зажата (или нажатие ждёт в буфере) и готова. Жар +8 за выстрел; на 100 — перегрев на 1,5 с:
+ * темп ×0,5, выстрелы не греют (Р5). Отказы разбирает castSlots: удержание молчит, нажатие ждёт в буфере.
  */
-function fists(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: boolean): void {
+function fists(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const m = u.mage!;
   const now = t.now;
-  const refused = now < m.ready.primary ? "cooldown" : m.windup ? "busy" : null;
-  if (refused) {
-    if (pressed) rejectCast(t, u, "primary", refused);
-    return;
-  }
+  if (now < m.ready.primary) return "cooldown";
+  if (m.windup) return "busy";
   m.lastShotTick = now;
   let overheat = false;
   if (now >= m.overheatUntil) {
@@ -70,17 +68,19 @@ function fists(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: boo
   emitCast(t, u, "fireFists", "primary", aim);
   release(t, u, "fireFists", id, aim);
   if (overheat) t.ev.push({ type: "overheat", unit: u.id, on: true });
+  return null;
 }
 
 /** Q: замах 0,25 с, шар вылетает в tick на releaseTick по прицелу того тика. */
-function fireball(t: TickCtx, u: Unit, inp: MatchInput): void {
+function fireball(_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const m = u.mage!;
   const now = t.now;
-  if (now < m.ready.q) return rejectCast(t, u, "q", "cooldown");
-  if (m.windup) return rejectCast(t, u, "q", "busy");
+  if (now < m.ready.q) return "cooldown";
+  if (m.windup) return "busy";
   m.ready.q = now + FIREBALL_CD;
   m.windup = { ability: "fireball", slot: "q", releaseTick: now + FIREBALL_WINDUP_TICKS };
   emitCast(t, u, "fireball", "q", castAim(u, inp));
+  return null;
 }
 
 /** Конец рывка: скорость бега по направлению, след догорает до trailEnd, событие dash/end. */
@@ -99,11 +99,11 @@ function endDash(s: MatchState, t: TickCtx, u: Unit, trailEnd: number): void {
  * E: 8 м за 0,2 с по вводу движения (без ввода — вперёд), и в воздухе. Замах не мешает (Р14), обездвиживание и
  * «В воздухе» — мешают. Гасит своё отбрасывание (Р15). След — отрезок от старта, его конец тянется за магом.
  */
-function jetDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
+function jetDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const m = u.mage!;
   const now = t.now;
-  if (now < u.status.rootUntil || now < u.status.noControlUntil) return rejectCast(t, u, "e", "rooted");
-  if (now < m.ready.e) return rejectCast(t, u, "e", "cooldown");
+  if (now < u.status.rootUntil || now < u.status.noControlUntil) return "rooted";
+  if (now < m.ready.e) return "cooldown";
   // «Кураж» перезарядил E посреди рывка: прежний рывок кончается здесь, его след догорает 2 с
   if (m.dash) endDash(s, t, u, now + TRAIL_TICKS);
   const dir = moveDirXZ(inp);
@@ -118,17 +118,18 @@ function jetDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   m.dash = { dirX: dir.x, dirZ: dir.z, endTick: now + DASH_TICKS, trailZone };
   emitCast(t, u, "jetDash", "e", castAim(u, inp));
   t.ev.push({ type: "dash", unit: u.id, phase: "start", pos: copy(p), dir: { x: dir.x, y: 0, z: dir.z } });
+  return null;
 }
 
 /** C: стена 10 × 2,5 м поперёк взгляда под прицелом до 15 м (Р6, Р9); искры 0,4 с, горит 5 с. Над пустотой — отказ. */
-function fireWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
+function fireWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const m = u.mage!;
   const now = t.now;
-  if (now < m.ready.c) return rejectCast(t, u, "c", "cooldown");
-  if (m.windup) return rejectCast(t, u, "c", "busy");
+  if (now < m.ready.c) return "cooldown";
+  if (m.windup) return "busy";
   const look = sanitizeInput(inp, u.move);
   const at = aimGround(s, t, u.id, look.yaw, look.pitch, FW.rangeM);
-  if (!at) return rejectCast(t, u, "c", "noTarget");
+  if (!at) return "noTarget";
   const box = snappedWallBox(at, look.yaw, FW.lengthM, FW.thickM, FW.heightM);
   spawnZone(s, t, {
     owner: u.id, kind: "fireWall", ability: "fireWall", shape: { type: "box", box },
@@ -136,6 +137,7 @@ function fireWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   });
   m.ready.c = now + WALL_CD;
   emitCast(t, u, "fireWall", "c", castAim(u, inp));
+  return null;
 }
 
 /**
@@ -154,6 +156,9 @@ function stepDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   if (r.hitWall || t.now + 1 >= d.endTick) endDash(s, t, u, t.now + 1 + TRAIL_TICKS);
 }
 
+/** Слоты Огня для castSlots: он же держит буфер нажатий и пишет отказы. */
+const FIRE_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: fists, q: fireball, e: jetDash, c: fireWall });
+
 export const FIRE_KIT: Kit = Object.freeze({
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {
     const m = u.mage!;
@@ -163,10 +168,7 @@ export const FIRE_KIT: Kit = Object.freeze({
       m.overheatUntil = 0;
       t.ev.push({ type: "overheat", unit: u.id, on: false });
     }
-    if (inp.primary) fists(s, t, u, inp, pressed.primary);
-    if (pressed.q) fireball(t, u, inp);
-    if (pressed.e) jetDash(s, t, u, inp);
-    if (pressed.c) fireWall(s, t, u, inp);
+    castSlots(s, t, u, inp, pressed, FIRE_CASTS);
   },
 
   tick(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {

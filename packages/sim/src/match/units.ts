@@ -5,7 +5,7 @@ import { TICK_DT, type MoveParams, type PlayerInput } from "../types";
 import { volumeAt, type World } from "../world";
 import { courage, respawnAt } from "./combat";
 import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ticks } from "./defs";
-import { NO_MATCH_INPUT, createDummyUnit, createMageUnit, rightXZ, unitById } from "./state";
+import { createDummyUnit, createMageUnit, idleInput, rightXZ, unitById } from "./state";
 import { NOBODY, type Element, type MatchInput, type MatchState, type TickCtx, type Unit, type UnitId } from "./types";
 
 /**
@@ -93,7 +93,7 @@ export function moveUnits(s: MatchState, t: TickCtx, inputs: Readonly<Partial<Re
   for (const u of s.units) {
     if (!u.alive || (u.mage !== null && u.mage.dash !== null)) continue;
     const st = u.status;
-    let inp: PlayerInput = u.mage ? (inputs[u.id] ?? { ...NO_MATCH_INPUT, yaw: u.move.yaw, pitch: u.move.pitch }) : dummyInput(t.world, u);
+    let inp: PlayerInput = u.mage ? (inputs[u.id] ?? idleInput(u)) : dummyInput(t.world, u);
     let p: MoveParams = u.mage ? mageMoveParams(u.mage.element) : DUMMY_MOVE;
     if (t.now < st.rootUntil || t.now < st.noControlUntil) inp = { ...inp, moveX: 0, moveZ: 0, jump: false }; // взгляд не отнимаем (GDD 2.2)
     if (t.now < st.slowUntil) p = { ...p, runSpeed: p.runSpeed * st.slowMul };

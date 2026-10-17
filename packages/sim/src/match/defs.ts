@@ -37,7 +37,9 @@ export const EARTH = {
   stonePillar: {
     slot: "q", name: "Каменный столб", cooldownS: 10, rangeM: 20, telegraphS: 0.6, damage: 35,
     knockback: { distM: 1, upM: 3.5 }, // вбок — Р3
-    sizeM: 1.2, heightM: 2.5, hp: 200, lifeS: 4, growS: 0.1, solidS: 0.2, hitPadM: 0.4, selfRadiusM: 0.9, selfLiftM: 2.5, // площадь и «под себя» — Р9
+    // Площадь и «под себя» — Р9. Р9 теперь 1,0 м, а не 0,9 (решение контролёра): половина столба 0,6 + полтела 0,4.
+    // Ближе — столб под магом и подъём на вершину; дальше столб уже не задевает мага, и тот не взлетает сбоку от него.
+    sizeM: 1.2, heightM: 2.5, hp: 200, lifeS: 4, growS: 0.1, solidS: 0.2, hitPadM: 0.4, selfRadiusM: 1, selfLiftM: 2.5,
   },
   stoneWall: { slot: "e", name: "Каменная стена", cooldownS: 12, aheadM: 2, lengthM: 4, heightM: 2.5, thickM: 0.6, growS: 0.3, solidS: 0.2, hp: 250, lifeS: 6 },
   earthquake: {
@@ -57,6 +59,11 @@ export const MAGE_REGEN = { delayS: 4, perS: 20, capFrac: 2 / 3 } as const;
 /** Манекен полигона (Р12). */
 export const DUMMY = { hp: 170, runSpeed: 2, regenDelayS: 3, regenPerS: 85, respawnS: 3 } as const;
 export const MATCH = { fallCreditS: 5, mageRespawnS: 1 } as const;
+/**
+ * Буфер нажатий (решение контролёра): нажатие Q, E, C или свежее нажатие ЛКМ, отклонённое перезарядкой или замахом,
+ * ждёт столько секунд и срабатывает на первом тике, когда каст станет возможен.
+ */
+export const PRESS_BUFFER_S = 0.3;
 /** GDD 7.3–7.4. */
 export const LIMITS = { projectilesPerMage: 8, projectilesTotal: 48, zonesPerMage: 3, zonesTotal: 16, terrainPerMage: 3, terrainTotal: 24 } as const;
 
