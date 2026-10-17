@@ -1,8 +1,10 @@
 import { Scene } from "three";
 import { buildGallery } from "@doodlemagic/arena";
-import { EYE_HEIGHT, TICK_DT, createWorld, lerpVec, stepPlayer, type PlayerState } from "@doodlemagic/sim";
+import { DEFAULT_MOVE, EYE_HEIGHT, TICK_DT, createWorld, lerpVec, stepPlayer, type PlayerState } from "@doodlemagic/sim";
 import "../render/canvas.css";
 import "./sandbox.css";
+import { createMittens } from "../hands/mittens";
+import { createHandRig, updateHandRig } from "../hands/motion";
 import { buildArenaMeshes } from "../render/arenaMeshes";
 import { createFpsMeter } from "../render/fpsMeter";
 import { createAutoQuality, type AutoQuality } from "../render/quality";
@@ -14,7 +16,7 @@ import { createInput } from "./input";
 import { nextSpawnIndex, shouldRespawn, spawnPlayer } from "./respawn";
 import { loadSettings, saveSettings } from "./settings";
 
-/** Песочница: арена, FPS-контроллер на sim с тиком 60 Гц, рендер «Тушь и свет». */
+/** Песочница: арена, FPS-контроллер на sim с тиком 60 Гц, рендер «Тушь и свет», руки-«варежки». */
 export function mountSandbox(root: HTMLElement): void {
   document.body.classList.add("game");
   const settings = loadSettings();
@@ -37,12 +39,16 @@ export function mountSandbox(root: HTMLElement): void {
   }
   const scene = new Scene();
   scene.add(buildArenaMeshes(arena.render));
+  const mittens = createMittens();
+  let handRig = createHandRig();
 
   let spawnIndex = 0;
   let cur: PlayerState = spawnPlayer(arena, spawnIndex);
   let prev = cur;
   let look: Look = { yaw: cur.yaw, pitch: 0 };
   let acc = 0;
+  /** Самое сильное приземление за кадр (все тики кадра); руки читают его и обнуляют. */
+  let landVel = 0;
   let auto: AutoQuality | null = settings.quality === "auto" ? createAutoQuality("high") : null;
   const meter = createFpsMeter();
 
@@ -77,6 +83,7 @@ export function mountSandbox(root: HTMLElement): void {
     for (let k = 0; k < clock.ticks; k++) {
       prev = cur;
       cur = stepPlayer(cur, buildInput(keys, look), TICK_DT, world);
+      if (cur.landVel < 0) landVel = Math.min(landVel, cur.landVel);
       if (shouldRespawn(world, cur, arena)) {
         spawnIndex = nextSpawnIndex(spawnIndex, arena.spawns.length);
         cur = spawnPlayer(arena, spawnIndex);
@@ -92,7 +99,25 @@ export function mountSandbox(root: HTMLElement): void {
     cam.rotation.set(look.pitch, look.yaw, 0, "YXZ");
     cam.updateMatrixWorld();
 
-    renderer.render(scene);
+    // руки: приземление ниже LAND_MIN_SPEED (в том числе −0,17 м/с на первом тике после появления) они не замечают;
+    // шаг по времени motion сам обрезает и чинит, поэтому сюда идёт сырое время кадра
+    const hands = updateHandRig(
+      handRig,
+      {
+        dt: rawMs / 1000,
+        speed: Math.hypot(cur.body.vel.x, cur.body.vel.z),
+        onGround: cur.onGround,
+        landVel,
+        lookDx: mouse.dx,
+        lookDy: mouse.dy,
+      },
+      DEFAULT_MOVE.runSpeed,
+    );
+    handRig = hands.rig;
+    landVel = 0;
+    mittens.update(hands.pose, cam.matrixWorldInverse);
+
+    renderer.render(scene, mittens.scene);
 
     // сырое время кадра — в счётчик и автовыбор (длинные заминки он отбрасывает сам)
     meter.push(rawMs);
@@ -111,7 +136,7 @@ export function mountSandbox(root: HTMLElement): void {
   // прогрев шейдеров до первого взаимодействия: пока он идёт, на экране «Загрузка…»
   hud.setLocked(false);
   renderer
-    .warmUp(scene)
+    .warmUp(scene, mittens.scene)
     .then(() => {
       hud.setLoading(false);
       last = performance.now();
