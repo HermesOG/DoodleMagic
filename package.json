@@ -7,9 +7,7 @@
     "test": "vitest run",
     "typecheck": "pnpm -r --if-present typecheck",
     "dev:client": "pnpm --filter @doodlemagic/client dev",
-    "dev:server": "pnpm --filter @doodlemagic/server dev",
-    "build:client": "pnpm --filter @doodlemagic/client build",
-    "smoke": "node apps/server/scripts/smoke.mjs"
+    "build:client": "pnpm --filter @doodlemagic/client build"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
