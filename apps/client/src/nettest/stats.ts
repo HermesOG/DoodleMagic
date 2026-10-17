@@ -42,8 +42,8 @@ export interface LinkTestData {
   disconnects: number;
   hiddenMs: number;
   durationS: number;
-  /** Хотя бы одно P2P-соединение с хостом открылось. */
-  opened: boolean;
+  /** Когда впервые открылся P2P-канал с хостом (performance.now); null — не открылся ни разу. */
+  openedAt: number | null;
   /** Сколько снапшотов пришло от хоста за прогон. */
   snaps: number;
 }
@@ -80,7 +80,7 @@ export interface NettestResult extends ResultMeta {
   disconnects: number;
   hiddenS: number;
   opened: boolean;
-  /** Снапшотов от хоста в секунду за весь прогон. */
+  /** Снапшотов от хоста в секунду с первого открытия канала до конца прогона. */
   snapRate: number;
 }
 
@@ -154,6 +154,8 @@ export function buildResult(d: LinkTestData, meta: ResultMeta): NettestResult {
   // сообщения его не с чем мерить — это уже ловит «хост не ответил ни разу».
   const times = d.arrivals.length > 0 ? [...d.arrivals, d.endedAt] : d.arrivals;
   const { stalls, worstGapMs } = countStalls(times, CRITERIA.stallGapMs);
+  // Частоту снапшотов считаем с открытия канала: подключение (ICE, TURN) снапшотов не несёт и в неё не входит.
+  const openS = d.openedAt === null ? 0 : (d.endedAt - d.openedAt) / 1000;
   return {
     v: 3,
     ...meta,
@@ -167,9 +169,9 @@ export function buildResult(d: LinkTestData, meta: ResultMeta): NettestResult {
     worstGapMs: Math.round(worstGapMs),
     disconnects: d.disconnects,
     hiddenS: Math.round(d.hiddenMs / 1000),
-    opened: d.opened,
+    opened: d.openedAt !== null,
     // округляем до десятых здесь, чтобы вердикт и текст отчёта видели одно и то же число
-    snapRate: d.durationS > 0 ? Math.round((d.snaps / d.durationS) * 10) / 10 : 0,
+    snapRate: openS > 0 ? Math.round((d.snaps / openS) * 10) / 10 : 0,
   };
 }
 

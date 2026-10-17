@@ -257,7 +257,7 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
       hiddenMs: 0,
       durationS: 0,
       endedAt: 0,
-      opened: false,
+      openedAt: null,
       snaps: 0,
     };
     const start = performance.now();
@@ -284,7 +284,7 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
 
     // «Хоста нет» (hostFound: false) — только когда сигналинг сам сказал peer-unavailable и ни одно соединение не открывалось.
     me.on("error", (e: PeerError) => {
-      if (e.type === "peer-unavailable" && !data.opened) finish(false);
+      if (e.type === "peer-unavailable" && data.openedAt === null) finish(false);
     });
 
     /** Единая цепочка повторов: не больше одного ожидающего таймера, не после финиша и не после конца теста. */
@@ -316,14 +316,14 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
       const attemptTimer = setTimeout(() => {
         if (finished || opened || conn !== c) return;
         // до первого открытия медленный ICE (TURN) не обрываем: срок задаёт OPEN_TIMEOUT_MS, а ошибки ловит c.on("error")
-        if (!data.opened) return;
+        if (data.openedAt === null) return;
         c.close();
         scheduleReconnect();
       }, ATTEMPT_TIMEOUT_MS);
       c.on("open", () => {
         clearTimeout(attemptTimer);
         opened = true;
-        data.opened = true;
+        data.openedAt ??= performance.now();
         connected = true;
         void c.send(JSON.stringify({ t: "hello", v: NETTEST_VERSION, name: o.name }));
         setTimeout(() => {
@@ -380,7 +380,7 @@ export async function runPeerTest(o: PeerRunOptions): Promise<PeerOutcome> {
     // Ни одно соединение не открылось, а peer-unavailable не было: хост в комнате есть, но P2P-канал (даже через TURN) не поднялся.
     // Это именно тот сбой, который тест должен показать, поэтому hostFound остаётся true.
     const openTimer = setTimeout(() => {
-      if (!data.opened) finish(true);
+      if (data.openedAt === null) finish(true);
     }, OPEN_TIMEOUT_MS);
 
     const pingTimer = setInterval(() => {

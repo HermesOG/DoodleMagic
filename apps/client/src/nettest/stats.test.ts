@@ -39,7 +39,7 @@ function data(over: Partial<LinkTestData> = {}): LinkTestData {
     disconnects: 0,
     hiddenMs: 0,
     durationS: 600,
-    opened: true,
+    openedAt: 0,
     snaps: 12000,
     ...over,
   };
@@ -111,7 +111,22 @@ describe("buildResult", () => {
 
   it("rounds the snapshot rate to tenths", () => {
     expect(buildResult(data({ snaps: 10_799 }), meta).snapRate).toBe(18);
-    expect(buildResult(data({ snaps: 100, durationS: 0 }), meta).snapRate).toBe(0);
+  });
+
+  it("measures the snapshot rate from the first open, so connection setup does not count", () => {
+    // 3 s до открытия канала, дальше 20 снапшотов в секунду до конца 20-секундного прогона
+    const arrivals = Array.from({ length: 340 }, (_, i) => 3000 + i * 50);
+    const r = buildResult(
+      data({ durationS: 20, openedAt: 3000, endedAt: 20_000, snaps: 340, arrivals, rtts: [60, 60, 60] }),
+      meta,
+    );
+    expect(r.snapRate).toBe(20);
+    expect(judge(r).ok).toBe(true);
+  });
+
+  it("has a snapshot rate of 0 when the channel never opened or had no time", () => {
+    expect(buildResult(data({ openedAt: null, snaps: 100 }), meta).snapRate).toBe(0);
+    expect(buildResult(data({ openedAt: 600_000, snaps: 100 }), meta).snapRate).toBe(0);
   });
 });
 
@@ -189,7 +204,7 @@ describe("judge", () => {
   });
 
   it("says the P2P channel never opened when no connection opened", () => {
-    const r = buildResult(data({ rtts: [], arrivals: [], snaps: 0, opened: false }), meta);
+    const r = buildResult(data({ rtts: [], arrivals: [], snaps: 0, openedAt: null }), meta);
     expect(judge(r)).toEqual({
       ok: false,
       full: true,
