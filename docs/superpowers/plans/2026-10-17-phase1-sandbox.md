@@ -2247,35 +2247,10 @@ export function wrapAngle(a: number): number {
 }
 
 /**
- * Сплошные куски стены [a, b] × [0, height] за вычетом проёмов.
- * Возвращает отрезки вдоль стены и по высоте (от низа стены).
+ * wallPieces(a, b, height, openings) — сплошные куски стены [a, b] × [0, height] за вычетом проёмов.
+ * Реализация убрана из плана: после ревью функция переписана (вычитание прямоугольников и слияние
+ * соседних кусков), см. packages/arena/src/dsl.ts.
  */
-export function wallPieces(a: number, b: number, height: number, openings: readonly Opening[]): { u0: number; u1: number; v0: number; v1: number }[] {
-  const cuts = new Set<number>([a, b]);
-  for (const op of openings) {
-    cuts.add(Math.min(Math.max(op.from, a), b));
-    cuts.add(Math.min(Math.max(op.to, a), b));
-  }
-  const xs = [...cuts].sort((p, q) => p - q);
-  const pieces: { u0: number; u1: number; v0: number; v1: number }[] = [];
-  for (let k = 0; k + 1 < xs.length; k++) {
-    const u0 = xs[k]!;
-    const u1 = xs[k + 1]!;
-    if (u1 - u0 < 1e-6) continue;
-    const mid = (u0 + u1) / 2;
-    const holes = openings
-      .filter((op) => Math.min(op.from, op.to) <= mid && Math.max(op.from, op.to) >= mid)
-      .map((op) => [op.sill ?? 0, op.top ?? height] as const)
-      .sort((p, q) => p[0] - q[0]);
-    let v = 0;
-    for (const [s, t] of holes) {
-      if (s > v + 1e-6) pieces.push({ u0, u1, v0: v, v1: Math.min(s, height) });
-      v = Math.max(v, t);
-    }
-    if (v < height - 1e-6) pieces.push({ u0, u1, v0: v, v1: height });
-  }
-  return pieces;
-}
 
 export function createArenaBuilder(): ArenaBuilder {
   const colliders: Collider[] = [];
@@ -3478,219 +3453,20 @@ export function createInkMaterial(ink: number, sun: SunUniform = worldSun): Shad
 
 `apps/client/src/render/stylePass.ts`. Порядок в шейдере:
 1. **Контур:**
-   - по глубине — лапласиан обратной дальности, относительно самой дальности;
+   - по глубине — излом наклона обратной дальности;
    - по излому нормали;
    - по смене чернил.
 
    Цвет линии берётся у ближайшего к камере соседа, у рук линия толще.
 2. **Размывка** — три тона с дрожащим по шуму порогом.
-3. **Бумага** — зерно из двух октав шума в «пикселях 900p».
+3. **Бумага** — волокна и крапины в CSS-пикселях.
 4. **Туман** — по дальности (18–75 м) и «пустота» ниже пола до цвета бумаги. Линии гаснут вместе с туманом.
 5. **Небо** там, где нет геометрии: градиент туши к зениту, облака-мазки, два слоя гор, растворяющихся у подножия; нижняя полусфера — чистая бумага.
 
 Всего 10 выборок текстуры.
-```ts
-import { Matrix4, ShaderMaterial, Vector2, Vector3, type DepthTexture, type Texture } from "three";
-import { INK, INK_BY_ID, INK_COUNT, INK_STYLE, PAPER } from "./palette";
-
-export const STYLE_VERT = /* glsl */ `
-varying vec2 vUv;
-void main() {
-  vUv = uv;
-  gl_Position = vec4(position.xy, 0.0, 1.0);
-}
-`;
-
-/**
- * Проход 2, единственный полноэкранный: контур, три тона размывки, зерно бумаги, туман к цвету бумаги
- * и небо там, где нет геометрии. 10 выборок текстуры (бюджет арт-директора — 13).
- */
-export const STYLE_FRAG = /* glsl */ `
-uniform sampler2D tG;
-uniform sampler2D tDepth;
-uniform vec2 uRes;
-uniform float uPx;
-uniform float uNear;
-uniform float uFar;
-uniform mat4 uProjInv;
-uniform mat4 uCamWorld;
-uniform vec3 uPaper;
-uniform vec3 uSkyInk;
-uniform vec2 uFog;
-uniform vec3 uInkWash[INK_COUNT];
-uniform vec3 uInkBands[INK_COUNT];
-uniform vec3 uInkLine[INK_COUNT];
-varying vec2 vUv;
-
-// целочисленный хеш: одинаково на всех GPU, без sin()
-uint hashU(uvec2 q) {
-  uint h = q.x * 2654435769u ^ (q.y + 0x9e3779b9u) * 2246822519u;
-  h ^= h >> 15;
-  h *= 3266489917u;
-  h ^= h >> 13;
-  return h;
-}
-
-float hash(vec2 p) {
-  return float(hashU(uvec2(ivec2(floor(p)) + 32768))) / 4294967295.0;
-}
-
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  float a = hash(i);
-  float b = hash(i + vec2(1.0, 0.0));
-  float c = hash(i + vec2(0.0, 1.0));
-  float d = hash(i + vec2(1.0, 1.0));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-// расстояние вдоль взгляда по значению буфера глубины
-float viewDist(float d) {
-  float z = d * 2.0 - 1.0;
-  return 2.0 * uNear * uFar / (uFar + uNear - z * (uFar - uNear));
-}
-
-int inkAt(vec4 g) {
-  return int(g.g * 255.0 + 0.5);
-}
-
-vec3 normalAt(vec4 g) {
-  vec2 xy = g.ba * 2.0 - 1.0;
-  return vec3(xy, sqrt(max(0.0, 1.0 - dot(xy, xy))));
-}
-
-// туман по дальности и «пустота» ниже пола: ущелье растворяется в бумаге
-float fogAt(float d) {
-  vec4 v = uProjInv * vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
-  vec3 vp = v.xyz / v.w;
-  vec3 w = (uCamWorld * vec4(vp, 1.0)).xyz;
-  return max(0.85 * smoothstep(uFog.x, uFog.y, -vp.z), smoothstep(-0.5, -9.0, w.y));
-}
-
-vec3 skyColor(vec3 dir, vec3 paper) {
-  float e = dir.y;
-  vec3 col = mix(paper, uSkyInk, 0.3 * smoothstep(0.02, 0.85, e));
-  vec2 c = dir.xz / max(1e-4, length(dir.xz));
-  // облака — длинные горизонтальные мазки
-  float cl = noise(vec2(c.x * 2.5 + c.y * 4.0 + 40.0, e * 14.0 + 10.0));
-  col = mix(col, uSkyInk, 0.12 * smoothstep(0.62, 0.8, cl) * smoothstep(0.08, 0.3, e));
-  // два слоя гор: дальний светлее и выше; у подножия оба растворяются в бумаге
-  float farRidge = 0.05 + 0.11 * noise(c * 2.2 + 17.0) + 0.03 * noise(c * 7.0 + 3.0);
-  float nearRidge = 0.015 + 0.06 * noise(c * 3.1 + 61.0) + 0.02 * noise(c * 11.0 + 9.0);
-  float fade = smoothstep(-0.06, 0.04, e);
-  col = mix(col, uSkyInk, 0.22 * fade * (1.0 - smoothstep(farRidge - 0.002, farRidge + 0.002, e)));
-  col = mix(col, uSkyInk, 0.4 * fade * (1.0 - smoothstep(nearRidge - 0.002, nearRidge + 0.002, e)));
-  return col;
-}
-
-void main() {
-  vec2 px = 1.0 / uRes;
-  vec4 gC = texture(tG, vUv);
-  float dC = texture(tDepth, vUv).r;
-  int inkC = inkAt(gC);
-  bool skyC = dC >= 1.0;
-
-  // руки обведены толще: радиус выборки вдвое больше со стороны руки — в сумме линия в 1,5 раза толще
-  float r = uPx * (inkC == INK_HANDS ? 2.0 : 1.0);
-  vec2 ox = vec2(r * px.x, 0.0);
-  vec2 oy = vec2(0.0, r * px.y);
-  vec4 gL = texture(tG, vUv - ox);
-  vec4 gR = texture(tG, vUv + ox);
-  vec4 gD = texture(tG, vUv - oy);
-  vec4 gU = texture(tG, vUv + oy);
-  float dL = texture(tDepth, vUv - ox).r;
-  float dR = texture(tDepth, vUv + ox).r;
-  float dD = texture(tDepth, vUv - oy).r;
-  float dU = texture(tDepth, vUv + oy).r;
-
-  // контур по глубине: лапласиан обратной дальности равен нулю на любой плоскости,
-  // поэтому пол под острым углом линий не даёт, а дальние силуэты остаются чёткими
-  float iC = 1.0 / viewDist(dC);
-  float lap = abs(1.0 / viewDist(dL) + 1.0 / viewDist(dR) - 2.0 * iC) + abs(1.0 / viewDist(dD) + 1.0 / viewDist(dU) - 2.0 * iC);
-  float edge = smoothstep(0.08, 0.25, lap / iC);
-
-  // контур по излому нормали: острые рёбра боксов
-  if (!skyC) {
-    vec3 nC = normalAt(gC);
-    float bend = max(max(1.0 - dot(nC, normalAt(gL)), 1.0 - dot(nC, normalAt(gR))), max(1.0 - dot(nC, normalAt(gD)), 1.0 - dot(nC, normalAt(gU))));
-    edge = max(edge, smoothstep(0.15, 0.4, bend));
-  }
-
-  // граница разных чернил на одной плоскости — тоже линия, но тоньше
-  if (inkAt(gL) != inkC || inkAt(gR) != inkC || inkAt(gD) != inkC || inkAt(gU) != inkC) edge = max(edge, 0.7);
-
-  // цвет линии — у ближайшего к камере соседа, чтобы силуэт рисовался тушью переднего предмета
-  float dMin = dC;
-  int inkN = inkC;
-  if (dL < dMin) { dMin = dL; inkN = inkAt(gL); }
-  if (dR < dMin) { dMin = dR; inkN = inkAt(gR); }
-  if (dD < dMin) { dMin = dD; inkN = inkAt(gD); }
-  if (dU < dMin) { dMin = dU; inkN = inkAt(gU); }
-  // трава — мазки почти без контура
-  if (inkN == INK_GRASS) edge *= 0.3;
-
-  // координаты бумаги в «пикселях 900p»: узор не зависит от разрешения рендера
-  vec2 pp = gl_FragCoord.xy / uPx;
-  float grain = noise(pp * 0.8) * 0.55 + noise(pp * 0.21) * 0.45;
-  vec3 paper = uPaper * (0.955 + 0.06 * grain);
-
-  vec3 col;
-  float fog = 0.0;
-  if (skyC) {
-    vec4 v = uProjInv * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
-    col = skyColor(normalize(mat3(uCamWorld) * (v.xyz / v.w)), paper);
-  } else {
-    // три тона размывки; порог чуть дрожит по шуму, чтобы граница тона была мазком, а не линейкой
-    float t = gC.r + (noise(pp * 0.06) - 0.5) * 0.08;
-    vec3 bands = uInkBands[inkC];
-    // пороги 0,5 и 0,82 не совпадают с тонами граней боксов (0,28 / 0,35 / 0,65 / 0,72 / 0,92)
-    float density = mix(bands.z, bands.y, smoothstep(0.47, 0.53, t));
-    density = mix(density, bands.x, smoothstep(0.8, 0.84, t));
-    density *= 0.96 + 0.08 * noise(pp * 0.02 + 7.0);
-    col = mix(paper, uInkWash[inkC], clamp(density, 0.0, 1.0));
-    fog = fogAt(dC);
-    col = mix(col, paper, fog);
-  }
-
-  float lineFog = dMin < 1.0 ? fogAt(dMin) : 0.0;
-  float ink = edge * (0.75 + 0.25 * noise(pp * 0.4)) * (1.0 - lineFog);
-  col = mix(col, uInkLine[inkN], clamp(ink, 0.0, 1.0));
-  gl_FragColor = vec4(col, 1.0);
-}
-`;
-
-const v3 = (c: readonly [number, number, number]) => new Vector3(c[0], c[1], c[2]);
-
-/** Материал стилевого прохода. Матрицы и размер обновляет StyleRenderer. */
-export function createStyleMaterial(gbuffer: Texture, depth: DepthTexture, near: number, far: number): ShaderMaterial {
-  return new ShaderMaterial({
-    name: "style-pass",
-    defines: { INK_COUNT, INK_HANDS: INK.hands, INK_GRASS: INK.grass },
-    uniforms: {
-      tG: { value: gbuffer },
-      tDepth: { value: depth },
-      uRes: { value: new Vector2(1, 1) },
-      uPx: { value: 1 },
-      uNear: { value: near },
-      uFar: { value: far },
-      uProjInv: { value: new Matrix4() },
-      uCamWorld: { value: new Matrix4() },
-      uPaper: { value: v3(PAPER) },
-      uSkyInk: { value: new Vector3(0.36, 0.38, 0.42) },
-      uFog: { value: new Vector2(18, 75) },
-      uInkWash: { value: INK_BY_ID.map((n) => v3(INK_STYLE[n].wash)) },
-      uInkBands: { value: INK_BY_ID.map((n) => v3(INK_STYLE[n].bands)) },
-      uInkLine: { value: INK_BY_ID.map((n) => v3(INK_STYLE[n].line)) },
-    },
-    vertexShader: STYLE_VERT,
-    fragmentShader: STYLE_FRAG,
-    depthTest: false,
-    depthWrite: false,
-  });
-}
-```
+Код шейдеров в плане не приводится: после ревью стилевой проход написан заново с нуля (clean-room).
+Актуальная версия — `apps/client/src/render/stylePass.ts` и `gbuffer.ts`; описание приёмов — в отчёте
+исправлений потока C. Интерфейс тот же: `STYLE_VERT`, `STYLE_FRAG`, `createStyleMaterial(...)`.
 
 - [ ] **Step 3: Рендерер**
 
@@ -4116,7 +3892,7 @@ git commit -m "feat(client): ink-and-light renderer v0 and /render-test" -m "Co-
 - Produces:
   - `controls.ts`:
     - `KEYS = { forward: "KeyW", back: "KeyS", left: "KeyA", right: "KeyD", jump: "Space", debug: "Backquote" }`, `GAME_KEYS`;
-    - `BASE_SENSITIVITY = 0.0022`, `SENS_MIN = 0.25`, `SENS_MAX = 3`, `MAX_MOUSE_STEP_PX = 300`;
+    - `BASE_SENSITIVITY = (0.11 * Math.PI) / 180` (0,11° на пиксель), `SENS_MIN = 0.2`, `SENS_MAX = 3`, `MAX_MOUSE_STEP_PX = 300`;
     - `Look { yaw; pitch }`;
     - `moveAxes(down)`, `applyLook(look, dx, dy, sensitivity)`, `buildInput(down, look): PlayerInput`, `clampSensitivity(x)`;
   - `fixedStep.ts`: `ClockStep { ticks; acc; alpha }`, `MAX_TICKS_PER_FRAME = 5`, `advanceClock(acc, frameS, tickS, maxTicks?)`;
@@ -4133,7 +3909,7 @@ git commit -m "feat(client): ink-and-light renderer v0 and /render-test" -m "Co-
 `apps/client/src/sandbox/controls.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
-import { KEYS, MAX_MOUSE_STEP_PX, applyLook, buildInput, clampSensitivity, moveAxes } from "./controls";
+import { BASE_SENSITIVITY, KEYS, MAX_MOUSE_STEP_PX, applyLook, buildInput, clampSensitivity, moveAxes } from "./controls";
 
 describe("moveAxes", () => {
   it("maps WASD by physical key codes", () => {
@@ -4151,8 +3927,8 @@ describe("moveAxes", () => {
 describe("applyLook", () => {
   it("turns right on positive dx and looks up on negative dy", () => {
     const l = applyLook({ yaw: 0, pitch: 0 }, 100, -50, 1);
-    expect(l.yaw).toBeCloseTo(-0.22, 9);
-    expect(l.pitch).toBeCloseTo(0.11, 9);
+    expect(l.yaw).toBeCloseTo(-100 * BASE_SENSITIVITY, 9);
+    expect(l.pitch).toBeCloseTo(50 * BASE_SENSITIVITY, 9);
   });
 
   it("clamps pitch and wraps yaw", () => {
@@ -4176,7 +3952,7 @@ describe("buildInput", () => {
 describe("clampSensitivity", () => {
   it("keeps the multiplier in range", () => {
     expect(clampSensitivity(10)).toBe(3);
-    expect(clampSensitivity(0)).toBe(0.25);
+    expect(clampSensitivity(0)).toBe(0.2);
     expect(clampSensitivity(Number.NaN)).toBe(1);
   });
 });
@@ -4452,9 +4228,9 @@ export const KEYS = {
 /** Клавиши, у которых гасим действие браузера (прокрутка пробелом). */
 export const GAME_KEYS: ReadonlySet<string> = new Set(Object.values(KEYS));
 
-/** Радиан на пиксель мыши при множителе чувствительности 1. */
-export const BASE_SENSITIVITY = 0.0022;
-export const SENS_MIN = 0.25;
+/** Поворот на пиксель мыши при множителе 1: 0,11°, в радианах. */
+export const BASE_SENSITIVITY = (0.11 * Math.PI) / 180;
+export const SENS_MIN = 0.2;
 export const SENS_MAX = 3;
 /** Pointer Lock иногда присылает скачок в сотни пикселей — такие события пропускаем. */
 export const MAX_MOUSE_STEP_PX = 300;
@@ -4725,7 +4501,7 @@ export function createHud(root: HTMLElement, settings: Settings): Hud {
         <button class="btn sb-play" type="button">Играть</button>
         <label>Качество <select class="sb-quality">${options.join("")}</select></label>
         <label>Чувствительность мыши <span class="sb-sens-out"></span>
-          <input class="sb-sens" type="range" min="${SENS_MIN}" max="${SENS_MAX}" step="0.05" />
+          <input class="sb-sens" type="range" min="${SENS_MIN}" max="${SENS_MAX}" step="0.1" />
         </label>
         <p class="sb-muted sb-small">Ё (~) — отладка: FPS и пресет. <a href="/nettest">Тест связи</a></p>
       </section>
@@ -4742,7 +4518,7 @@ export function createHud(root: HTMLElement, settings: Settings): Hud {
   el(root, ".sb-hint").textContent = HINT;
   quality.value = settings.quality;
   sens.value = String(settings.sensitivity);
-  sensOut.textContent = `×${settings.sensitivity.toFixed(2)}`;
+  sensOut.textContent = `×${settings.sensitivity.toFixed(1)}`;
 
   const playListeners: (() => void)[] = [];
   const play = () => playListeners.forEach((cb) => cb());
@@ -4779,7 +4555,7 @@ export function createHud(root: HTMLElement, settings: Settings): Hud {
     onSensitivity(cb) {
       sens.addEventListener("input", () => {
         const x = Number(sens.value);
-        sensOut.textContent = `×${x.toFixed(2)}`;
+        sensOut.textContent = `×${x.toFixed(1)}`;
         cb(x);
       });
     },
@@ -5226,7 +5002,7 @@ export function createHandRig(): HandRig {
  */
 export function updateHandRig(rig: HandRig, m: HandMotionInput, runSpeed: number): { rig: HandRig; pose: HandPose } {
   const t = rig.t + m.dt;
-  const walk = stepSpring(rig.walk, m.onGround ? clamp(m.speed / runSpeed, 0, 1) : 0, 8, m.dt);
+  const walk = stepSpring(rig.walk, m.onGround ? clamp(m.speed / runSpeed, 0, 1) : 0, 6, m.dt);
   const w = clamp(walk.x, 0, 1);
   const phase = (rig.phase + (m.speed * m.dt * Math.PI) / STRIDE_M) % (2 * Math.PI);
   const breath = Math.sin(t * 2 * Math.PI * BREATH_HZ) * 0.006 * (1 - w);
@@ -5235,18 +5011,18 @@ export function updateHandRig(rig: HandRig, m: HandMotionInput, runSpeed: number
   const targetX = -clamp(m.lookDx * 0.00025, -0.03, 0.03);
   const targetY = breath + clamp(m.lookDy * 0.00025, -0.03, 0.03);
   const targetRoll = -clamp(m.lookDx * 0.0004, -0.08, 0.08);
-  const bobX = Math.sin(phase) * 0.012 * w;
+  const bobX = Math.sin(phase) * 0.015 * w;
   const bobY = -Math.abs(Math.sin(phase)) * 0.022 * w;
 
   let y = rig.y;
-  if (m.landVel < 0) y = { x: y.x, v: y.v + Math.max(-0.8, m.landVel * 0.08) };
+  if (m.landVel < 0) y = { x: y.x, v: y.v + Math.max(-0.75, m.landVel * 0.07) };
   const next: HandRig = {
     t,
     phase,
     walk,
-    x: stepSpring(rig.x, targetX, 10, m.dt),
-    y: stepSpring(y, targetY, 10, m.dt),
-    roll: stepSpring(rig.roll, targetRoll, 8, m.dt),
+    x: stepSpring(rig.x, targetX, 12, m.dt),
+    y: stepSpring(y, targetY, 9, m.dt),
+    roll: stepSpring(rig.roll, targetRoll, 7, m.dt),
   };
   return {
     rig: next,
