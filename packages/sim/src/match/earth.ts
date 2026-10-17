@@ -3,15 +3,17 @@ import { forwardXZ, sanitizeInput } from "../player";
 import { groundBelow } from "../raycast";
 import { aimGround } from "./aim";
 import { EARTH, slotCooldownTicks, ticks } from "./defs";
-import { castAim, emitCast, rejectCast, snappedWallBox, type Kit } from "./kit";
+import { castAim, castSlots, emitCast, snappedWallBox, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
 import { spawnTerrain, type TerrainSpec } from "./terrain";
-import type { Buttons, MatchInput, MatchState, Slot, TickCtx, Unit } from "./types";
+import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
 import { spawnZone } from "./zones";
 
 /**
- * Кит Земли «Стойкость» (GDD 4.4). Перезарядки идут с нажатия (Р14); замах камня не даёт стрелять ЛКМ, Q и C,
+ * Кит Земли «Стойкость» (GDD 4.4). Перезарядки идут с принятого нажатия (Р14); замах камня не даёт стрелять ЛКМ, Q и C,
  * E работает всегда. «Корни»: Q и C — только стоя на полу (отбрасывание ×0,5 считает бой).
+ * Нажатие, отклонённое перезарядкой или замахом, ждёт в буфере castSlots до 0,3 с: Q в замахе камня выходит сразу
+ * после выпуска камня.
  */
 
 const SS = EARTH.stoneShot;
@@ -27,45 +29,41 @@ const WALL_GROUND_PROBE_UP_M = 0.6;
 const WALL_GROUND_DROP_M = 3;
 const WALL_SPEC: Readonly<TerrainSpec> = Object.freeze({ growTicks: ticks(W.growS), solidTicks: ticks(W.solidS), lifeTicks: ticks(W.lifeS), hp: W.hp }); // 18, 12, 360, 250
 
-/** Перезарядка слота или замах; true — каст отклонён (событие reject уже записано). */
-function blocked(t: TickCtx, u: Unit, slot: Slot): boolean {
+/** Перезарядка слота или замах — причина отказа; null — слот свободен. */
+function blocked(t: TickCtx, u: Unit, slot: Slot): RejectReason | null {
   const m = u.mage!;
-  if (t.now < m.ready[slot]) {
-    rejectCast(t, u, slot, "cooldown");
-    return true;
-  }
-  if (m.windup) {
-    rejectCast(t, u, slot, "busy");
-    return true;
-  }
-  return false;
+  if (t.now < m.ready[slot]) return "cooldown";
+  return m.windup ? "busy" : null;
 }
 
-/** «Корни»: Q и C только стоя на полу; true — каст отклонён. */
-function notGrounded(t: TickCtx, u: Unit, slot: Slot): boolean {
-  if (u.move.onGround) return false;
-  rejectCast(t, u, slot, "notGrounded");
-  return true;
-}
+/** «Корни»: Q и C только стоя на полу, затем перезарядка и замах; null — можно кастовать. */
+const groundedAndFree = (t: TickCtx, u: Unit, slot: Slot): RejectReason | null => (u.move.onGround ? blocked(t, u, slot) : "notGrounded");
 
-/** ЛКМ: пока удержана и слот готов — замах камня 0,2 с; снаряд выпускает tick. Отказов не шлёт. */
-function stoneShot(t: TickCtx, u: Unit, inp: MatchInput): void {
+/**
+ * ЛКМ: пока удержана (или нажатие ждёт в буфере) и слот готов — замах камня 0,2 с; снаряд выпускает tick.
+ * Свой замах идёт на перезарядке ЛКМ, поэтому отказ ЛКМ — всегда «перезарядка», и castSlots его не шлёт.
+ */
+function stoneShot(_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const m = u.mage!;
-  if (!inp.primary || m.windup || t.now < m.ready.primary) return;
+  const no = blocked(t, u, "primary");
+  if (no) return no;
   m.ready.primary = t.now + slotCooldownTicks("earth", "primary");
   m.windup = { ability: "stoneShot", slot: "primary", releaseTick: t.now + STONE_WINDUP_TICKS };
   emitCast(t, u, "stoneShot", "primary", castAim(u, inp));
+  return null;
 }
 
 /**
- * Q: трещины 0,6 с в точке под прицелом, затем удар и столб (их делает зона). Точка ближе 0,9 м к магу — столб
- * под ним самим (Р9): по центру мага, от его ступней.
+ * Q: трещины 0,6 с в точке под прицелом, затем удар и столб (их делает зона). Точка ближе 1,0 м к магу по XZ — столб
+ * под ним самим (Р9, теперь 1,0 м = половина столба 0,6 + полтела 0,4): по центру мага, от его ступней, с подъёмом
+ * на вершину. Дальше столб не задевает мага: обычный удар в точке.
  */
-function stonePillar(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
-  if (notGrounded(t, u, "q") || blocked(t, u, "q")) return;
+function stonePillar(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
+  const no = groundedAndFree(t, u, "q");
+  if (no) return no;
   const c = sanitizeInput(inp, u.move);
   const at = aimGround(s, t, u.id, c.yaw, c.pitch, P.rangeM);
-  if (!at) return rejectCast(t, u, "q", "noTarget");
+  if (!at) return "noTarget";
   const pos = u.move.body.pos;
   const self = Math.hypot(at.x - pos.x, at.z - pos.z) < P.selfRadiusM;
   const cx = self ? pos.x : at.x;
@@ -77,12 +75,13 @@ function stonePillar(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void 
   spawnZone(s, t, { owner: u.id, kind: "pillar", ability: "stonePillar", shape: { type: "box", box }, bornTick: now, armTick: now + PILLAR_TELEGRAPH_TICKS, endTick: now + PILLAR_TELEGRAPH_TICKS + 1 });
   u.mage!.ready.q = now + slotCooldownTicks("earth", "q");
   emitCast(t, u, "stonePillar", "q", castAim(u, inp));
+  return null;
 }
 
 /** E: стена 2 м перед магом поперёк взгляда (Р6), основание — опора под ней. Можно и в воздухе, и во время замаха. */
-function stoneWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
+function stoneWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const m = u.mage!;
-  if (t.now < m.ready.e) return rejectCast(t, u, "e", "cooldown");
+  if (t.now < m.ready.e) return "cooldown";
   const yaw = sanitizeInput(inp, u.move).yaw;
   const f = forwardXZ(yaw);
   const pos = u.move.body.pos;
@@ -93,11 +92,13 @@ function stoneWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   spawnTerrain(s, t, u.id, "wall", box, WALL_SPEC);
   m.ready.e = t.now + slotCooldownTicks("earth", "e");
   emitCast(t, u, "stoneWall", "e", castAim(u, inp));
+  return null;
 }
 
 /** C: нога поднимается 0,4 с, затем удар по диску 7 м вокруг точки каста (бьёт зона, Р8). */
-function earthquake(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
-  if (notGrounded(t, u, "c") || blocked(t, u, "c")) return;
+function earthquake(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
+  const no = groundedAndFree(t, u, "c");
+  if (no) return no;
   const now = t.now;
   const p = u.move.body.pos;
   spawnZone(s, t, {
@@ -106,14 +107,15 @@ function earthquake(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   });
   u.mage!.ready.c = now + slotCooldownTicks("earth", "c");
   emitCast(t, u, "earthquake", "c", castAim(u, inp));
+  return null;
 }
+
+/** Слоты Земли для castSlots: он же держит буфер нажатий и пишет отказы. */
+const EARTH_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: stoneShot, q: stonePillar, e: stoneWall, c: earthquake });
 
 export const EARTH_KIT: Kit = Object.freeze({
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {
-    stoneShot(t, u, inp);
-    if (pressed.q) stonePillar(s, t, u, inp);
-    if (pressed.e) stoneWall(s, t, u, inp);
-    if (pressed.c) earthquake(s, t, u, inp);
+    castSlots(s, t, u, inp, pressed, EARTH_CASTS);
   },
   /** Конец замаха: камень вылетает из глаз по прицелу этого тика. */
   tick(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {

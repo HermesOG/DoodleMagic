@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ABILITY_OF, CC_LIMITS, DUMMY, EARTH, ELEMENT_INFO, FIRE, KNOCKBACK, MAGE_REGEN, STATUS, TELEGRAPH_MIN_S, slotCooldownTicks, ticks } from "./defs";
 import { aimDir, clonePlain, createDummyUnit, createMageUnit, createMatchState, rightXZ, statusFlags, unitById } from "./state";
-import { ABILITY_IDS, ELEMENTS, SLOTS } from "./types";
+import { ABILITY_IDS, ELEMENTS, NEVER, SLOTS } from "./types";
 
 describe("ability tables follow GDD 4.3–4.4", () => {
   it("pins the Fire card", () => {
@@ -53,6 +53,7 @@ describe("match state", () => {
 
   it("creates plain-data units with full HP that survive JSON", () => {
     expect([mage.hp, mage.maxHp, dummy.hp, mage.mage?.ready]).toEqual([170, 170, 170, { primary: 0, q: 0, e: 0, c: 0 }]);
+    expect(mage.mage?.pending).toEqual({ primary: NEVER, q: NEVER, e: NEVER, c: NEVER });
     const s = createMatchState([mage, dummy]);
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
     expect([unitById(s, 2), unitById(s, 9)]).toEqual([s.units[1], undefined]);

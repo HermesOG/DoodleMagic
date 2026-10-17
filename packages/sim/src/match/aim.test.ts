@@ -36,6 +36,11 @@ describe("aimGround", () => {
     expect(round(at(createMatchState([mage()]), walled, 0, 0, 15))).toEqual([0, 0, -9.7]);
   });
 
+  it("drops from below an overhang hit from underneath, not from inside it", () => {
+    const slab = testContext([{ box: aabb(-10, 3, -30, 10, 3.5, -5) }]);
+    expect(round(at(createMatchState([mage()]), slab, 0, Math.atan2(1.4, 8), 20))).toEqual([0, 0, -8]);
+  });
+
   it("returns null over the void", () => {
     const s = createMatchState([createMageUnit(1, "fire", { pos: { x: 18, y: 0, z: 0 }, yaw: -Math.PI / 2 })]);
     expect(at(s, ctx, -Math.PI / 2, 0, 15)).toBeNull();

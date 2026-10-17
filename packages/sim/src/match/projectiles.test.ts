@@ -91,6 +91,19 @@ describe("projectiles", () => {
     expect(ev).toContainEqual(expect.objectContaining({ type: "explosion", ability: "fireball", radius: FIRE.fireball.radiusM }));
   });
 
+  it("pushes a direct fireball hit along the travel direction, even 0.6 m off-centre; the splash stays radial", () => {
+    const s = createMatchState([mage(), dummy(2, 0.6, -10), dummy(3, 3.2, -9.15)]);
+    shoot(s, ctx, "fireball");
+    const ev = fly(s, ctx, 40);
+    const hit = (id: number) => ev.find((e) => e.type === "hit" && e.target === id && !e.dot);
+    const deg = (d: { x: number; z: number }) => (Math.acos(-d.z / Math.hypot(d.x, d.z)) * 180) / Math.PI; // от −Z (полёт шара)
+    const direct = hit(2);
+    const moved = { x: byId(s, 2).move.body.pos.x - 0.6, z: byId(s, 2).move.body.pos.z + 10 };
+    expect([direct?.type === "hit" && deg(direct.dir) < 5, deg(moved) < 5, Math.hypot(moved.x, moved.z) > 1]).toEqual([true, true, true]);
+    const splash = hit(3);
+    expect(splash?.type === "hit" && deg(splash.dir) > 45).toBe(true);
+  });
+
   it("does not splash through a wall", () => {
     const walled = testContext([{ box: aabb(1.6, 0, -12, 2.2, 3, -6) }]);
     const s = createMatchState([mage(), dummy(2, 0, -10), dummy(3, 3.2, -9.15)]);

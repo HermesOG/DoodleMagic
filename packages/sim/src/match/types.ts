@@ -43,6 +43,11 @@ export interface MageState {
   ready: Record<Slot, number>;
   /** Кнопки прошлого тика — для нажатий. */
   held: Buttons;
+  /**
+   * Буфер нажатий: тик нажатия слота, которое ждёт, пока каст станет возможен (перезарядка или замах, до 0,3 с);
+   * NEVER — ничего не ждёт.
+   */
+  pending: Record<Slot, number>;
   /** Замах: выпуск на releaseTick, прицел — на тике выпуска. */
   windup: { ability: AbilityId; slot: Slot; releaseTick: number } | null;
   /** Жар Огня 0…100; у Земли всегда 0. */

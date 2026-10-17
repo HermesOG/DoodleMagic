@@ -7,7 +7,7 @@ import { EARTH_KIT } from "./earth";
 import { FIRE_KIT } from "./fire";
 import type { Kit } from "./kit";
 import { stepProjectiles } from "./projectiles";
-import { NO_MATCH_INPUT, clonePlain, createDummyUnit, createMageUnit, createMatchState } from "./state";
+import { clonePlain, createDummyUnit, createMageUnit, createMatchState, idleInput } from "./state";
 import { stepTerrain } from "./terrain";
 import type { Buttons, DummySpot, Element, MatchContext, MatchEvent, MatchInput, MatchState, MatchStep, TickCtx, UnitId } from "./types";
 import { moveUnits, stepLife } from "./units";
@@ -41,6 +41,7 @@ export function createMatch(setup: MatchSetup): MatchState {
  * Один тик. Порядок фиксирован, на нём держится детерминизм: ввод китов (все маги по id) → тики китов → движение
  * юнитов → снаряды → зоны → рельеф → статусы → жизнь. Мир тика — статика с рельефом и стенами огня на начало тика.
  * Ввод очищается (sanitizeInput, кнопки — только ровно true); нажатие — переход false → true к прошлому тику.
+ * Нет ввода от мага на этом тике — idleInput: стоит, кнопки отпущены, взгляд прежний (как в moveUnits).
  */
 export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<Record<UnitId, MatchInput>>>, ctx: MatchContext): MatchStep {
   const s = clonePlain(state as MatchState);
@@ -51,7 +52,7 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
   for (const u of s.units) {
     const m = u.mage;
     if (!m) continue;
-    const raw = inputs[u.id] ?? NO_MATCH_INPUT;
+    const raw = inputs[u.id] ?? idleInput(u);
     const inp: MatchInput = { ...sanitizeInput(raw, u.move), primary: raw.primary === true, q: raw.q === true, e: raw.e === true, c: raw.c === true };
     const pressed: Buttons = { primary: inp.primary && !m.held.primary, q: inp.q && !m.held.q, e: inp.e && !m.held.e, c: inp.c && !m.held.c };
     clean[u.id] = inp;
