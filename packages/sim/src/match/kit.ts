@@ -89,8 +89,8 @@ function legalAt(m: NonNullable<Unit["mage"]>, slot: Slot, r: RejectReason, now:
 }
 
 /**
- * Нажатия тика по слотам в порядке SLOTS (ЛКМ, Q, E, C). Слот пробует каст, если его кнопку нажали на этом тике,
- * если прежнее нажатие ещё ждёт в буфере, а ЛКМ — и пока она удержана (темп карточки, как раньше).
+ * Нажатия тика по слотам в порядке order (по умолчанию SLOTS: ЛКМ, Q, E, C). Слот пробует каст, если его кнопку
+ * нажали на этом тике, если прежнее нажатие ещё ждёт в буфере, а ЛКМ — и пока она удержана (темп карточки, как раньше).
  * - Отказ «перезарядка» или «замах», который снимется не позже PRESS_BUFFER_TICKS тиков после нажатия, держит нажатие
  *   в буфере: каст выходит на первом тике, когда он возможен, и отказа нет.
  * - Отказ, который за окно не снимется (долгая перезарядка), и прочие отказы — reject сразу, на этом тике: отказ
@@ -100,10 +100,10 @@ function legalAt(m: NonNullable<Unit["mage"]>, slot: Slot, r: RejectReason, now:
  * - Новое нажатие того же слота начинает окно заново; за тик слот пробует каст не больше одного раза.
  * Окно как у буфера прыжка: нажатие за 18 тиков до готовности ещё срабатывает, за 19 — отказ сразу.
  */
-export function castSlots(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons, casts: Readonly<Record<Slot, TryCast>>): void {
+export function castSlots(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons, casts: Readonly<Record<Slot, TryCast>>, order: readonly Slot[] = SLOTS): void {
   const m = u.mage!;
   const now = t.now;
-  for (const slot of SLOTS) {
+  for (const slot of order) {
     if (pressed[slot]) m.pending[slot] = now;
     const at = m.pending[slot];
     const waiting = now - at <= PRESS_BUFFER_TICKS;

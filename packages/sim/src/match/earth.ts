@@ -112,10 +112,15 @@ function earthquake(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): Reject
 
 /** Слоты Земли для castSlots: он же держит буфер нажатий и пишет отказы. */
 const EARTH_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: stoneShot, q: stonePillar, e: stoneWall, c: earthquake });
+/**
+ * Q, E и C — раньше удержанной ЛКМ: у них нет замаха, а замах камня, начатый первым, отклонил бы Q и C, нажатые
+ * ровно на тике, когда камень снова готов. Так оба каста выходят тем же тиком.
+ */
+const EARTH_ORDER: readonly Slot[] = Object.freeze(["q", "e", "c", "primary"]);
 
 export const EARTH_KIT: Kit = Object.freeze({
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {
-    castSlots(s, t, u, inp, pressed, EARTH_CASTS);
+    castSlots(s, t, u, inp, pressed, EARTH_CASTS, EARTH_ORDER);
   },
   /** Конец замаха: камень вылетает из глаз по прицелу этого тика. */
   tick(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {

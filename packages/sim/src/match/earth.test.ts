@@ -69,6 +69,11 @@ describe("Earth kit", () => {
     expect([centre(far.s), feet(far.s)]).toEqual([[0, -1.2], [true, 0]]);
   });
 
+  it("handles Q before the held LMB: a Q pressed on the tick the stone is ready casts on that tick, beside the stone", () => {
+    const { log } = play([], 40, (k) => ({ primary: true, q: k === 32, pitch: pitchTo(12, 0.5) }));
+    expect([ticksOf(log, "cast", "stoneShot"), ticksOf(log, "cast", "stonePillar"), log.filter(({ e }) => e.type === "reject")]).toEqual([[0, 32], [32], []]);
+  });
+
   it("buffers a Q pressed during the stone windup while LMB is held and casts it when the windup ends", () => {
     const { log } = play([], 40, (k) => ({ primary: true, q: k === 4, pitch: pitchTo(12, 0.5) }));
     expect([ticksOf(log, "release", "stoneShot"), ticksOf(log, "cast", "stonePillar"), log.filter(({ e }) => e.type === "reject")]).toEqual([[12], [13], []]);

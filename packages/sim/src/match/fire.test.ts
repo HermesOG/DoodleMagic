@@ -98,13 +98,36 @@ describe("Fire kit", () => {
   });
 
   it("«Кураж»: a kill clears heat and refreshes the dash", () => {
+    const heat: number[] = [];
     const { log, s, start } = play([at(-10)], 150, (k, st) => {
       if (k === 0) Object.assign(st.units[1]!, { hp: 20, lastHitTick: st.tick });
+      if (k === 30) Object.assign(st.units[0]!.mage!, { heat: 100, overheatUntil: st.tick + 90 }); // убийство — в перегреве
+      heat.push(st.units[0]!.mage!.heat);
       const p = st.units[0]!.move.body.pos;
       return { e: k === 0, moveX: k === 0 ? -1 : 0, primary: k >= 30, yaw: Math.atan2(p.x, 10 + p.z), pitch: pitchTo(Math.hypot(p.x, 10 + p.z)) };
     });
     const kill = log.find(({ e }) => e.type === "courage")!;
     expect(s.units[0]!.mage!.ready.e).toBeLessThanOrEqual(start + kill.t);
+    // перегрев снят тем же тиком: событие overheat {on: false} и жар 0 после тика убийства
+    expect([log.filter(({ e }) => e.type === "overheat").map(({ t, e }) => [t, e.type === "overheat" && e.on]), heat[kill.t + 1]]).toEqual([[[kill.t, false]], 0]);
+  });
+
+  it("jet dash slides along a wall it grazes or meets at 45°, and still stops head-on at a crate face", () => {
+    const wall = testContext([{ box: aabb(-5, 0, -3, 15, 3, -0.5), tag: "wall" }]); // грань z = −0,5: 0,1 м от бока мага
+    const dash = (yaw: number, c: MatchContext) => {
+      const r = play([], 30, (k) => ({ e: k === 0, moveX: k === 0 ? 1 : 0, moveZ: k === 0 ? 1 : 0, yaw }), HOME, c);
+      return { r, end: r.log.find(({ e }) => e.type === "dash" && e.phase === "end")!, p: r.s.units[0]!.move.body.pos };
+    };
+    // W+D вдоль стены, ~6° в неё: касается через ~1 м и скользит дальше
+    const graze = dash(-Math.PI / 4 + 0.1, wall);
+    expect([graze.end.t, Math.hypot(graze.p.x, graze.p.z) >= 7, Number(graze.p.z.toFixed(6))]).toEqual([11, true, -0.1]);
+    // W+D под 45° к стене (дорожка галереи): скользит вдоль неё до конца рывка
+    const deck = dash(0, wall);
+    expect([deck.end.t, deck.p.x > 5]).toEqual([11, true]);
+    // в лоб в ящик — встаёт у его грани
+    const crate = play([], 30, (k) => ({ e: k === 0, moveZ: k === 0 ? 1 : 0 }), HOME, testContext([{ box: aabb(-0.5, 0, -5, 0.5, 1, -4), tag: "crate" }]));
+    const stop = crate.log.find(({ e }) => e.type === "dash" && e.phase === "end")!;
+    expect([stop.t < 11, Number(crate.s.units[0]!.move.body.pos.z.toFixed(6)), Number(crate.s.units[0]!.move.body.pos.x.toFixed(6))]).toEqual([true, -3.6, 0]);
   });
 
   it("jet dash works in the air at a constant height, cancels the caster's knockback and stops at a wall", () => {
