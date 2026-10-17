@@ -9,10 +9,10 @@ import { createDecalMeshes, zoneDecal, type DecalSpec, type RootRing } from "./d
 import { createDummyMeshes, type DummyView } from "./dummyMeshes";
 import { createFireWallMeshes, fireWallSheet, type FireWallSheet } from "./fireWalls";
 import type { TimeUniform } from "./fxShader";
-import { createGlowMeshes, type Glow } from "./glows";
+import { createGlowMeshes, cullGlows, type Glow } from "./glows";
 import { handToWorldView, lerpById, muzzleBlend, renderTick } from "./interp";
 import { createParticlePool } from "./particles";
-import { FX_COLOR, MAGIC_LIGHTS, burstParticles, lineFlames, palmParticles, poolCaps, trailParticles } from "./presets";
+import { BURST_SHARE, FX_COLOR, MAGIC_LIGHTS, burstParticles, lineFlames, palmParticles, poolCaps, thinParticles, trailParticles, type ParticleSpec } from "./presets";
 import { PROJECTILE_LOOK, createProjectileMeshes, type ProjectileDraw } from "./projectileMeshes";
 import { createTerrainMeshes, createVeinMeshes, terrainVisualBox, veinFaces, type VeinFace } from "./terrainMeshes";
 
@@ -27,6 +27,18 @@ export interface VfxView {
   palms: { right: Vector3; left: Vector3 };
 }
 
+/**
+ * Эффекты магии. Порядок за кадр:
+ * 1. поза камеры мира (position, rotation; матрицы обновит sync);
+ * 2. `apply` — эффекты этого кадра (из карты событий);
+ * 3. `sync` — состояние матча и время;
+ * 4. `StyleRenderer.render(world, overlay, vfx.fx)`.
+ *
+ * Часы одни: `nowS` в `apply` и в `VfxView.nowS` — одна и та же шкала секунд (рост рельефа, вспышки,
+ * жизнь частиц); пауза часов замораживает эффекты. `palms` — в пространстве камеры рук (overlayCamera), как их
+ * ставят руки. `setPreset` вызывается вместе с `StyleRenderer.setPreset` тем же пресетом: от него зависят бюджет
+ * частиц, доля всплесков, число источников света и дешёвый шум стены огня.
+ */
 export interface Vfx {
   /** Меши G-буфера (манекены, рельеф, ядра снарядов, обломки): добавить в сцену мира. */
   readonly worldGroup: Group;
@@ -128,12 +140,14 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   };
   let caps = poolCaps(preset);
   let lights = MAGIC_LIGHTS[preset];
+  let share = BURST_SHARE[preset];
   const top = poolCaps("high");
   const worldPool = createParticlePool({ name: "fx-particles", maxCap: top.world, cap: caps.world, gbuffer, time });
   const palmPool = createParticlePool({ name: "fx-palm", maxCap: top.palm, cap: caps.palm, gbuffer, time, noDepth: true });
   const glows = createGlowMeshes(gbuffer);
   const decals = createDecalMeshes(gbuffer, time);
   const walls = createFireWallMeshes(gbuffer, time);
+  walls.setCheap(preset !== "high");
   const veins = createVeinMeshes(gbuffer, time);
   const dummies = createDummyMeshes(8);
   const terrain = createTerrainMeshes(24);
@@ -161,6 +175,9 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const tmp = new Vector3();
   const eye = new Vector3();
 
+  /** Мировой пул с долей всплесков пресета (BURST_SHARE). */
+  const emitWorld = (specs: readonly ParticleSpec[], t: number): void => worldPool.emit(thinParticles(specs, share), t);
+
   const anim = (id: UnitId): DummyAnim => {
     let a = anims.get(id);
     if (!a) {
@@ -182,7 +199,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       const t = rel(nowS);
       switch (e.kind) {
         case "burst": {
-          worldPool.emit(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), t);
+          emitWorld(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), t);
           const l = BURST_LIGHT[e.preset];
           if (l) flashes.push({ ...l, pos: { ...e.pos }, born: t, light: l.light * Math.min(1.5, Math.max(0.7, e.scale)) });
           break;
@@ -281,7 +298,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           if (v.nowS - a.lastBurnS > 0.08) {
             a.lastBurnS = v.nowS;
             const at = { x: pos.x + (Math.random() - 0.5) * 0.4, y: pos.y + 0.5 + Math.random() * 1.1, z: pos.z + (Math.random() - 0.5) * 0.3 };
-            worldPool.emit(burstParticles("burnLick", at, UP, 1, Math.random), nowT);
+            emitWorld(burstParticles("burnLick", at, UP, 1, Math.random), nowT);
           }
           const flicker = 0.75 + 0.25 * Math.sin(v.nowS * 23 + u.id) * Math.sin(v.nowS * 9.1);
           glowList.push({ pos: { x: pos.x, y: pos.y + 1, z: pos.z }, color: FX_COLOR.fire, halo: 0, light: 2.4, intensity: 0.7 * flicker, core: 0, prio: 1 });
@@ -319,7 +336,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             const n = Math.floor(tr.acc / look.trailEveryM);
             if (n > 0) {
               tr.acc -= n * look.trailEveryM;
-              worldPool.emit(trailParticles(pr.ability, tr.last, pos, Math.min(n, 16), Math.random), nowT);
+              emitWorld(trailParticles(pr.ability, tr.last, pos, Math.min(n, 16), Math.random), nowT);
             }
           }
         }
@@ -345,13 +362,13 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           if (!st) {
             st = { embers: 0 };
             ignited.set(z.id, st);
-            worldPool.emit(lineFlames(line.a, line.b, 44, true, Math.random), nowT);
+            emitWorld(lineFlames(line.a, line.b, 44, true, Math.random), nowT);
           }
           st.embers += dt * 34 * sheet.fade;
           const n = Math.floor(st.embers);
           if (n > 0) {
             st.embers -= n;
-            worldPool.emit(lineFlames(line.a, line.b, n, false, Math.random), nowT);
+            emitWorld(lineFlames(line.a, line.b, n, false, Math.random), nowT);
           }
           for (const f of [0.25, 0.75]) {
             const p = { x: line.a.x + (line.b.x - line.a.x) * f, y: line.a.y + 1.2, z: line.a.z + (line.b.z - line.a.z) * f };
@@ -368,7 +385,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           const n = Math.floor(st.embers);
           if (n > 0) {
             st.embers -= n;
-            worldPool.emit(lineFlames(line.a, line.b, n, false, Math.random), nowT);
+            emitWorld(lineFlames(line.a, line.b, n, false, Math.random), nowT);
           }
         }
       }
@@ -410,11 +427,13 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         const k = 1 - age / f.life;
         glowList.push({ pos: f.pos, color: FX_COLOR.fire, halo: f.halo * (0.6 + 0.4 * k), light: f.light, intensity: f.intensity * k * k, core: f.core * k, prio: 5 });
       }
-      // бюджет источников света на мир (пресет): самые важные светят, остальные — только ореол
-      glowList.sort((a, b) => b.prio - a.prio);
+      // вне пирамиды видимости — не рисуем и не тратим на них бюджет; из видимых самые важные светят на мир
+      // (пресет: 2/4/8), остальные — только ореол
+      const visible = cullGlows(glowList, cam);
+      visible.sort((a, b) => b.prio - a.prio);
       let lit = 0;
       const out: Glow[] = [];
-      for (const g of glowList) {
+      for (const g of visible) {
         let light = g.light;
         if (light > 0) {
           if (lit < lights) lit++;
@@ -430,6 +449,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     setPreset(p) {
       caps = poolCaps(p);
       lights = MAGIC_LIGHTS[p];
+      share = BURST_SHARE[p];
+      walls.setCheap(p !== "high");
       worldPool.setCap(caps.world);
       palmPool.setCap(caps.palm);
     },

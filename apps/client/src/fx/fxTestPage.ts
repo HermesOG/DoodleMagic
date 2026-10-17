@@ -61,15 +61,26 @@ const STAGE = { x: -1.4, y: 0, z: 1.2 };
 interface View {
   pos: Vector3;
   look: Vector3;
+  /** Камера крутится на месте, рад/с: эффекты оказываются сбоку и за спиной. */
+  turn?: number;
 }
 const VIEWS: Record<string, View> = {
   wide: { pos: new Vector3(0, 2.1, 7.5), look: new Vector3(0, 0.9, -5) },
   low: { pos: new Vector3(-0.5, 1.6, 2.5), look: new Vector3(-0.8, 1.2, -6) },
   top: { pos: new Vector3(0, 9, 5.5), look: new Vector3(0, 0, -5) },
+  // в 3,7 м от манекена A: взрыв прямо на нём не должен заливать силуэт
+  dummy: { pos: new Vector3(-2.4, 1.6, -0.9), look: new Vector3(-3.2, 1.0, -4.5) },
+  // посреди площадки, полный оборот за 16 с: свет и ореолы за камерой не должны ни рисоваться, ни мерцать
+  turn: { pos: new Vector3(-0.5, 1.7, -1.6), look: new Vector3(0, 1.4, -1), turn: (2 * Math.PI) / 16 },
 };
 
-/** Глаза мага-наблюдателя (камера) на времени t: медленное покачивание. */
+/** Глаза мага-наблюдателя (камера) на времени t: медленное покачивание или оборот на месте. */
 function eyeAt(view: View, t: number, still: boolean): { pos: Vector3; look: Vector3 } {
+  if (view.turn) {
+    const a = t * view.turn;
+    const d = view.look;
+    return { pos: view.pos.clone(), look: new Vector3(view.pos.x - Math.sin(a), view.pos.y + d.y - 1.7, view.pos.z - Math.cos(a)) };
+  }
   const sway = still ? 0 : Math.sin(t * 0.25) * 1.2;
   return { pos: new Vector3(view.pos.x + sway, view.pos.y, view.pos.z), look: view.look.clone() };
 }
@@ -282,9 +293,10 @@ function disposeScene(scene: Scene): void {
 
 /**
  * /fx-test — эффекты магии на синтетическом состоянии, без симуляции.
- * ?preset=low|medium|high — пресет без автовыбора; ?view=wide|low|top — точка обзора; ?still=1 — камера стоит;
+ * ?preset=low|medium|high — пресет без автовыбора; ?view=wide|low|top|turn|dummy — точка обзора (turn — оборот на месте
+ * посреди эффектов); ?still=1 — камера стоит;
  * ?speed=0.25 — замедление; ?t=4.4 — начать с этой секунды расписания; ?burst=fireballBoom — первый всплеск
- * на площадке. Пробел — пауза. Возвращает функцию остановки страницы.
+ * на площадке; ?stage=dummy — площадка всплесков на манекене A. Пробел — пауза. Возвращает функцию остановки страницы.
  */
 export function mountFxTest(root: HTMLElement): () => void {
   document.body.classList.add("game");
@@ -302,6 +314,8 @@ export function mountFxTest(root: HTMLElement): () => void {
   const still = params.get("still") === "1";
   const speedArg = Number.parseFloat(params.get("speed") ?? "1");
   const speed = Number.isFinite(speedArg) && speedArg > 0 ? Math.min(4, speedArg) : 1;
+  // ?stage=dummy — всплески прямо на манекене A (проверка: силуэт не заливается)
+  const stage = params.get("stage") === "dummy" ? { x: DUMMY_A_POS.x, y: 0, z: DUMMY_A_POS.z + 0.3 } : STAGE;
   const startArg = Number.parseFloat(params.get("t") ?? "0");
   const start = Number.isFinite(startArg) && startArg > 0 ? Math.min(600, startArg) : 0;
 
@@ -313,6 +327,8 @@ export function mountFxTest(root: HTMLElement): () => void {
     return () => {};
   }
   const vfx = createVfx(renderer.gbuffer, renderer.preset.id);
+  // отладка: из консоли — замер времени GPU (EXT_disjoint_timer_query_webgl2) вокруг renderer.render
+  (window as unknown as { __fxTest?: { renderer: StyleRenderer } }).__fxTest = { renderer };
   const world = new Scene();
   world.add(buildArenaMeshes(FX_BOXES), vfx.worldGroup);
   const overlay = handProbe();
@@ -363,7 +379,7 @@ export function mountFxTest(root: HTMLElement): () => void {
       const id = BURST_PRESETS[burstIdx % BURST_PRESETS.length]!;
       burstIdx++;
       lastPreset = id;
-      const pos = EARTH_BURSTS.has(id) ? { x: STAGE.x, y: 0.05, z: STAGE.z } : { x: STAGE.x, y: 1.1, z: STAGE.z };
+      const pos = EARTH_BURSTS.has(id) ? { x: stage.x, y: 0.05, z: stage.z } : { x: stage.x, y: 1.1, z: stage.z };
       vfx.apply({ kind: "burst", preset: id, pos, dir: UP, scale: 1 }, simT, "right");
       nextBurst += 0.7;
     }

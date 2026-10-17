@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Vector3, type ShaderMaterial } from "three";
+import { DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, PlaneGeometry, Vector3, type ShaderMaterial } from "three";
 import { TICK_HZ, type AABB, type Zone } from "@doodlemagic/sim";
 import { FX_ORDER, createFxMaterial, type FxGBuffer, type TimeUniform } from "./fxShader";
 import { FX_COLOR } from "./presets";
@@ -26,36 +26,10 @@ export function fireWallSheet(z: Zone, nowTick: number): FireWallSheet | null {
   return { box: z.shape.box, rise: (1 - (1 - up) ** 2) * (0.35 + 0.65 * down), fade: down, seed: (z.id * 0.37) % 13 };
 }
 
-/** Четыре боковые грани единичного бокса: x, z ∈ [−0,5; 0,5], y ∈ [0; 1]. Верха и низа нет. */
-function sideBox(): BufferGeometry {
-  const pos: number[] = [];
-  const nrm: number[] = [];
-  const idx: number[] = [];
-  const faces: { n: [number, number, number]; c: [number, number, number][] }[] = [
-    { n: [0, 0, 1], c: [[-0.5, 0, 0.5], [0.5, 0, 0.5], [0.5, 1, 0.5], [-0.5, 1, 0.5]] },
-    { n: [0, 0, -1], c: [[0.5, 0, -0.5], [-0.5, 0, -0.5], [-0.5, 1, -0.5], [0.5, 1, -0.5]] },
-    { n: [1, 0, 0], c: [[0.5, 0, 0.5], [0.5, 0, -0.5], [0.5, 1, -0.5], [0.5, 1, 0.5]] },
-    { n: [-1, 0, 0], c: [[-0.5, 0, -0.5], [-0.5, 0, 0.5], [-0.5, 1, 0.5], [-0.5, 1, -0.5]] },
-  ];
-  for (const f of faces) {
-    const b = pos.length / 3;
-    for (const c of f.c) {
-      pos.push(...c);
-      nrm.push(...f.n);
-    }
-    idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
-  }
-  const g = new BufferGeometry();
-  g.setAttribute("position", new BufferAttribute(new Float32Array(pos), 3));
-  g.setAttribute("normal", new BufferAttribute(new Float32Array(nrm), 3));
-  g.setIndex(idx);
-  return g;
-}
-
 /**
- * Стена огня — лист пламени по боксу зоны (обе стороны боковых граней): шум течёт вверх, плотность почти 1
- * у основания (закрывает обзор), выше — рваные языки, по краям языков — дымка. Геометрия выше стены на 25 %:
- * там лижут языки.
+ * Стена огня — один двусторонний лист пламени по середине бокса зоны вдоль длинной оси: шум течёт вверх,
+ * плотность почти 1 у основания (закрывает обзор), выше — рваные языки, по краям языков — дымка, концы обгрызены.
+ * Лист выше стены на 25 %: там лижут языки.
  */
 const WALL_VERT = /* glsl */ `
 attribute vec4 aW0; // середина основания (x, y, z), семя
@@ -66,11 +40,12 @@ varying vec4 vInfo;
 varying vec2 vAlong;
 void main() {
   float h = aW1.y * 1.25 * aW1.w;
+  float len = max(aW1.x, aW1.z);
+  vec3 axis = aW1.x >= aW1.z ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0);
+  vec3 w = vec3(aW0.x, aW0.y + position.y * h, aW0.z) + axis * (position.x * len);
   // координата по длинной оси от середины и половина длины: модуль берёт фрагментный шейдер
-  vAlong = vec2(aW1.x >= aW1.z ? position.x * aW1.x : position.z * aW1.z, max(aW1.x, aW1.z) * 0.5);
-  vec3 w = vec3(aW0.x + position.x * aW1.x, aW0.y + position.y * h, aW0.z + position.z * aW1.z);
-  float u = abs(normal.x) > 0.5 ? w.z : w.x;
-  vUV = vec2(u, w.y - aW0.y);
+  vAlong = vec2(position.x * len, len * 0.5);
+  vUV = vec2(dot(w, axis), w.y - aW0.y);
   vInfo = vec4(h, aW2.x, aW0.w, aW1.y * aW1.w);
   gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
 }
@@ -106,16 +81,18 @@ void main() {
   float heat = clamp(flame, 0.0, 1.0);
   vec3 col = mix(uEmber, uFire, smoothstep(0.05, 0.45, heat));
   col = mix(col, uCore, smoothstep(0.6, 1.05, heat));
-  float a = dens * 0.9 * fade * vis;
-  float sa = smoke * fade * vis;
+  float a = dens * 0.95 * fade * fxDense(vis);
+  float sa = smoke * fade * fxDense(vis);
   vec3 glow = col * heat * 0.45 * fade * vis;
   gl_FragColor = vec4(col * a + glow + vec3(0.22, 0.21, 0.2) * sa, a + sa * (1.0 - a));
 }
 `;
 
 export interface FireWallMeshes {
-  readonly mesh: InstancedMesh<BufferGeometry, ShaderMaterial>;
+  readonly mesh: InstancedMesh<PlaneGeometry, ShaderMaterial>;
   update(sheets: readonly FireWallSheet[]): void;
+  /** «Низкое» и «Среднее»: шум пламени в две октавы вместо трёх (FX_CHEAP). */
+  setCheap(cheap: boolean): void;
   dispose(): void;
 }
 
@@ -124,7 +101,8 @@ export function createFireWallMeshes(gbuffer: FxGBuffer, time: TimeUniform, max 
   const a1 = new InstancedBufferAttribute(new Float32Array(max * 4), 4);
   const a2 = new InstancedBufferAttribute(new Float32Array(max * 4), 4);
   for (const a of [a0, a1, a2]) a.setUsage(DynamicDrawUsage);
-  const geometry = sideBox();
+  // лист: x ∈ [−0,5; 0,5] вдоль стены, y ∈ [0; 1] вверх
+  const geometry = new PlaneGeometry(1, 1).translate(0, 0.5, 0);
   geometry.setAttribute("aW0", a0);
   geometry.setAttribute("aW1", a1);
   geometry.setAttribute("aW2", a2);
@@ -155,11 +133,18 @@ export function createFireWallMeshes(gbuffer: FxGBuffer, time: TimeUniform, max 
       }
       for (const a of [a0, a1, a2]) {
         a.clearUpdateRanges();
+        if (n === 0) continue;
         a.addUpdateRange(0, n * 4);
         a.needsUpdate = true;
       }
       mesh.count = n;
       mesh.visible = n > 0;
+    },
+    setCheap(cheap) {
+      if (("FX_CHEAP" in material.defines) === cheap) return;
+      if (cheap) material.defines.FX_CHEAP = "";
+      else delete material.defines.FX_CHEAP;
+      material.needsUpdate = true;
     },
     dispose() {
       geometry.dispose();
