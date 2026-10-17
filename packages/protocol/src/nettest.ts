@@ -1,5 +1,6 @@
 /** Сообщения P2P-теста связи. Хост (браузер организатора) и участники используют один и тот же код. */
-export const NETTEST_VERSION = 2;
+/** v3: отчёт с устройством, сетью и снапшотами, подтверждение доставки `ack`, метаданные соединения. */
+export const NETTEST_VERSION = 3;
 export const SNAPSHOT_HZ = 20;
 export const SNAPSHOT_PAD_BYTES = 800;
 export const MAX_NAME_LEN = 24;
@@ -15,7 +16,9 @@ export type WelcomeMsg = { t: "welcome"; v: number; room: string; host: string; 
 export type PongMsg = { t: "pong"; seq: number; ct: number; st: number };
 export type SnapMsg = { t: "snap"; n: number; st: number; pad: string };
 export type ErrorMsg = { t: "error"; reason: string };
-export type HostMsg = WelcomeMsg | PongMsg | SnapMsg | ErrorMsg;
+/** Хост получил отчёт и принял его. */
+export type AckMsg = { t: "ack" };
+export type HostMsg = WelcomeMsg | PongMsg | SnapMsg | ErrorMsg | AckMsg;
 
 export interface RoomInfo {
   room: string;
@@ -50,6 +53,34 @@ export function parseClientMsg(raw: string | null): ClientMsg | null {
   return null;
 }
 
+/**
+ * Кто подключается: участник передаёт это в `metadata` при `peer.connect`, и хост видит его ещё до открытия канала.
+ * Тот же разбор применяется к отчёту, поэтому ключ отчёта и ключ несостоявшегося подключения совпадают.
+ */
+export interface PeerTag {
+  name: string;
+  device: string;
+  /** Участник принудительно шёл только через TURN (`/nettest?relay=1`). */
+  relayOnly: boolean;
+}
+
+const cleanText = (x: unknown): string => (typeof x === "string" ? x.trim().slice(0, MAX_NAME_LEN) : "");
+
+/** Метаданные приходят от чужого браузера: берём только строки, обрезаем, подставляем запасные значения. */
+export function parsePeerTag(x: unknown): PeerTag {
+  const m = typeof x === "object" && x !== null ? (x as Record<string, unknown>) : {};
+  return {
+    name: cleanText(m.name) || "без имени",
+    device: cleanText(m.device) || "?",
+    relayOnly: m.relayOnly === true,
+  };
+}
+
+/** Один результат на участника и устройство; проверка «только TURN» хранится отдельно от обычного прогона. */
+export function peerKey(tag: PeerTag): string {
+  return `${tag.name}|${tag.device}${tag.relayOnly ? "|TURN" : ""}`;
+}
+
 export function pong(msg: PingMsg, now: number): PongMsg {
   return { t: "pong", seq: msg.seq, ct: msg.ct, st: now };
 }
@@ -57,6 +88,10 @@ export function pong(msg: PingMsg, now: number): PongMsg {
 export function welcome(msg: HelloMsg, info: RoomInfo): WelcomeMsg | ErrorMsg {
   if (msg.v !== NETTEST_VERSION) return { t: "error", reason: "обновите страницу" };
   return { t: "welcome", v: NETTEST_VERSION, ...info };
+}
+
+export function ack(): AckMsg {
+  return { t: "ack" };
 }
 
 const PAD = "x".repeat(SNAPSHOT_PAD_BYTES);

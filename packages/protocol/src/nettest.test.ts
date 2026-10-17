@@ -4,8 +4,11 @@ import {
   MAX_NAME_LEN,
   NETTEST_VERSION,
   SNAPSHOT_PAD_BYTES,
+  ack,
   makeSnapshot,
   parseClientMsg,
+  parsePeerTag,
+  peerKey,
   pong,
   welcome,
 } from "./nettest";
@@ -24,8 +27,8 @@ describe("parseClientMsg", () => {
   });
 
   it("trims and truncates the hello name", () => {
-    const raw = JSON.stringify({ t: "hello", v: 2, name: `  ${"a".repeat(40)}  ` });
-    expect(parseClientMsg(raw)).toEqual({ t: "hello", v: 2, name: "a".repeat(MAX_NAME_LEN) });
+    const raw = JSON.stringify({ t: "hello", v: NETTEST_VERSION, name: `  ${"a".repeat(40)}  ` });
+    expect(parseClientMsg(raw)).toEqual({ t: "hello", v: NETTEST_VERSION, name: "a".repeat(MAX_NAME_LEN) });
   });
 
   it("accepts a report with an object payload", () => {
@@ -79,6 +82,56 @@ describe("welcome", () => {
 
   it("asks an outdated participant to reload", () => {
     expect(welcome({ t: "hello", v: 1, name: "x" }, info)).toEqual({ t: "error", reason: "обновите страницу" });
+  });
+
+  it("treats a v2 participant as outdated: v3 changed the report and the host messages", () => {
+    expect(welcome({ t: "hello", v: 2, name: "x" }, info)).toEqual({ t: "error", reason: "обновите страницу" });
+  });
+});
+
+describe("ack", () => {
+  it("is the host's receipt for a report", () => {
+    expect(ack()).toEqual({ t: "ack" });
+  });
+});
+
+describe("parsePeerTag", () => {
+  it("reads the name, device and relay mode from connection metadata", () => {
+    expect(parsePeerTag({ name: "  Аня ", device: " телефон ", relayOnly: true })).toEqual({
+      name: "Аня",
+      device: "телефон",
+      relayOnly: true,
+    });
+  });
+
+  it("truncates long names and devices", () => {
+    const long = "a".repeat(40);
+    expect(parsePeerTag({ name: long, device: long })).toEqual({
+      name: "a".repeat(MAX_NAME_LEN),
+      device: "a".repeat(MAX_NAME_LEN),
+      relayOnly: false,
+    });
+  });
+
+  it.each([
+    ["missing metadata", undefined],
+    ["null metadata", null],
+    ["a string", "Аня"],
+    ["non-string fields", { name: 42, device: ["ПК"], relayOnly: "yes" }],
+    ["a blank name", { name: "   ", device: "" }],
+  ])("falls back for %s", (_label, meta) => {
+    expect(parsePeerTag(meta)).toEqual({ name: "без имени", device: "?", relayOnly: false });
+  });
+});
+
+describe("peerKey", () => {
+  it("joins name and device, so a phone and a PC of one person are separate", () => {
+    expect(peerKey({ name: "Аня", device: "ПК", relayOnly: false })).toBe("Аня|ПК");
+    expect(peerKey({ name: "Аня", device: "телефон", relayOnly: false })).toBe("Аня|телефон");
+  });
+
+  it("keeps a forced-TURN check apart from the normal run on the same device", () => {
+    expect(peerKey({ name: "Аня", device: "ПК", relayOnly: true })).toBe("Аня|ПК|TURN");
   });
 });
 
