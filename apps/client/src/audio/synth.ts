@@ -8,14 +8,25 @@ import { createVoiceLimiter } from "./voices";
 export const MAX_VOICES = 24;
 /** «Тик» попадания не чаще 4 раз в секунду: кулаки бьют 5 раз в секунду, а тик не должен трещать. */
 export const HIT_TICK_PER_S = 4;
-/** За спиной у звука срезается верх: StereoPanner перед и зад не различает. */
-export const BEHIND_LOWPASS_HZ = 3000;
+/**
+ * За спиной у звука приглушается верх: StereoPanner перед и зад не различает. Полка −6 дБ выше 3 кГц,
+ * а не lowpass: треск Огня (2–8 кГц) и сзади остаётся треском.
+ */
+export const BEHIND_SHELF_HZ = 3000;
+export const BEHIND_SHELF_DB = -6;
 /**
  * Мастер-компрессор — свой выбор: порог −12 дБ и 4:1 прижимают только пачку ударов, одиночный звук проходит
  * почти как есть; атака 3 мс ловит транзиент, отпускание 150 мс не «качает» хвосты.
  */
 export const COMPRESSOR = { threshold: -12, ratio: 4, knee: 6, attack: 0.003, release: 0.15 } as const;
-export const DEFAULT_VOLUME = 0.8;
+/**
+ * Потолок после компрессора: его автоматическая компенсация (около +5 дБ) и 3–4 тяжёлых удара Земли разом
+ * иначе уходят за 0 дБFS и хрипят.
+ */
+export const LIMITER = { threshold: -3, knee: 0, ratio: 20, attack: 0.001, release: 0.1 } as const;
+export const DEFAULT_VOLUME = 0.7;
+/** Голос ставится чуть впереди currentTime: начало тона не попадает в уже идущий блок и не щёлкает. */
+export const START_LEAD_S = 0.005;
 
 const NOISE_S = 1;
 /** Цель экспоненты: в Web Audio экспонента до нуля не доходит. */
@@ -28,7 +39,7 @@ const CLICK_LEN_S = 0.012;
 const CLICK_RISE_S = 0.001;
 /** Тише этого голос не стоит места. */
 const MIN_LEVEL = 0.003;
-const MAX_EVENT_GAIN = 2;
+const MAX_EVENT_GAIN = 1;
 const VOLUME_TC_S = 0.015;
 
 export interface AudioStats {
@@ -208,8 +219,9 @@ function browserContextClass(): AudioOptions["contextClass"] {
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /**
- * Синтезатор: шум и тон → фильтр → перегруз → огибающая → голос (громкость события × расстояние)
- * → [lowpass, если за спиной] → StereoPanner → мастер → компрессор → выход. Ни одного звукового файла.
+ * Синтезатор: шум и тон → фильтр → перегруз → огибающая → голос (громкость события ≤ 1 × расстояние)
+ * → [полка −6 дБ, если за спиной] → StereoPanner → мастер → компрессор → лимитер → выход. Ни одного звукового файла.
+ * Ни unlock, ни play не бросают: звук — не повод уронить кадр.
  */
 export function createAudio(opts: AudioOptions = {}): GameAudio {
   const rand = opts.rand ?? Math.random;
@@ -227,7 +239,22 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
     if (ctx && master) master.gain.setTargetAtTime(muted ? 0 : volume, ctx.currentTime, VOLUME_TC_S);
   };
   const wake = (c: AudioContext) => {
-    if (c.state === "suspended") c.resume().catch(() => {});
+    const state: string = c.state; // "interrupted" — iOS: звонок, Siri; в типах DOM его может не быть
+    if (state !== "suspended" && state !== "interrupted") return;
+    try {
+      c.resume().catch(() => {});
+    } catch {
+      // разбудим при следующем жесте
+    }
+  };
+  const compressor = (c: AudioContext, k: typeof COMPRESSOR | typeof LIMITER) => {
+    const n = c.createDynamicsCompressor();
+    n.threshold.value = k.threshold;
+    n.knee.value = k.knee;
+    n.ratio.value = k.ratio;
+    n.attack.value = k.attack;
+    n.release.value = k.release;
+    return n;
   };
 
   return {
@@ -242,17 +269,26 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
         contextClass = null; // браузер не дал: живём без звука
         return;
       }
-      const comp = c.createDynamicsCompressor();
-      comp.threshold.value = COMPRESSOR.threshold;
-      comp.ratio.value = COMPRESSOR.ratio;
-      comp.knee.value = COMPRESSOR.knee;
-      comp.attack.value = COMPRESSOR.attack;
-      comp.release.value = COMPRESSOR.release;
-      comp.connect(c.destination);
-      master = c.createGain();
-      master.gain.value = muted ? 0 : volume;
-      master.connect(comp);
-      kit = createVoiceKit(c, rand);
+      try {
+        const comp = compressor(c, COMPRESSOR);
+        const limiter = compressor(c, LIMITER);
+        comp.connect(limiter);
+        limiter.connect(c.destination);
+        const m = c.createGain();
+        m.gain.value = muted ? 0 : volume;
+        m.connect(comp);
+        kit = createVoiceKit(c, rand);
+        master = m;
+      } catch {
+        kit = null;
+        contextClass = null; // узлы не собрались: живём без звука
+        try {
+          c.close().catch(() => {});
+        } catch {
+          // уже закрыт
+        }
+        return;
+      }
       ctx = c;
       wake(c);
     },
@@ -267,40 +303,53 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
     play(id, pos, gain) {
       if (!ctx || !master || !kit || muted || ctx.state !== "running") return;
       if (!(gain > 0) || !Number.isFinite(gain)) return;
-      const now = ctx.currentTime;
-      if (id === "hitTick" && !tickOk(now)) return;
-      const sp = spatial(listener, pos);
-      const level = Math.min(gain, MAX_EVENT_GAIN) * sp.gain;
-      if (!(level >= MIN_LEVEL)) return;
-      const recipe = RECIPES[id];
-      if (!voices.tryStart(now, now + recipeLength(recipe) + TAIL_S)) return;
+      let bus: GainNode | null = null;
+      try {
+        const now = ctx.currentTime;
+        if (id === "hitTick" && !tickOk(now)) return;
+        const sp = spatial(listener, pos);
+        const level = Math.min(gain, MAX_EVENT_GAIN) * sp.gain;
+        // NaN во взгляде или позиции: AudioParam бросил бы TypeError
+        if (!(level >= MIN_LEVEL) || !Number.isFinite(level) || !Number.isFinite(sp.pan)) return;
+        const recipe = RECIPES[id];
+        const t0 = now + START_LEAD_S;
+        if (!voices.tryStart(now, t0 + recipeLength(recipe) + TAIL_S)) return;
 
-      const bus = ctx.createGain();
-      bus.gain.value = level;
-      const voiceNodes: AudioNode[] = [bus];
-      let head: AudioNode = bus;
-      if (sp.behind) {
-        const lp = ctx.createBiquadFilter();
-        lp.type = "lowpass";
-        lp.frequency.value = BEHIND_LOWPASS_HZ;
-        head.connect(lp);
-        head = lp;
-        voiceNodes.push(lp);
-      }
-      if (typeof ctx.createStereoPanner === "function") {
-        const p = ctx.createStereoPanner();
-        p.pan.value = sp.pan;
-        head.connect(p);
-        head = p;
-        voiceNodes.push(p);
-      }
-      head.connect(master);
+        bus = ctx.createGain();
+        bus.gain.value = level;
+        const voiceNodes: AudioNode[] = [bus];
+        let head: AudioNode = bus;
+        if (sp.behind) {
+          const shelf = ctx.createBiquadFilter();
+          shelf.type = "highshelf";
+          shelf.frequency.value = BEHIND_SHELF_HZ;
+          shelf.gain.value = BEHIND_SHELF_DB;
+          head.connect(shelf);
+          head = shelf;
+          voiceNodes.push(shelf);
+        }
+        if (typeof ctx.createStereoPanner === "function") {
+          const p = ctx.createStereoPanner();
+          p.pan.value = sp.pan;
+          head.connect(p);
+          head = p;
+          voiceNodes.push(p);
+        }
+        head.connect(master);
 
-      const v = scheduleRecipe(ctx, recipe, bus, now, kit);
-      voiceNodes.push(...v.nodes);
-      v.last.onended = () => {
-        for (const n of voiceNodes) n.disconnect();
-      };
+        const v = scheduleRecipe(ctx, recipe, bus, t0, kit);
+        voiceNodes.push(...v.nodes);
+        v.last.onended = () => {
+          for (const n of voiceNodes) n.disconnect();
+        };
+      } catch {
+        // этот звук пропал, игра идёт дальше; недособранный голос отрезаем от мастера
+        try {
+          bus?.disconnect();
+        } catch {
+          // нечего отключать
+        }
+      }
     },
 
     setVolume(v) {
@@ -321,11 +370,12 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
 }
 
 /**
- * Будит звук по жесту: первый клик или клавиша создаёт контекст, следующие будят его, если браузер усыпил
- * (вкладка в фоне, звонок на телефоне). Возвращает отписку.
+ * Будит звук по жесту: первый клик, касание или клавиша создаёт контекст, следующие будят его, если браузер усыпил
+ * (вкладка в фоне, звонок на телефоне). pointerup и click — для iOS: там звук разрешает конец касания,
+ * а не pointerdown. Возвращает отписку.
  */
 export function unlockOnGesture(audio: Pick<GameAudio, "unlock">, target: EventTarget = window): () => void {
-  const types = ["pointerdown", "keydown"] as const;
+  const types = ["pointerdown", "pointerup", "click", "keydown"] as const;
   const onGesture = () => audio.unlock();
   for (const t of types) target.addEventListener(t, onGesture, true);
   return () => {

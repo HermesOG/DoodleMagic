@@ -1,24 +1,42 @@
 import { describe, expect, it } from "vitest";
 import { SOUND_IDS } from "../feel/effects";
 import { RECIPES } from "./recipes";
-import { BEHIND_LOWPASS_HZ, MAX_VOICES, createAudio, unlockOnGesture } from "./synth";
+import { BEHIND_SHELF_DB, BEHIND_SHELF_HZ, DEFAULT_VOLUME, MAX_VOICES, START_LEAD_S, createAudio, unlockOnGesture } from "./synth";
 
 // Подделка Web Audio: только то, чем пользуется синтезатор, плюс правила, на которых падают настоящие браузеры.
 type Call = [op: string, value: number, time: number];
 
+/** Как в браузере: нечисловое значение или время — TypeError. */
+function finite(...xs: number[]): void {
+  for (const x of xs) if (!Number.isFinite(x)) throw new TypeError(`The provided float value is non-finite: ${x}`);
+}
+
 class FakeParam {
   calls: Call[] = [];
-  constructor(public value: number) {}
+  #value: number;
+  constructor(value: number) {
+    this.#value = value;
+  }
+  get value() {
+    return this.#value;
+  }
+  set value(v: number) {
+    finite(v);
+    this.#value = v;
+  }
   setValueAtTime(v: number, t: number) {
+    finite(v, t);
     this.calls.push(["set", v, t]);
-    this.value = v;
+    this.#value = v;
     return this;
   }
   linearRampToValueAtTime(v: number, t: number) {
+    finite(v, t);
     this.calls.push(["lin", v, t]);
     return this;
   }
   exponentialRampToValueAtTime(v: number, t: number) {
+    finite(v, t);
     if (!(v > 0)) throw new RangeError(`exponential ramp to ${v}`);
     const prev = this.calls.at(-1);
     if (prev && !(prev[1] > 0)) throw new RangeError(`exponential ramp from ${prev[1]}`);
@@ -26,6 +44,7 @@ class FakeParam {
     return this;
   }
   setTargetAtTime(v: number, t: number, c: number) {
+    finite(v, t, c);
     if (!(c > 0)) throw new RangeError("time constant");
     this.calls.push(["target", v, t]);
     return this;
@@ -82,9 +101,10 @@ class FakeBufferSource extends FakeSource {
 class FakeCtx {
   static made: FakeCtx[] = [];
   currentTime = 0;
-  state: "running" | "suspended" | "closed" = "running";
+  state: "running" | "suspended" | "interrupted" | "closed" = "running";
   sampleRate = 48000;
   resumed = 0;
+  closed = 0;
   nodes: FakeNode[] = [];
   buffers: { length: number }[] = [];
   destination = new FakeNode("destination");
@@ -96,7 +116,12 @@ class FakeCtx {
     this.state = "running";
     return Promise.resolve();
   }
-  private add<T extends FakeNode>(n: T): T {
+  close() {
+    this.closed++;
+    this.state = "closed";
+    return Promise.resolve();
+  }
+  protected add<T extends FakeNode>(n: T): T {
     this.nodes.push(n);
     return n;
   }
@@ -104,7 +129,7 @@ class FakeCtx {
     return this.add(Object.assign(new FakeNode("gain"), { gain: new FakeParam(1) }));
   }
   createBiquadFilter() {
-    return this.add(Object.assign(new FakeNode("filter"), { type: "lowpass", frequency: new FakeParam(350), Q: new FakeParam(1) }));
+    return this.add(Object.assign(new FakeNode("filter"), { type: "lowpass", frequency: new FakeParam(350), Q: new FakeParam(1), gain: new FakeParam(0) }));
   }
   createWaveShaper() {
     return this.add(Object.assign(new FakeNode("shaper"), { curve: null as Float32Array | null, oversample: "none" }));
@@ -179,14 +204,19 @@ describe("synth", () => {
     expect(audio.stats().unlocked).toBe(true);
   });
 
-  it("master bus: gain → compressor −12 dB 4:1 → destination; one second of noise for everything", () => {
+  it("master bus: gain 0.7 → compressor −12 dB 4:1 → limiter −3 dB 20:1 → destination; one second of noise for everything", () => {
     const { audio, ctx } = setup();
     audio.unlock();
-    const [comp] = ctx().of("compressor");
-    expect(comp && [(comp.threshold as FakeParam).value, (comp.ratio as FakeParam).value]).toEqual([-12, 4]);
-    expect(comp!.outs).toEqual([ctx().destination]);
+    const [comp, limiter] = ctx().of("compressor");
+    const knobs = (c: FakeNode & Record<string, unknown>) => ["threshold", "knee", "ratio", "attack", "release"].map((k) => (c[k] as FakeParam).value);
+    expect(knobs(comp!).filter((_, i) => i === 0 || i === 2)).toEqual([-12, 4]);
+    expect(knobs(limiter!)).toEqual([-3, 0, 20, 0.001, 0.1]);
+    expect(comp!.outs).toEqual([limiter]);
+    expect(limiter!.outs).toEqual([ctx().destination]);
     const master = ctx().of("gain").find((g) => g.outs[0] === comp);
     expect(master).toBeDefined();
+    expect(DEFAULT_VOLUME).toBe(0.7);
+    expect((master!.gain as FakeParam).value).toBe(DEFAULT_VOLUME);
     expect(ctx().buffers.map((b) => b.length)).toEqual([48000]);
     audio.play("fireballBoom", null, 1);
     audio.play("quakeStrike", null, 1);
@@ -231,7 +261,8 @@ describe("synth", () => {
       audio.play("hitTick", null, 1);
     }
     const ticks = ctx().sources();
-    expect(ticks.map((s) => s.started[0])).toEqual([0, 0.25, 0.5]);
+    expect(START_LEAD_S).toBe(0.005);
+    expect(ticks.map((s) => s.started[0]! - START_LEAD_S).map((t) => Math.round(t * 1000))).toEqual([0, 250, 500]);
     expect(ticks.every((s) => s instanceof FakeOsc && s.type === "sine" && s.frequency.calls[0]![1] === 1800)).toBe(true);
   });
 
@@ -266,7 +297,7 @@ describe("synth", () => {
     expect(ctx().sources().length).toBe(RECIPES.fireballBoom.layers.length);
   });
 
-  it("places the voice: pan by side, gain by distance and by the event, lowpass 3 kHz from behind", () => {
+  it("places the voice: pan by side, gain by distance and by the event (at most 1), high-shelf −6 dB at 3 kHz from behind", () => {
     const { audio, ctx } = setup();
     audio.unlock();
     audio.setListener({ x: 0, y: 1.6, z: 0 }, 0);
@@ -282,11 +313,14 @@ describe("synth", () => {
     const bus = right[right.indexOf(pan) - 1] as FakeNode & { gain: FakeParam };
     expect(bus.kind).toBe("gain");
     expect(bus.gain.value).toBeCloseTo(0.5 / (1 + 0.15 * 5));
-    expect(right.some((n) => n.kind === "filter" && (n as FakeNode & { frequency: FakeParam }).frequency.value === BEHIND_LOWPASS_HZ)).toBe(false);
+    expect(right.some((n) => n.kind === "filter" && (n as FakeNode & { type: string }).type === "highshelf")).toBe(false);
+    const loud = voiceOf({ x: 5, y: 1.6, z: 0 }, 5);
+    expect((loud[loud.findIndex((n) => n.kind === "panner") - 1] as FakeNode & { gain: FakeParam }).gain.value).toBeCloseTo(1 / (1 + 0.15 * 5));
     const behind = voiceOf({ x: 0, y: 1.6, z: 6 }, 1);
-    const lp = behind.filter((n) => n.kind === "filter").at(-1) as FakeNode & { type: string; frequency: FakeParam };
-    expect([lp.type, lp.frequency.value]).toEqual(["lowpass", BEHIND_LOWPASS_HZ]);
-    expect(behind.indexOf(lp)).toBeLessThan(behind.findIndex((n) => n.kind === "panner"));
+    const shelf = behind.filter((n) => n.kind === "filter").at(-1) as FakeNode & { type: string; frequency: FakeParam; gain: FakeParam };
+    expect([shelf.type, shelf.frequency.value, shelf.gain.value]).toEqual(["highshelf", BEHIND_SHELF_HZ, BEHIND_SHELF_DB]);
+    expect([BEHIND_SHELF_HZ, BEHIND_SHELF_DB]).toEqual([3000, -6]);
+    expect(behind.indexOf(shelf)).toBeLessThan(behind.findIndex((n) => n.kind === "panner"));
   });
 
   it("ignores silent or broken calls and disconnects a voice once its last layer ends", () => {
@@ -318,6 +352,11 @@ describe("synth", () => {
     expect(ctx().sources().length).toBe(0);
     audio.unlock();
     expect(ctx().resumed).toBe(1);
+    ctx().state = "interrupted"; // iOS: звонок, Siri
+    audio.play("dash", null, 1);
+    expect(ctx().sources().length).toBe(0);
+    audio.unlock();
+    expect(ctx().resumed).toBe(2);
   });
 
   it("stays silent without Web Audio or when the context cannot be created", () => {
@@ -340,6 +379,39 @@ describe("synth", () => {
     }).not.toThrow();
   });
 
+  it("never throws from play: a NaN yaw skips the voice, a failing node only loses that sound", () => {
+    const { audio, ctx } = setup();
+    audio.unlock();
+    audio.setListener({ x: 0, y: 1.6, z: 0 }, Number.NaN);
+    expect(() => audio.play("stoneImpact", { x: 3, y: 1.6, z: -2 }, 1)).not.toThrow();
+    expect(ctx().sources().length).toBe(0);
+    audio.setListener({ x: 0, y: 1.6, z: 0 }, 0);
+    audio.play("stoneImpact", { x: 3, y: 1.6, z: -2 }, 1);
+    expect(ctx().sources().length).toBe(RECIPES.stoneImpact.layers.length);
+    ctx().createOscillator = () => {
+      throw new Error("boom");
+    };
+    expect(() => audio.play("hitTick", null, 1)).not.toThrow();
+  });
+
+  it("never throws from unlock: a context whose nodes fail is closed and the game stays silent", () => {
+    FakeCtx.made = [];
+    class Failing extends FakeCtx {
+      override createDynamicsCompressor(): never {
+        throw new Error("NotSupportedError");
+      }
+    }
+    const audio = createAudio({ contextClass: Failing as unknown as typeof AudioContext });
+    expect(() => audio.unlock()).not.toThrow();
+    expect(FakeCtx.made[0]!.closed).toBe(1);
+    expect(audio.stats().unlocked).toBe(false);
+    expect(() => {
+      audio.unlock();
+      audio.play("kill", null, 1);
+    }).not.toThrow();
+    expect(FakeCtx.made.length).toBe(1);
+  });
+
   it("unlockOnGesture unlocks on pointer and key presses (and so resumes a context the browser suspended) until disposed", () => {
     const listeners = new Map<string, () => void>();
     const target = {
@@ -348,7 +420,7 @@ describe("synth", () => {
     };
     let unlocks = 0;
     const dispose = unlockOnGesture({ unlock: () => unlocks++ }, target as unknown as EventTarget);
-    expect([...listeners.keys()].sort()).toEqual(["keydown", "pointerdown"]);
+    expect([...listeners.keys()].sort()).toEqual(["click", "keydown", "pointerdown", "pointerup"]);
     listeners.get("pointerdown")!();
     listeners.get("keydown")!();
     expect(unlocks).toBe(2);
