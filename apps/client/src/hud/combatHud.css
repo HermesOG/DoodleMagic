@@ -1,0 +1,591 @@
+/*
+ * Боевой HUD и выбор стихии: «кисть и печать» (GDD 6, round1/05 п. 7). Бумага, тушь и одна краска — киноварь, только
+ * для HP и урона. Цвета стихий — лишь у готовых способностей и на карточках выбора. DOM поверх холста; кадр двигает
+ * только transform и opacity.
+ */
+.ch,
+.es {
+  --ch-paper: #f6f3ea;
+  --ch-paper-wash: rgba(242, 237, 224, 0.82);
+  --ch-ink: #1d1b16;
+  --ch-ink-soft: rgba(29, 27, 22, 0.28);
+  --ch-muted: #6b665a;
+  --ch-red: #c8322a;
+  --ch-red-dry: rgba(200, 50, 42, 0.32);
+  --ch-fire: #ff7a1a;
+  --ch-earth: #3dbe7a;
+  --ch-head: "Cormorant SC", "Cormorant Garamond", "Forum", Georgia, "Times New Roman", serif;
+  --ch-ui: "Manrope", system-ui, "Segoe UI", sans-serif;
+  /* ореол бумаги вокруг туши: читается и на светлой арене, и на тёмных манекенах */
+  --ch-halo: 0 0 2px #f6f3ea, 0 0 2px #f6f3ea, 0 0 5px rgba(246, 243, 234, 0.9);
+}
+
+.ch {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  color: var(--ch-ink);
+  font: 600 14px/1.2 var(--ch-ui);
+  font-variant-numeric: tabular-nums;
+}
+.ch * {
+  pointer-events: none;
+}
+/* hidden работает и без общего style.css: иначе display: flex у полос и значков пересилил бы его */
+.ch [hidden],
+.ch[hidden],
+.es [hidden] {
+  display: none !important;
+}
+.ch-layer {
+  position: absolute;
+  inset: 0;
+}
+/* общий «якорь» для всего, что ставится в экранные координаты кадра: transform от левого верхнего угла */
+.ch-at {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform, opacity;
+}
+
+/* ---------------------------------------------------------------- виньетка урона по мне */
+.ch-vignette {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 52%, rgba(200, 50, 42, 0.18) 72%, rgba(200, 50, 42, 0.62) 100%);
+  will-change: opacity;
+}
+
+/* ---------------------------------------------------------------- прицел, хитмаркер, индикатор */
+.ch-cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+.ch-cross svg {
+  position: absolute;
+  overflow: visible;
+}
+.ch-reticle {
+  left: -16px;
+  top: -16px;
+  width: 32px;
+  height: 32px;
+}
+.ch-reticle .halo {
+  stroke: var(--ch-paper);
+  stroke-width: 4.2;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+.ch-reticle .ink {
+  stroke: var(--ch-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.ch-reticle .dot-halo {
+  fill: var(--ch-paper);
+  opacity: 0.85;
+}
+.ch-reticle .dot {
+  fill: var(--ch-ink);
+}
+.ch-hit {
+  left: -24px;
+  top: -24px;
+  width: 48px;
+  height: 48px;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.ch-hit .halo {
+  stroke: var(--ch-paper);
+  stroke-width: 5.5;
+  stroke-linecap: round;
+}
+.ch-hit .ink {
+  stroke: var(--ch-ink);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+.ch-hit.is-kill .ink,
+.ch-hit.is-kill .arrow {
+  stroke: var(--ch-red);
+}
+.ch-hit .arrow {
+  display: none;
+  fill: none;
+  stroke: var(--ch-ink);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ch-hit.is-air .arrow {
+  display: inline;
+}
+.ch-arc {
+  position: absolute;
+  left: -78px;
+  top: -78px;
+  width: 156px;
+  height: 156px;
+  border-radius: 50%;
+  border: 5px solid transparent;
+  border-top-color: var(--ch-red);
+  opacity: 0;
+  /* мазок: край дуги тает к концам */
+  mask-image: linear-gradient(to right, transparent 18%, #000 40%, #000 60%, transparent 82%);
+  will-change: transform, opacity;
+}
+
+/* ---------------------------------------------------------------- тосты */
+.ch-toasts {
+  position: absolute;
+  left: 50%;
+  top: 14vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transform: translateX(-50%);
+}
+.ch-toast {
+  font: 700 30px/1.1 var(--ch-head);
+  letter-spacing: 0.02em;
+  text-shadow: var(--ch-halo);
+  white-space: nowrap;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+/* ---------------------------------------------------------------- счётчик полигона */
+.ch-score {
+  position: absolute;
+  right: 18px;
+  top: 14px;
+  font: 600 15px/1.3 var(--ch-ui);
+  font-variant-numeric: tabular-nums;
+  text-shadow: var(--ch-halo);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- HP мазком кисти */
+.ch-life {
+  position: absolute;
+  left: 22px;
+  bottom: 22px;
+}
+/* узкое окно: ячейки по центру дошли бы до мазка HP — поднимаем его над ними */
+@media (max-width: 1040px) {
+  .ch-life {
+    bottom: 116px;
+  }
+}
+.ch-elem {
+  margin: 0 0 4px 6px;
+  font: 700 22px/1 var(--ch-head);
+  text-shadow: var(--ch-halo);
+}
+.ch-hp {
+  position: relative;
+  width: 260px;
+  height: 22px;
+  /* мазок: тонкий хвост слева, рваная кромка, утолщение и обрыв справа */
+  clip-path: path("M3 13 C 14 6, 52 4, 118 4 C 184 4, 232 2, 255 6 C 261 9, 260 16, 252 18 C 206 21, 150 18, 92 19 C 52 20, 18 21, 3 13 Z");
+  background: rgba(29, 27, 22, 0.16);
+}
+.ch-hp > div {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 50%;
+  will-change: transform;
+}
+.ch-hp-trail {
+  background: var(--ch-red-dry);
+  /* потерянное «высыхает» светлым следом за 0,5 с (round1/05) */
+  transition: transform 0.5s ease-out 0.12s;
+}
+.ch-hp-fill {
+  background: linear-gradient(180deg, #d4473e 0%, var(--ch-red) 55%, #a92a23 100%);
+}
+.ch-hp-notch {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 2px;
+  background: var(--ch-ink);
+  opacity: 0.75;
+}
+.ch-hp-text {
+  margin: 3px 0 0 8px;
+  font: 700 15px/1 var(--ch-ui);
+  font-variant-numeric: tabular-nums;
+  text-shadow: var(--ch-halo);
+}
+
+/* ---------------------------------------------------------------- ячейки ЛКМ Q E C X и жар */
+.ch-kit {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+}
+.ch-heat {
+  position: relative;
+  width: 300px;
+  height: 9px;
+  border-radius: 5px 7px 6px 4px / 4px 6px 5px 4px;
+  background: rgba(29, 27, 22, 0.16);
+  overflow: visible;
+}
+.ch-heat-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--ch-ink);
+  transform-origin: 0 50%;
+  will-change: transform;
+}
+.ch-heat-label {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  font: 700 15px/1 var(--ch-head);
+  letter-spacing: 0.04em;
+  text-shadow: var(--ch-halo);
+  white-space: nowrap;
+  visibility: hidden;
+}
+.ch-heat.is-hot .ch-heat-label {
+  visibility: visible;
+}
+/* перегрев мигает 3 раза в секунду: на пороге WCAG, но не выше (round1/03 п. 7) */
+.ch-heat.is-hot .ch-heat-fill {
+  animation: ch-blink 0.34s steps(2, jump-none) infinite;
+}
+@keyframes ch-blink {
+  from { opacity: 1; }
+  to { opacity: 0.35; }
+}
+.ch-cells {
+  display: flex;
+  gap: 10px;
+}
+.ch-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 74px;
+  will-change: transform;
+}
+.ch-cell svg {
+  width: 56px;
+  height: 56px;
+  overflow: visible;
+}
+.ch-cell .seat {
+  fill: var(--ch-paper-wash);
+}
+.ch-cell .ghost {
+  fill: none;
+  stroke: var(--ch-ink-soft);
+  stroke-width: 2;
+}
+.ch-cell .enso {
+  fill: none;
+  stroke: var(--ch-ink);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  transform: rotate(-96deg);
+  transform-origin: 28px 28px;
+}
+.ch-cell.is-ready .enso {
+  stroke: var(--ch-el, var(--ch-ink));
+}
+.ch-cell.is-busy {
+  opacity: 0.5;
+}
+.ch-glyph {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 56px;
+  height: 56px;
+  margin-left: -28px;
+  display: grid;
+  place-items: center;
+  font: 700 20px/1 var(--ch-head);
+}
+.ch-cell[data-slot="primary"] .ch-glyph {
+  font-size: 15px;
+}
+.ch-glyph.is-count {
+  font: 700 19px/1 var(--ch-ui);
+  font-variant-numeric: tabular-nums;
+  color: var(--ch-muted);
+}
+.ch-name {
+  margin-top: 3px;
+  max-width: 82px;
+  font: 600 11px/1.15 var(--ch-ui);
+  text-align: center;
+  text-shadow: var(--ch-halo);
+}
+.ch-flash {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 64px;
+  height: 64px;
+  margin-left: -32px;
+  border-radius: 50%;
+  border: 3px solid var(--ch-el, var(--ch-ink));
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.ch-cell.is-soon {
+  opacity: 0.55;
+}
+.ch-cell.is-soon .ghost {
+  stroke-dasharray: 3 5;
+}
+.ch-cell.is-soon .enso {
+  display: none;
+}
+.ch-soon {
+  position: absolute;
+  top: -6px;
+  right: 2px;
+  padding: 1px 5px 2px;
+  border-radius: 3px;
+  background: var(--ch-muted);
+  color: var(--ch-paper);
+  font: 700 10px/1.2 var(--ch-ui);
+  transform: rotate(6deg);
+}
+
+/* ---------------------------------------------------------------- над манекенами */
+.ch-dbar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.ch-dbar-track {
+  position: relative;
+  width: 100%;
+  height: 7px;
+  border-radius: 3px 5px 4px 2px / 3px 4px 4px 3px;
+  background: rgba(29, 27, 22, 0.45);
+  box-shadow: 0 0 0 1.5px rgba(246, 243, 234, 0.85);
+  overflow: hidden;
+}
+.ch-dbar-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--ch-red);
+  transform-origin: 0 50%;
+  will-change: transform;
+}
+.ch-dbar-st {
+  display: flex;
+  gap: 4px;
+  font: 700 11px/1 var(--ch-ui);
+  text-shadow: var(--ch-halo);
+  white-space: nowrap;
+}
+.ch-st {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ch-st svg {
+  width: 13px;
+  height: 13px;
+  overflow: visible;
+}
+.ch-st .halo {
+  stroke: var(--ch-paper);
+  stroke-width: 4;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ch-st .ink {
+  stroke: var(--ch-ink);
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ch-st.burn .ink {
+  stroke: var(--ch-fire);
+}
+.ch-st.root .ink {
+  stroke: var(--ch-earth);
+}
+
+/* ---------------------------------------------------------------- цифры урона */
+.ch-num {
+  color: var(--ch-red);
+  font: 800 23px/1 var(--ch-ui);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 2px var(--ch-paper), 0 0 2px var(--ch-paper), 0 0 3px var(--ch-paper), 0 1px 0 var(--ch-paper);
+  white-space: nowrap;
+  opacity: 0;
+}
+.ch-num.is-dot {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------- выбор стихии */
+.es {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(242, 237, 224, 0.72);
+  color: var(--ch-ink);
+  font: 16px/1.45 var(--ch-ui);
+}
+.es-panel {
+  width: min(720px, 100%);
+  text-align: center;
+}
+.es-title {
+  margin: 0 0 18px;
+  font: 700 40px/1.05 var(--ch-head);
+  letter-spacing: 0.02em;
+}
+.es-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 560px) {
+  .es-cards {
+    grid-template-columns: 1fr;
+  }
+}
+.es-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 22px 20px 20px;
+  overflow: hidden;
+  border: 2px solid #d9d3c3;
+  border-radius: 6px 10px 8px 12px / 10px 6px 12px 8px;
+  background: #fffdf7;
+  color: var(--ch-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.16s ease-out, border-color 0.16s ease-out, box-shadow 0.16s ease-out;
+}
+.es-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--es-el);
+}
+.es-card[data-element="fire"] {
+  --es-el: var(--ch-fire);
+}
+.es-card[data-element="earth"] {
+  --es-el: var(--ch-earth);
+}
+.es-card:hover {
+  border-color: var(--ch-muted);
+}
+.es-card:focus-visible {
+  outline: 3px solid var(--ch-ink);
+  outline-offset: 3px;
+}
+.es-card.is-on {
+  border-color: var(--ch-ink);
+  box-shadow: 0 6px 0 -2px var(--ch-ink-soft);
+  transform: translateY(-3px);
+}
+.es-card:active {
+  transform: translateY(0) scale(0.985);
+}
+.es-num {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font: 700 14px/1 var(--ch-ui);
+  color: var(--ch-muted);
+}
+.es-name {
+  font: 700 26px/1.1 var(--ch-head);
+}
+.es-motto {
+  color: #3a372f;
+}
+.es-meta {
+  margin-top: 4px;
+  color: var(--ch-muted);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.es-timer {
+  position: absolute;
+  left: 6px;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--ch-ink);
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+}
+.es-card.is-on .es-timer {
+  animation: es-drain linear forwards;
+  animation-duration: var(--es-auto, 10s);
+}
+@keyframes es-drain {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+.es-hint {
+  margin: 16px 0 0;
+  color: var(--ch-muted);
+  font-size: 14px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .es-card,
+  .ch-hp-trail {
+    transition: none;
+  }
+  .ch-heat.is-hot .ch-heat-fill {
+    animation: none;
+    opacity: 0.6;
+  }
+}
