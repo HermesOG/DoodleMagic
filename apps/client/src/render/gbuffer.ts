@@ -1,4 +1,4 @@
-import { ShaderMaterial, Vector3, type IUniform, type Matrix4 } from "three";
+import { FrontSide, ShaderMaterial, Vector3, type IUniform, type Matrix4, type Side } from "three";
 import { SUN_DIR } from "./palette";
 
 /**
@@ -6,11 +6,18 @@ import { SUN_DIR } from "./palette";
  * R — освещённость (полуламберт 0,5 + 0,5·(n·L)), G — номер чернил / 255 (точно: целое в 8 битах),
  * B и A — нормаль в пространстве камеры в октаэдрической развёртке. Развёртка хранит всю сферу:
  * грань, повёрнутая от камеры по z (взгляд вверх под свод, края кадра в перспективе), не теряет знак.
+ * InstancedMesh (USE_INSTANCING) берёт матрицу экземпляра; с INSTANCE_INK чернила идут из атрибута `aInk`
+ * экземпляра, а не из униформы. Без инстансинга путь прежний.
  */
 export const GBUFFER_VERT = /* glsl */ `
 uniform vec3 uSunDir;
+uniform float uInk;
 varying vec3 vViewNormal;
 varying float vTone;
+varying float vInk;
+#ifdef INSTANCE_INK
+attribute float aInk;
+#endif
 
 // Нормаль через матрицу m при любом масштабе — неравномерном (сплюснутая варежка, растянутый эффект), зеркальном
 // и вырожденном (ось сжата в ноль): присоединённая матрица cof(m) = det(m)·(m⁻¹)ᵀ без деления на det, знак det
@@ -22,9 +29,21 @@ vec3 worldNormal(mat3 m, vec3 n) {
 }
 
 void main() {
+#ifdef USE_INSTANCING
+  mat4 m = modelMatrix * instanceMatrix;
+  vTone = dot(worldNormal(mat3(m), normal), uSunDir) * 0.5 + 0.5;
+  vViewNormal = worldNormal(mat3(viewMatrix * m), normal);
+  gl_Position = projectionMatrix * viewMatrix * m * vec4(position, 1.0);
+#else
   vTone = dot(worldNormal(mat3(modelMatrix), normal), uSunDir) * 0.5 + 0.5;
   vViewNormal = worldNormal(mat3(modelViewMatrix), normal);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+#endif
+#ifdef INSTANCE_INK
+  vInk = aInk;
+#else
+  vInk = uInk;
+#endif
 }
 `;
 
@@ -45,9 +64,9 @@ export function cofactorNormal(m: Matrix4, n: Vector3): Vector3 {
 }
 
 export const GBUFFER_FRAG = /* glsl */ `
-uniform float uInk;
 varying vec3 vViewNormal;
 varying float vTone;
+varying float vInk;
 
 // единичная нормаль -> квадрат [0; 1]²: верхняя полусфера (z ≥ 0) — ромб в центре, нижняя загнута в углы
 vec2 octEncode(vec3 n) {
@@ -58,7 +77,7 @@ vec2 octEncode(vec3 n) {
 }
 
 void main() {
-  gl_FragColor = vec4(clamp(vTone, 0.0, 1.0), uInk / 255.0, octEncode(normalize(vViewNormal)));
+  gl_FragColor = vec4(clamp(vTone, 0.0, 1.0), vInk / 255.0, octEncode(normalize(vViewNormal)));
 }
 `;
 
@@ -67,12 +86,24 @@ export type SunUniform = IUniform<Vector3>;
 /** Солнце мира: общая униформа всех мешей арены. */
 export const worldSun: SunUniform = { value: new Vector3(SUN_DIR[0], SUN_DIR[1], SUN_DIR[2]) };
 
-/** Материал G-буфера для чернил `ink`. Руки передают своё солнце — в пространстве камеры. */
-export function createInkMaterial(ink: number, sun: SunUniform = worldSun): ShaderMaterial {
+export interface InkMaterialOptions {
+  /** Чернила каждого экземпляра InstancedMesh — из атрибута `aInk` (Float32, по одному числу на экземпляр). */
+  instanceInk?: boolean;
+  /** Сторона граней: BackSide — вывернутая оболочка ореола врага. */
+  side?: Side;
+}
+
+/**
+ * Материал G-буфера для чернил `ink`. Руки передают своё солнце — в пространстве камеры. Работает и с
+ * InstancedMesh (матрица экземпляра; с `instanceInk` — и чернила экземпляра, тогда `ink` — запасные).
+ */
+export function createInkMaterial(ink: number, sun: SunUniform = worldSun, opts: InkMaterialOptions = {}): ShaderMaterial {
   return new ShaderMaterial({
-    name: `ink-${ink}`,
+    name: `ink-${ink}${opts.instanceInk ? "-instanced" : ""}`,
+    defines: opts.instanceInk ? { INSTANCE_INK: "" } : {},
     uniforms: { uInk: { value: ink }, uSunDir: sun },
     vertexShader: GBUFFER_VERT,
     fragmentShader: GBUFFER_FRAG,
+    side: opts.side ?? FrontSide,
   });
 }

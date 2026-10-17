@@ -5,6 +5,7 @@ import {
   INK_BY_ID,
   INK_COUNT,
   INK_STYLE,
+  PAPER,
   SUN_DIR,
   TONE,
   halfLambert,
@@ -18,7 +19,7 @@ import {
 } from "./palette";
 
 /** Заливки мира: средние тона. Бумага и небо — фон, а не заливка, в правило трёх слоёв не входят. */
-const WORLD: InkName[] = ["stone", "floor", "roof", "grass", "edge", "gold", "hands"];
+const WORLD: InkName[] = ["stone", "floor", "roof", "grass", "edge", "gold", "hands", "terrain"];
 const NON_MAGIC: InkName[] = [...WORLD, "enemy"];
 const bands = (ink: InkName): RGB[] => [washColor(ink, 0), washColor(ink, 1), washColor(ink, 2)];
 const lums = (inks: InkName[]): number[] => inks.flatMap((ink) => bands(ink).map(luminance));
@@ -30,6 +31,21 @@ describe("ink table", () => {
     expect(Math.max(...Object.values(INK))).toBe(INK_COUNT - 1);
     expect(INK_BY_ID).toHaveLength(INK_COUNT);
     INK_BY_ID.forEach((name, id) => expect(INK[name]).toBe(id));
+  });
+
+  /**
+   * Ореол врага и вспышка попадания — не заливки слоя, а кромка вокруг силуэта (как контур `line`) и инверсия
+   * на 60 мс: они светлее бумаги по замыслу (GDD 6, «тушь с белым ореолом»), поэтому в правило «магия ярче всех
+   * заливок» не входят. Зато они без насыщенности: цвет в кадре остаётся только у магии.
+   */
+  it("adds the enemy halo, the hit flash and Earth terrain inks", () => {
+    expect([INK.halo, INK.flash, INK.terrain, INK_COUNT]).toEqual([10, 11, 12, 13]);
+    for (const ink of ["halo", "flash"] as const) {
+      for (const c of bands(ink)) {
+        expect(luminance(c)).toBeGreaterThanOrEqual(luminance(PAPER));
+        expect(saturation(c)).toBeLessThanOrEqual(0.05);
+      }
+    }
   });
 
   it("darkens with each band", () => {
