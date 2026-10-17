@@ -7,3 +7,6 @@ dist/
 research/doodle-district/source/
 # сырые результаты теста связи с именами друзей — не публикуем
 design/nettest/
+
+# рабочие копии агентов (git worktree)
+.claude/worktrees/
