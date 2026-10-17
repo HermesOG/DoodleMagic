@@ -105,7 +105,9 @@ export function raycast(
     tStart = Math.max(tStart, Math.min(ta, tb));
     tEnd = Math.min(tEnd, Math.max(ta, tb));
   }
-  if (tStart > tEnd) return null;
+  // При крайних, но конечных данных (dir ≈ 5e-324, начало в 1e300) вход в сетку переполняется в Infinity:
+  // такой луч в сетку не попадает, а дальше дал бы NaN в номере клетки.
+  if (!(tStart <= tEnd && tStart < Infinity)) return null;
 
   const px = origin.x + dir.x * tStart;
   const pz = origin.z + dir.z * tStart;
@@ -163,10 +165,15 @@ export function raycast(
   };
 }
 
-/** Видно ли точку b из точки a (луч вида "sight"). */
+/**
+ * Видно ли точку b из точки a (луч вида "sight"). При нечисловых или бесконечных концах, а также если расстояние
+ * между ними переполняет double, — не видно: в сомнении закрыто, а не открыто.
+ */
 export function lineOfSight(w: World, a: Vec3, b: Vec3): boolean {
+  if (!finite3(a) || !finite3(b)) return false;
   const d = sub(b, a);
   const len = length(d);
+  if (!(len < Infinity)) return false;
   if (len < 1e-9) return true;
   const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
   return raycast(w, a, dir, len, "sight") === null;

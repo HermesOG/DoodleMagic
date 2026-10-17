@@ -230,6 +230,26 @@ describe("raycast with maxDist = Infinity", () => {
     expect(groundBelow(guarded(w), vec3(5, 30, 0), Infinity)).toBe(0);
     expect(groundBelow(guarded(w), vec3(10, 30, 0), Infinity)).toBeNull();
   });
+
+  it("returns null when the entry into the grid overflows to Infinity", { timeout: 2000 }, () => {
+    // вход в сетку по x: (−20 − (−21,65)) / 5e-324 = Infinity
+    expect(raycast(guarded(w), vec3(-21.65, 1.8, 7), vec3(5e-324, -0.5, 0), Infinity)).toBeNull();
+    // вход в сетку по z: (20 − 1e300) / −1e-10 = Infinity
+    expect(raycast(guarded(w), vec3(0, 1, 1e300), vec3(0, -1, -1e-10), Infinity)).toBeNull();
+  });
+});
+
+describe("raycast early exit", () => {
+  it("keeps walking on a tie at the cell exit, so the lower index still wins", () => {
+    // Бокс 1 стоит в клетке (0, 1), бокс 0 — только в (1, 1); луч входит в оба при t = 4, ровно на выходе из (0, 1).
+    const w = createWorld([col(4, 0, 4, 6, 1, 6), col(3, 0, 4.5, 5, 1, 6), col(0, 0, 0, 0.1, 1, 0.1)]);
+    const h = raycast(w, vec3(0, 0.5, 0.5), vec3(1, 0, 1), 100);
+    expect(h && { dist: h.dist, collider: h.collider, normal: h.normal }).toEqual({
+      dist: 4,
+      collider: 0,
+      normal: { x: -1, y: 0, z: 0 },
+    });
+  });
 });
 
 describe("raycast input checks", () => {
@@ -269,5 +289,14 @@ describe("lineOfSight", () => {
     expect(lineOfSight(w, vec3(-5, 1.6, 0), vec3(5, 1.6, 0))).toBe(false);
     expect(lineOfSight(w, vec3(-5, 1.6, 3), vec3(5, 1.6, 3))).toBe(true);
     expect(lineOfSight(w, vec3(-5, 4, 0), vec3(5, 4, 0))).toBe(true);
+  });
+
+  it("is closed, not open, for non-finite endpoints or a distance that overflows", () => {
+    const w = createWorld([col(-1, 0, -1, 1, 3, 1)]);
+    expect(lineOfSight(w, vec3(NaN, 1.6, 3), vec3(5, 1.6, 3))).toBe(false);
+    expect(lineOfSight(w, vec3(-5, 1.6, 3), vec3(Infinity, 1.6, 3))).toBe(false);
+    expect(lineOfSight(w, vec3(-5, -Infinity, 3), vec3(5, 1.6, 3))).toBe(false);
+    expect(lineOfSight(w, vec3(-1e308, 4, 3), vec3(1e308, 4, 3))).toBe(false);
+    expect(lineOfSight(w, vec3(-5, 1.6, 3), vec3(5, 1.6, 3))).toBe(true);
   });
 });
