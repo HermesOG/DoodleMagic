@@ -55,6 +55,15 @@ export interface Hud {
   onRawMouse(cb: (raw: boolean) => void): void;
   /** Ползунок «Движение камеры» 0…1 (GDD 5: доступность). */
   onCameraMotion(cb: (x: number) => void): void;
+  /** Заголовок и вводная строка меню (по умолчанию — полигон). */
+  setMenuText(title: string, lead: string): void;
+  /** Кнопка режима в меню под «Играть» («Начать матч», «Скопировать ссылку»…), по порядку добавления. */
+  addMenuButton(label: string, onClick: () => void): MenuButton;
+}
+
+export interface MenuButton {
+  setVisible(v: boolean): void;
+  setLabel(s: string): void;
 }
 
 function el<T extends HTMLElement>(root: HTMLElement, selector: string): T {
@@ -82,6 +91,7 @@ export function createHud(root: HTMLElement, settings: Settings, start: { elemen
         </div>
         <button class="btn sb-play" type="button">Играть</button>
         <p class="sb-lock-hint" role="status" hidden></p>
+        <div class="sb-extra actions" style="margin-top: 10px" hidden></div>
         <p class="sb-muted sb-small sb-how">Клик по «Играть» захватывает мышь — и можно колдовать. Esc — снова меню.</p>
         <ul class="sb-controls" aria-label="Управление"></ul>
         <label>Качество <select class="sb-quality">${options.join("")}</select></label>
@@ -111,8 +121,11 @@ export function createHud(root: HTMLElement, settings: Settings, start: { elemen
   const lockHint = el(root, ".sb-lock-hint");
   const elementName = el(root, ".sb-element-name");
   const controls = el(root, ".sb-controls");
-  el(root, ".sb-card h1").textContent = MENU_TITLE;
-  el(root, ".sb-lead").textContent = MENU_LEAD;
+  const extra = el(root, ".sb-extra");
+  const title = el(root, ".sb-card h1");
+  const lead = el(root, ".sb-lead");
+  title.textContent = MENU_TITLE;
+  lead.textContent = MENU_LEAD;
   lockHint.textContent = LOCK_REFUSED_HINT;
   raw.checked = settings.rawMouse;
   el(root, ".sb-hint").textContent = HINT;
@@ -215,6 +228,32 @@ export function createHud(root: HTMLElement, settings: Settings, start: { elemen
         motionOut.textContent = percent(x);
         cb(x);
       });
+    },
+    setMenuText(t, l) {
+      title.textContent = t;
+      lead.textContent = l;
+    },
+    addMenuButton(label, onClick) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn secondary sb-extra-btn";
+      b.textContent = label;
+      b.addEventListener("click", () => onClick());
+      extra.append(b);
+      // ряд кнопок виден, пока видна хоть одна
+      const sync = (): void => {
+        extra.hidden = !Array.from(extra.children).some((c) => !(c as HTMLElement).hidden);
+      };
+      sync();
+      return {
+        setVisible(v) {
+          b.hidden = !v;
+          sync();
+        },
+        setLabel(s) {
+          b.textContent = s;
+        },
+      };
     },
   };
 }

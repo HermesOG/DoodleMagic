@@ -14,6 +14,7 @@ import {
   type MatchEvent,
   type MatchInput,
   type MatchState,
+  type UnitId,
   type Vec3,
 } from "@doodlemagic/sim";
 import "../render/canvas.css";
@@ -52,6 +53,8 @@ export interface GameViewOptions {
   selectOnStart: boolean;
   /** Каждый кадр после HUD: интерфейс режима (таймер, килфид…). */
   onFrame?: (f: Frame, nowS: number) => void;
+  /** Имена магов (сеть): над полосой HP чужого мага. */
+  names?: () => ReadonlyMap<UnitId, string>;
 }
 export interface GameView {
   readonly hud: Hud;
@@ -420,7 +423,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
       () => {
         // полоса HP манекена прячется и за рельефом Земли, и за стеной огня (она закрывает обзор), а не только за аркой
         const sight = buildTickWorld(ctx.world, cur).world;
-        combat.update({ cur, prev, alpha, localId, camera: cam, nowS, visible: (q) => lineOfSight(sight, cam.position, q) });
+        combat.update({ cur, prev, alpha, localId, camera: cam, nowS, visible: (q) => lineOfSight(sight, cam.position, q), names: o.names?.() });
       },
       undefined,
     );

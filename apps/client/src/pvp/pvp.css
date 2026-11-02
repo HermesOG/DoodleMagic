@@ -1,0 +1,154 @@
+/* Бой с друзьями: лобби комнаты (обычная страница, цвета из style.css) и поверх игры — строка комнаты, плашка «нет связи», «Хост вышел». */
+.pvp-lobby .pvp-title {
+  margin-bottom: 12px;
+}
+.pvp-room {
+  margin: 0 0 8px;
+}
+.pvp-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.pvp-link-row .pvp-link {
+  flex: 1 1 220px;
+  width: auto;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.pvp-roster {
+  margin: 8px 0 0;
+}
+.pvp-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-weight: 600;
+}
+/* карточки стихий: полоска цвета стихии слева, выбранная — с рамкой тушью */
+.pvp-els {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 420px) {
+  .pvp-els {
+    grid-template-columns: 1fr;
+  }
+}
+.pvp-el {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 12px 12px 18px;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+.pvp-el::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--pvp-el, var(--line));
+}
+.pvp-el[data-element="fire"] {
+  --pvp-el: #ff7a1a;
+}
+.pvp-el[data-element="earth"] {
+  --pvp-el: #3dbe7a;
+}
+.pvp-el:hover {
+  border-color: var(--muted);
+}
+.pvp-el:focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 2px;
+}
+.pvp-el.is-on {
+  border-color: var(--fg);
+}
+.pvp-el-name {
+  font-weight: 700;
+}
+.pvp-el-motto {
+  color: var(--muted);
+  font-size: 14px;
+}
+.pvp-enter {
+  margin-top: 16px;
+}
+.pvp-status {
+  min-height: 1.5em;
+  margin: 8px 0 0;
+}
+.pvp-error {
+  margin: 8px 0 0;
+  font-weight: 600;
+}
+
+/* поверх игры: строка комнаты — бумага с тушью, как подсказка полигона; не ловит мышь */
+.pvp-top {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  z-index: 6;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: rgba(29, 27, 22, 0.72);
+  color: #f6f3ea;
+  font: 600 14px/1.4 system-ui, sans-serif;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.pvp-top:empty {
+  display: none;
+}
+.pvp-stale {
+  position: fixed;
+  top: 44px;
+  left: 50%;
+  z-index: 6;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: #c8322a;
+  color: #fff;
+  font: 700 15px/1.4 system-ui, sans-serif;
+  pointer-events: none;
+}
+.pvp-over {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(242, 237, 224, 0.82);
+}
+.pvp-over-card {
+  width: min(420px, 100%);
+  padding: 20px;
+  border: 1px solid #d9d3c3;
+  border-radius: 12px;
+  background: #fffdf7;
+  color: #1d1b16;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+.pvp-over-card h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+.pvp-over-card .btn {
+  background: #1d1b16;
+  color: #f6f3ea;
+}
