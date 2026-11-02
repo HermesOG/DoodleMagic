@@ -227,16 +227,17 @@ export async function startHost(o: HostOptions): Promise<HostDriver> {
       rosterChanged();
     },
     advance(_dtS, s): Frame {
-      if (failure !== null) throw failure;
       sample = s;
       const cur = core.game.match;
       const prev = holdPrev ? cur : core.prevGame.match;
       const alpha = Math.min(1, Math.max(0, (performance.now() - boundary) / TICK_MS));
-      // кадр при запуске вида — только ради состояния: накопленное отдаст первый настоящий кадр
+      // кадр при запуске вида — только ради состояния: накопленное отдаст первый настоящий кадр. Сбой симуляции
+      // (мог случиться ещё в лобби) — тоже в нём: исключение кадра вид показывает как сбой игры, а запуск — нет
       if (!mounted) {
         mounted = true;
         return { ticks: [], late: [], confirmed: [], prev, cur, alpha };
       }
+      if (failure !== null) throw failure;
       const frame: Frame = { ticks: pending, late: carried, confirmed, prev, cur, alpha };
       pending = [];
       confirmed = [];

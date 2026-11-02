@@ -1,8 +1,11 @@
 import { PVP, unitById, type MatchEvent, type MatchInput } from "@doodlemagic/sim";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Conn, HostLinkHandlers } from "../net/link";
-import { NET_VERSION, inputText, joinText, packInput, pingText } from "../net/protocol";
+import { tickSampler } from "../game/view";
+import { NET_VERSION, elementText, inputText, joinText, packInput, pingText } from "../net/protocol";
 import { input, testPvpContext } from "../net/testArena";
+import { KEYS } from "../sandbox/controls";
+import { createInput } from "../sandbox/input";
 import { startHost, type HostDriver } from "./hostDriver";
 
 // Без PeerJS и Worker: связь, пульс и кодек — двойники. Часы — свои.
@@ -59,7 +62,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const start = (onRoster = vi.fn()) => startHost({ ctx: testPvpContext(), lag: null, onRoster });
+const start = (onRoster = vi.fn(), ctx = testPvpContext()) => startHost({ ctx, lag: null, onRoster });
 
 /** Хост вошёл и вид смонтирован (нулевой кадр). sample — ввод хоста. */
 function mounted(d: HostDriver, sample: () => MatchInput = () => input()): void {
@@ -125,6 +128,20 @@ describe("startHost: players", () => {
     handlers.onData(c, pingText(123, 44.6));
     expect(texts(c)[1]).toEqual({ t: "pong", ct: 123 });
     expect(d.pings().get(id)).toBe(45);
+  });
+
+  it("applies the input and the element choice of a joined player", async () => {
+    const d = await start();
+    const c = conn("c1");
+    handlers.onData(c, joinText("Гость", "fire"));
+    const id = texts(c)[0]!.id as number;
+    const from = { ...unitById(d.game().match, id)!.move.body.pos };
+    const run = input({ moveZ: -1 });
+    handlers.onData(c, inputText([1, 2, 3].map((seq) => packInput(seq, run))));
+    ticks(3);
+    expect(Math.hypot(...(["x", "z"] as const).map((k) => unitById(d.game().match, id)!.move.body.pos[k] - from[k]))).toBeGreaterThan(0.05);
+    handlers.onData(c, elementText("earth"));
+    expect(unitById(d.game().match, id)!.mage!.element).toBe("earth");
   });
 
   it("removes the mage of a closed channel", async () => {
@@ -266,5 +283,53 @@ describe("startHost: ticks and frames", () => {
     expect(h.stop).toHaveBeenCalled();
     expect(h.close).toHaveBeenCalled();
     expect(d.link()).toBe("closed");
+  });
+});
+
+describe("startHost: input and failures", () => {
+  it("a tap released before any tick is still seen by the next tick sampled by the timer, and only by it", async () => {
+    // окно и документ — простые EventTarget, как в тестах ввода
+    const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("window", new EventTarget());
+    const canvas = Object.assign(new EventTarget(), { requestPointerLock: vi.fn() });
+    const mouse = (type: string): Event => Object.assign(new Event(type), { button: 0, ctrlKey: false, metaKey: false, altKey: false });
+    try {
+      const device = createInput(canvas as unknown as HTMLCanvasElement);
+      doc.pointerLockElement = canvas;
+      doc.dispatchEvent(new Event("pointerlockchange"));
+      const d = await start();
+      // вид отдаёт драйверу в каждом кадре один и тот же sample
+      const sample = tickSampler(device, () => ({ yaw: 0, pitch: 0 }));
+      mounted(d, sample);
+      ticks(2);
+      // тап короче тика, а кадр (он отдаёт два старых тика) успел раньше пульса таймера
+      doc.dispatchEvent(mouse("mousedown"));
+      doc.dispatchEvent(mouse("mouseup"));
+      expect(d.advance(0.016, sample).ticks).toHaveLength(2);
+      expect(device.down.has(KEYS.primary)).toBe(true);
+      ticks(2);
+      const [first, second] = d.advance(0.033, sample).ticks;
+      expect(first!.events).toContainEqual(expect.objectContaining({ type: "cast", unit: d.localId }));
+      expect(second!.events.some((e) => e.type === "cast")).toBe(false);
+      expect(device.down.has(KEYS.primary)).toBe(false);
+      device.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a sim failure before «Войти» does not break the mount; the first real frame throws it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const broken = { ...testPvpContext(), world: null as never };
+    const d = await start(vi.fn(), broken);
+    handlers.onData(conn("c1"), joinText("Гость", "fire"));
+    ticks(1);
+    d.enter("Хост", "fire");
+    const mount = d.advance(0, () => input());
+    expect(mount.ticks).toEqual([]);
+    expect(mount.cur).toBe(d.game().match);
+    expect(() => d.advance(0.016, () => input())).toThrow();
+    expect(h.stop).toHaveBeenCalled();
   });
 });

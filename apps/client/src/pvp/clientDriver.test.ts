@@ -145,8 +145,10 @@ describe("connectClient: frames", () => {
     expect(parseClientMsg(c.sent.at(-1))).toEqual({ t: "el", element: "earth" });
     const [s] = snapshots(host, 3);
     const moved = clonePlain(s!);
+    // хост сменил стихию живому магу в разминке: свежий маг на другой точке, события нет
     const me = moved.game.match.units.find((u) => u.id === id)!;
     me.move.body.pos = { x: 0, y: 0, z: 0 };
+    me.mage!.element = "earth";
     me.mage!.spawn = { pos: { x: 0, y: 0, z: 0 }, yaw: 2 };
     deliver(moved);
     await flush();
@@ -171,6 +173,24 @@ describe("connectClient: frames", () => {
     expect(unitById(d.advance(TICK_S + 1e-6, () => input({ yaw: 0.5 })).cur, id)!.move.yaw).toBe(0.5);
   });
 
+  it("turns the look to the host's spawn when its own respawn there came too late for effects", async () => {
+    const { host, d, id } = await joined();
+    const [s] = snapshots(host, 3);
+    const moved = clonePlain(s!);
+    const at = { x: 0, y: 0, z: 0 };
+    const me = moved.game.match.units.find((u) => u.id === id)!;
+    me.move.body.pos = { ...at };
+    me.mage!.spawn = { pos: { ...at }, yaw: 2 };
+    // большой пинг: событие старше LATE_FX_MAX_AGE — только в подтверждённые
+    moved.events.push([moved.tick - 200, { type: "respawn", target: id, pos: { ...at }, yaw: 2 }]);
+    deliver(moved);
+    await flush();
+    const f = d.advance(0, () => input());
+    expect(f.confirmed).toContainEqual({ type: "respawn", target: id, pos: at, yaw: 2 });
+    expect(f.late).toEqual([{ type: "respawn", target: id, pos: at, yaw: 2 }]);
+    expect(f.prev).toBe(f.cur);
+  });
+
   it("does not invent a respawn for a jump nobody expected", async () => {
     const { host, d, id } = await joined();
     const [s] = snapshots(host, 3);
@@ -179,6 +199,30 @@ describe("connectClient: frames", () => {
     deliver(moved);
     await flush();
     expect(d.advance(0, () => input()).late).toEqual([]);
+  });
+
+  it("a big correction right after a respawn (knockback, dash) keeps the look", async () => {
+    const { host, d, id } = await joined();
+    // возрождение на новой точке пришло вовремя: взгляд поставлен по событию
+    const [s1, s2] = snapshots(host, 6);
+    const respawned = clonePlain(s1!);
+    const me1 = respawned.game.match.units.find((u) => u.id === id)!;
+    me1.move.body.pos = { x: 0, y: 0, z: 0 };
+    me1.mage!.spawn = { pos: { x: 0, y: 0, z: 0 }, yaw: 2 };
+    respawned.events.push([respawned.tick - 1, { type: "respawn", target: id, pos: { x: 0, y: 0, z: 0 }, yaw: 2 }]);
+    deliver(respawned);
+    await flush();
+    expect(d.advance(0, () => input()).late).toHaveLength(1);
+    // через 50 мс хост отбросил мага на 8 м: точка и стихия те же — это не возрождение
+    const knocked = clonePlain(s2!);
+    const me2 = knocked.game.match.units.find((u) => u.id === id)!;
+    me2.move.body.pos = { x: -8, y: 0, z: 0 };
+    me2.mage!.spawn = { pos: { x: 0, y: 0, z: 0 }, yaw: 2 };
+    deliver(knocked);
+    await flush();
+    const f = d.advance(0, () => input());
+    expect(f.late).toEqual([]);
+    expect(f.prev).not.toBe(f.cur);
   });
 
   it("is stale after 3 s without snapshots and closed when the host leaves", async () => {

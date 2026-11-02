@@ -8,6 +8,7 @@ export const NAME_KEY = "dm.name";
 const FALLBACK_NAME = "Маг";
 
 // ---------------------------------------------------------------- имя: чистые функции
+// Занятое в комнате имя делает свободным ядро хоста (hostCore: «Искра», «Искра 2»…) — и для хоста, и для игроков.
 
 /** Имя в поле при заходе: сохранённое (очищенное); его нет или оно пустое — fallback() (defaultName). */
 export function initialName(stored: string | null, fallback: () => string): string {
@@ -17,20 +18,6 @@ export function initialName(stored: string | null, fallback: () => string): stri
 /** Имя при входе: очищенное из поля; поле пустое — то, что стояло в нём по умолчанию. */
 export function enteredName(raw: string, fallback: string): string {
   return cleanName(raw) || cleanName(fallback) || FALLBACK_NAME;
-}
-
-/**
- * Имя, свободное среди taken без учёта регистра: «Искра», занято — «Искра 2», «Искра 3»… Основа обрезается по
- * кодовым точкам, чтобы с номером влезть в NAME_MAX. Так же именует хост (hostCore): хост в лобби знает состав.
- */
-export function uniqueName(base: string, taken: Iterable<string>): string {
-  const busy = new Set(Array.from(taken, (n) => n.toLowerCase()));
-  if (!busy.has(base.toLowerCase())) return base;
-  for (let n = 2; ; n++) {
-    const suffix = ` ${n}`;
-    const name = Array.from(base).slice(0, NAME_MAX - suffix.length).join("").trimEnd() + suffix;
-    if (!busy.has(name.toLowerCase())) return name;
-  }
 }
 
 /** Хранилище имени: localStorage или двойник в тестах. */

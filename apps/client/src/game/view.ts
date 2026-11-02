@@ -88,6 +88,20 @@ function revealForWarmUp(roots: readonly Object3D[]): () => void {
 }
 
 /**
+ * Ввод игрока на тик: клавиши и взгляд в момент вызова; без захвата мыши — только взгляд. Прочитав down, сразу
+ * ticked(): нажатие, отпущенное раньше, чем его увидел тик (тап тачпада, клавиша короче тика), видит ровно следующий
+ * тик. Не по кадру: хост зовёт sample из пульсов таймера между кадрами, и кадр мог бы погасить нажатие, которого ни
+ * один тик ещё не видел. buildMatchInput копирует кнопки в простые boolean — ticked() их уже не трогает.
+ */
+export function tickSampler(input: Pick<InputDevice, "locked" | "down" | "ticked">, look: () => Look): () => MatchInput {
+  return () => {
+    const m = buildMatchInput(input.locked ? input.down : NO_KEYS, look());
+    input.ticked();
+    return m;
+  };
+}
+
+/**
  * Игровой вид: арена, маг игрока глазами камеры, рендер «Тушь и свет» с проходом света магии, руки-«варежки»
  * с жестами, боевой HUD, синтез звука. Состояния и события даёт драйвер (полигон — одиночная игра, сеть — хост
  * и предсказание игрока); вид — одно «сейчас» на кадр.
@@ -129,8 +143,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   }
 
   let look: Look = { yaw: 0, pitch: 0 };
-  /** Ввод игрока на тик: клавиши и взгляд в момент вызова; без захвата мыши — только взгляд. */
-  const sample = (): MatchInput => buildMatchInput(input.locked ? input.down : NO_KEYS, look);
+  const sample = tickSampler(input, () => look);
   // нулевой кадр: тиков нет, драйвер отдаёт текущее состояние — для прогрева и взгляда на старте; его события
   // (late, confirmed) вид не показывает, и onFrame его не получает
   const start = driver.advance(0, sample);
@@ -377,8 +390,6 @@ export function mountGameView(o: GameViewOptions): GameView | null {
       for (const ev of t.events) onEvent(ev, t.state);
     }
     for (const ev of frame.late) onEvent(ev, cur);
-    // тики кадра нажатия увидели: отпущенные раньше тика (тап тачпада) теперь гаснут
-    if (frame.ticks.length > 0) input.ticked();
     // руки после возрождения — в покое, а не с отставанием и креном от падения
     if (respawned) handRig = createHandRig();
 

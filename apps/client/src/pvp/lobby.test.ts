@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NAME_MAX } from "../net/protocol";
 import {
-  NAME_KEY, enteredName, initialName, joinErrorText, joinStatusText, loadName, rosterText, saveName, uniqueName,
-  type NameStore,
+  NAME_KEY, enteredName, initialName, joinErrorText, joinStatusText, loadName, rosterText, saveName, type NameStore,
 } from "./lobby";
 
 /** Хранилище в памяти; broken — каждое обращение бросает (приватный режим). */
@@ -42,29 +41,6 @@ describe("enteredName", () => {
 
   it("cuts to NAME_MAX code points", () => {
     expect(Array.from(enteredName("Я".repeat(40), "x"))).toHaveLength(NAME_MAX);
-  });
-});
-
-describe("uniqueName", () => {
-  it("keeps a free name", () => {
-    expect(uniqueName("Искра", ["Валун 17"])).toBe("Искра");
-    expect(uniqueName("Искра", [])).toBe("Искра");
-  });
-
-  it("numbers a taken name, ignoring case", () => {
-    expect(uniqueName("Искра", ["искра"])).toBe("Искра 2");
-    expect(uniqueName("Искра", ["Искра", "ИСКРА 2"])).toBe("Искра 3");
-  });
-
-  it("trims the base so the number still fits into NAME_MAX", () => {
-    const base = "Б".repeat(NAME_MAX);
-    const name = uniqueName(base, [base]);
-    expect(Array.from(name)).toHaveLength(NAME_MAX);
-    expect(name.endsWith(" 2")).toBe(true);
-  });
-
-  it("reads any iterable, like the host's names map", () => {
-    expect(uniqueName("Искра", new Map([[1, "Искра"]]).values())).toBe("Искра 2");
   });
 });
 

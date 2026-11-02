@@ -1,6 +1,6 @@
 import {
   TICK_DT, unitById,
-  type Element, type MatchContext, type MatchEvent, type UnitId, type Vec3,
+  type Element, type MatchContext, type MatchEvent, type Unit, type UnitId, type Vec3,
 } from "@doodlemagic/sim";
 import type { Frame, TickOut } from "../game/driver";
 import { decodeBinary } from "../net/codec";
@@ -43,11 +43,15 @@ const RTT_BLEND = 0.2;
 const STALE_MS = 3000;
 /** Снапшотов в очереди кадра не больше (вкладка в фоне — кадров нет): старые выбрасываются. */
 const MAX_PENDING_SNAPSHOTS = 60;
-/** После своего возрождения или смены стихии столько ждём, что хост поставит мага на другую точку. */
-const JUMP_WINDOW_MS = 3000;
+/** Точки появления различаются на метры: ближе этого, м, — та же точка (округление снапшота — микроны). */
+const SAME_SPOT_M = 0.1;
 
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 type RespawnEvent = Extract<MatchEvent, { type: "respawn" }>;
+type Mage = NonNullable<Unit["mage"]>;
+/** Маг встал заново: другая точка появления (место или взгляд) или другая стихия. */
+const replaced = (a: Mage, b: Mage): boolean =>
+  a.element !== b.element || dist(a.spawn.pos, b.spawn.pos) > SAME_SPOT_M || Math.abs(a.spawn.yaw - b.spawn.yaw) > 1e-3;
 
 /**
  * Игрок комнаты: канал к хосту (openJoinLink) открывается сразу, join — по «Войти». welcome → предсказатель; до вида
@@ -149,15 +153,10 @@ export function connectClient(o: ClientOptions): ClientSession {
     let announced = false;
     let snaps: SnapshotMsg[] = [];
     let acc = 0;
-    /** До этого времени скачок своего мага больше SNAP_DIST_M — новая точка появления (взгляд на неё). */
-    let jumpUntil = -Infinity;
     let rosterSeen: unknown = null;
     let names = new Map<UnitId, string>();
     let pings = new Map<UnitId, number>();
     const isOwnRespawn = (ev: MatchEvent): ev is RespawnEvent => ev.type === "respawn" && ev.target === id;
-    const expectJump = (): void => {
-      jumpUntil = performance.now() + JUMP_WINDOW_MS;
-    };
     const syncRoster = (): void => {
       if (p.roster === rosterSeen) return;
       rosterSeen = p.roster;
@@ -166,27 +165,32 @@ export function connectClient(o: ClientOptions): ClientSession {
     };
 
     /**
-     * Снапшоты одной пачкой; respawn — свой respawn среди поздних событий (последний). Хост поставил своего мага на
-     * другую точку, чем предсказание (скачок больше SNAP_DIST_M вскоре после своего возрождения или смены стихии), а
-     * его respawn в эффекты не попал (слишком старый при большом пинге; смена стихии в разминке идёт без события) —
-     * свой respawn с этой точкой: вид ставит взгляд на неё.
+     * Снапшоты одной пачкой; respawn — свой respawn среди поздних событий (последний: вид ставит взгляд на точку).
+     * Запасной путь, когда хост поставил своего мага не туда, куда предсказание, а его respawn в эффекты не попал
+     * (слишком старый при большом пинге; смена стихии в разминке идёт без события): своего мага сорвало больше чем на
+     * SNAP_DIST_M (сглаживания нет) и это настоящая новая точка — у подтверждённого мага сменились точка появления или
+     * стихия, либо в пачке есть свой respawn не на предсказанной точке. Тогда — свой respawn с этой точкой. Просто
+     * большая поправка (отброс, рывок) взгляд не трогает.
      */
     function applySnaps(): { late: MatchEvent[]; confirmed: MatchEvent[]; respawn: RespawnEvent | null } {
       const list = snaps;
       snaps = [];
       if (list.length === 0) return { late: [], confirmed: [], respawn: null };
-      const was = unitById(p.cur.match, id)?.move.body.pos;
+      const was = unitById(p.cur.match, id);
+      const before = p.confirmed ? unitById(p.confirmed.match, id)?.mage : undefined;
       const r = p.applySnapshots(list);
-      if (r.confirmed.some(isOwnRespawn)) expectJump();
       const respawn = r.late.filter(isOwnRespawn).at(-1) ?? null;
       if (respawn) return { ...r, respawn };
+      const none = { ...r, respawn: null };
       const me = unitById(p.cur.match, id);
-      if (!was || !me?.alive || !me.mage || performance.now() >= jumpUntil || dist(was, me.move.body.pos) <= SNAP_DIST_M) {
-        return { ...r, respawn: null };
-      }
-      jumpUntil = -Infinity;
-      const at = me.mage.spawn;
-      const own: RespawnEvent = { type: "respawn", target: id, pos: { ...at.pos }, yaw: at.yaw };
+      if (!was || !me?.alive || !me.mage || dist(was.move.body.pos, me.move.body.pos) <= SNAP_DIST_M) return none;
+      const after = p.confirmed ? unitById(p.confirmed.match, id)?.mage : undefined;
+      const predicted = was.mage?.spawn.pos;
+      const missed = r.confirmed.filter(isOwnRespawn).filter((ev) => !predicted || dist(ev.pos, predicted) > SAME_SPOT_M).at(-1);
+      if (!missed && !(before && after && replaced(before, after))) return none;
+      const own: RespawnEvent = missed
+        ? { ...missed, pos: { ...missed.pos } }
+        : { type: "respawn", target: id, pos: { ...me.mage.spawn.pos }, yaw: me.mage.spawn.yaw };
       return { late: [...r.late, own], confirmed: r.confirmed, respawn: own };
     }
 
@@ -225,11 +229,7 @@ export function connectClient(o: ClientOptions): ClientSession {
           const r = p.step(face === null ? input : { ...input, yaw: face, pitch: 0 });
           if (r.packet.length > 0) send(inputText(r.packet));
           ticks.push({ state: p.cur.match, events: r.events });
-          for (const ev of r.events) {
-            if (!isOwnRespawn(ev)) continue;
-            face = ev.yaw;
-            expectJump();
-          }
+          for (const ev of r.events) if (isOwnRespawn(ev)) face = ev.yaw;
         }
         const offsets = p.offsets(dtS);
         const cur = withOffsets(p.cur.match, offsets);
@@ -240,7 +240,6 @@ export function connectClient(o: ClientOptions): ClientSession {
       /** Запрос хосту; маг сменит стихию, когда хост её применит (снапшот). */
       chooseElement(e) {
         send(elementText(e));
-        expectJump();
         return null;
       },
       dispose: stop,

@@ -148,7 +148,12 @@
   margin: 0 0 8px;
   font-size: 24px;
 }
-.pvp-over-card .btn {
+/* карточка всегда светлая (бумага), как меню полигона: цвета кнопок заданы явно, не из темы ОС */
+.pvp-over-card .btn:not(.secondary) {
   background: #1d1b16;
   color: #f6f3ea;
+}
+.pvp-over-card .btn.secondary {
+  color: #1d1b16;
+  border-color: #d9d3c3;
 }

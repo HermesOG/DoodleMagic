@@ -8,7 +8,7 @@ import type { MenuButton } from "../sandbox/hud";
 import { connectClient } from "./clientDriver";
 import { startHost, type HostDriver, type LinkState, type PvpDriver } from "./hostDriver";
 import {
-  HOST_LEFT_TEXT, SIGNALLING_TEXT, createLobby, initialName, joinErrorText, joinStatusText, loadName, saveName, uniqueName,
+  HOST_LEFT_TEXT, SIGNALLING_TEXT, createLobby, initialName, joinErrorText, joinStatusText, loadName, saveName,
 } from "./lobby";
 import "./pvp.css";
 
@@ -52,8 +52,8 @@ function mountHost(root: HTMLElement, arena: ArenaData, ctx: MatchContext, lag: 
       entered = true;
       saveName(name);
       rememberElement(element);
-      // хост именует так же: в лобби видно, кто уже в комнате, — входим под свободным именем
-      driver.enter(uniqueName(name, driver.names().values()), element);
+      // занятое имя ядро хоста само сделает свободным («Искра 2»), как у игроков
+      driver.enter(name, element);
       startGame(root, arena, ctx, driver, element);
     },
   });
@@ -133,8 +133,11 @@ function copyLink(url: string, button: MenuButton): void {
   );
 }
 
-/** Строка сверху (заготовка до интерфейса матча), плашка «нет связи» и экран «Хост вышел». */
-function createOverlay(root: HTMLElement): { top: HTMLElement; stale: HTMLElement; over: HTMLElement } {
+/**
+ * Строка сверху (заготовка до интерфейса матча), плашка «нет связи» и экран «Хост вышел». rejoin — ссылка комнаты
+ * для игрока: канал мог оборваться у него самого, а хост ещё в комнате, — «Зайти снова».
+ */
+function createOverlay(root: HTMLElement, rejoin: string | null): { top: HTMLElement; stale: HTMLElement; over: HTMLElement } {
   const top = document.createElement("div");
   top.className = "pvp-top";
   const stale = document.createElement("div");
@@ -148,8 +151,16 @@ function createOverlay(root: HTMLElement): { top: HTMLElement; stale: HTMLElemen
   over.innerHTML = `<section class="pvp-over-card">
       <h1></h1>
       <p></p>
-      <a class="btn" href="/">На полигон</a>
+      <div class="actions">
+        <a class="btn pvp-rejoin" hidden>Зайти снова</a>
+        <a class="btn secondary" href="/">На полигон</a>
+      </div>
     </section>`;
+  if (rejoin !== null) {
+    const again = over.querySelector<HTMLAnchorElement>(".pvp-rejoin")!;
+    again.href = rejoin;
+    again.hidden = false;
+  }
   over.querySelector("h1")!.textContent = HOST_LEFT_TEXT;
   over.querySelector("p")!.textContent = "Матч окончен. Новая комната — у того, кто нажмёт «Играть с друзьями».";
   root.append(top, stale, over);
@@ -208,7 +219,8 @@ function startGame(root: HTMLElement, arena: ArenaData, ctx: MatchContext, drive
     driver.dispose();
     return;
   }
-  ui = createOverlay(root);
+  // зайти снова — та же ссылка с тем же запросом (?lag=…): страница заново подключится к хосту
+  ui = createOverlay(root, driver.isHost ? null : `/r/${code}${location.search}`);
   const lead = driver.isHost
     ? `Ты хост: комната живёт, пока открыта эта вкладка. Ссылка для друзей: ${url}`
     : `Матч начинает хост. Ссылка для друзей: ${url}`;
