@@ -15,6 +15,7 @@ import {
   type Vec3,
 } from "@doodlemagic/sim";
 import type { Effect } from "../feel/effects";
+import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
 import { NUMBER_LIFE_S, cooldownFraction, formatDamage, heatFraction, hpBar, mergeNumbers, numberAnim, type FloatingNumber } from "./format";
 
@@ -27,6 +28,8 @@ export interface HudView {
   camera: PerspectiveCamera;
   nowS: number;
   visible(p: Vec3): boolean;
+  /** Имена магов: есть — над полосой HP чужого мага пишется его имя. */
+  names?: ReadonlyMap<UnitId, string>;
 }
 export interface CombatHud {
   /** hitmarker, number, indicator, toast, deny; остальные эффекты HUD не касаются. */
@@ -47,12 +50,14 @@ const READY_FLASH_S = 0.32;
 /** Виньетка урона: сила = урон / 40, гаснет 3/с (round1/03 п. 3). */
 const VIGNETTE_PER_DMG = 1 / 40;
 const VIGNETTE_DECAY_PER_S = 3;
-/** Полоса над манекеном: видна ближе 35 м; ширина — 0,9 м мира в пикселях, в пределах 26…110 px. */
+/** Полоса над манекеном и чужим магом: видна ближе 35 м; ширина — 0,9 м мира в пикселях, в пределах 26…110 px. */
 const BAR_RANGE_M = 35;
 const BAR_WORLD_M = 0.9;
 const BAR_PX = { min: 26, max: 110 } as const;
 const HEAD_M = 1.75;
 const BAR_ABOVE_M = 0.45;
+/** У мага полоса — над шляпой. */
+const MAGE_BAR_M = MAGE_TOP_M + 0.15;
 const KEY_LABEL: Readonly<Record<Slot, string>> = { primary: "ЛКМ", q: "Q", e: "E", c: "C" };
 const ELEMENT_COLOR: Readonly<Record<Elem, string>> = { fire: "var(--ch-fire)", earth: "var(--ch-earth)" };
 const ENSO_R = 22;
@@ -122,6 +127,8 @@ interface Cell {
 }
 interface DummyBar {
   root: HTMLDivElement;
+  /** Имя мага над полосой; у манекена пустое и скрыто. */
+  name: HTMLDivElement;
   /** Полоса шириной BAR_PX.max; ширину по расстоянию даёт scaleX (без пересчёта раскладки в кадре). */
   track: HTMLDivElement;
   fill: HTMLDivElement;
@@ -192,12 +199,17 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   const barFor = (id: UnitId): DummyBar => {
     let b = bars.get(id);
     if (!b) {
-      const r = div("ch-dbar ch-at", `<div class="ch-dbar-st">${icon("burn")}${icon("root")}${icon("slow")}${icon("air")}</div><div class="ch-dbar-track"><div class="ch-dbar-fill"></div></div>`);
+      // сверху вниз: значки статусов, имя, полоса — имя не прыгает, когда появляются значки
+      const r = div(
+        "ch-dbar ch-at",
+        `<div class="ch-dbar-st">${icon("burn")}${icon("root")}${icon("slow")}${icon("air")}</div><div class="ch-dbar-name" hidden></div><div class="ch-dbar-track"><div class="ch-dbar-fill"></div></div>`,
+      );
       // ширина задаётся один раз; ближе или дальше полосу делает scaleX дорожки
       r.style.width = `${BAR_PX.max}px`;
       barsLayer.append(r);
       b = {
         root: r,
+        name: pick<HTMLDivElement>(r, ".ch-dbar-name"),
         track: pick<HTMLDivElement>(r, ".ch-dbar-track"),
         fill: pick<HTMLDivElement>(r, ".ch-dbar-fill"),
         icons: { burn: pick(r, ".ch-st.burn"), root: pick(r, ".ch-st.root"), slow: pick(r, ".ch-st.slow"), air: pick(r, ".ch-st.air") },
@@ -312,10 +324,12 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     const seen = new Set<UnitId>();
     const tanHalf = Math.tan(((view.camera.fov / 2) * Math.PI) / 180);
     for (const u of view.cur.units) {
-      if (u.kind !== "dummy" || !u.alive) continue;
+      // манекены и живые чужие маги; над собой полосы нет
+      if (!u.alive || (u.kind === "mage" && u.id === view.localId)) continue;
+      const mage = u.kind === "mage";
       const p = lerpPos(view.prev, u, view.alpha);
       const head = { x: p.x, y: p.y + HEAD_M, z: p.z };
-      const above = { x: p.x, y: p.y + HEAD_M + BAR_ABOVE_M, z: p.z };
+      const above = { x: p.x, y: p.y + (mage ? MAGE_BAR_M : HEAD_M + BAR_ABOVE_M), z: p.z };
       const d = Math.hypot(head.x - view.camera.position.x, head.y - view.camera.position.y, head.z - view.camera.position.z);
       if (d > BAR_RANGE_M || !project(above, view.camera) || !view.visible(head)) continue;
       seen.add(u.id);
@@ -325,6 +339,9 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       setStyle(b.track, "transform", `scaleX(${(px / BAR_PX.max).toFixed(3)})`);
       setStyle(b.root, "transform", `translate(${screen.x.toFixed(1)}px, ${screen.y.toFixed(1)}px) translate(-50%, -100%)`);
       setStyle(b.fill, "transform", `scaleX(${hpBar(u).frac.toFixed(4)})`);
+      const name = mage ? (view.names?.get(u.id) ?? "") : "";
+      setText(b.name, name);
+      setHidden(b.name, name === "");
       const f = statusFlags(u, view.cur.tick);
       setHidden(b.icons.burn, !f.burning);
       setHidden(b.icons.root, !f.rooted);

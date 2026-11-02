@@ -1,5 +1,5 @@
 import { Group, Scene, Vector3, type PerspectiveCamera } from "three";
-import { TICK_HZ, statusFlags, type MatchState, type Projectile, type Terrain, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
+import { ELEMENT_INFO, TICK_HZ, statusFlags, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
 import type { BurstPreset, Effect } from "../feel/effects";
 import { stepSpring, type Spring } from "../hands/spring";
 import type { PresetId } from "../render/quality";
@@ -10,7 +10,8 @@ import { createDummyMeshes, type DummyView } from "./dummyMeshes";
 import { createFireWallMeshes, fireWallSheet, type FireWallSheet } from "./fireWalls";
 import type { TimeUniform } from "./fxShader";
 import { createGlowMeshes, cullGlows, type Glow } from "./glows";
-import { handToWorldView, lerpById, muzzleBlend, renderTick } from "./interp";
+import { SNAP_M, handToWorldView, lerpById, muzzleBlend, renderTick } from "./interp";
+import { createMageMeshes, mageHands, mageLineScale, type MagePose } from "./mageMeshes";
 import { createParticlePool } from "./particles";
 import { BURST_SHARE, FX_COLOR, MAGIC_LIGHTS, burstParticles, lineFlames, palmParticles, poolCaps, thinParticles, trailParticles, type ParticleSpec } from "./presets";
 import { PROJECTILE_LOOK, createProjectileMeshes, type ProjectileDraw } from "./projectileMeshes";
@@ -40,13 +41,16 @@ export interface VfxView {
  * частиц, доля всплесков, число источников света и дешёвый шум стены огня.
  */
 export interface Vfx {
-  /** Меши G-буфера (манекены, рельеф, ядра снарядов, обломки): добавить в сцену мира. */
+  /** Меши G-буфера (манекены, чужие маги, рельеф, ядра снарядов, обломки): добавить в сцену мира. */
   readonly worldGroup: Group;
   /** Сцены прохода света — третий аргумент StyleRenderer.render и warmUp. */
   readonly fx: FxLayers;
   /** Исполняет burst, palm, flash и flinch; остальное пропускает. hand — чья рука для palm с hand "auto". */
   apply(e: Effect, nowS: number, hand: "left" | "right"): void;
-  /** Раз в кадр: положения между prev и cur, зоны и рельеф из cur, время эффектов. */
+  /**
+   * Раз в кадр: положения между prev и cur, зоны и рельеф из cur, время эффектов. Живые маги, кроме localId, рисуются
+   * фигурами (не больше MAX_MAGES), мёртвые — нет.
+   */
   sync(v: VfxView): void;
   setPreset(p: PresetId): void;
   dispose(): void;
@@ -61,6 +65,28 @@ const LEAN_OMEGA = 11;
 /** Вздрагивание от удара: пик 10–15° (пружина stepSpring, толчок скорости). */
 const FLINCH_OMEGA = 13;
 const FLASH_S = 0.06;
+/** Чужих магов на экране — не больше (комната до 6 магов, свой не рисуется). */
+const MAX_MAGES = 6;
+/** Фаза шага на метр пути: полный цикл (два шага) — на 2,2 м, на беге ≈ 3 шага в секунду. */
+const STRIDE_PER_M = (2 * Math.PI) / 2.2;
+/** Сглаживание скорости для размаха ног, с: разгон и остановка без рывка. */
+const SPEED_TAU_S = 0.08;
+/** Ноги поджимаются, если маг в воздухе дольше этого: ступенька и кочка — не прыжок. */
+const AIR_TUCK_S = 0.06;
+/**
+ * Свечение стихии на руках мага: ореол не меньше HAND_HALO_M и не меньше HAND_HALO_PER_M от расстояния (издалека
+ * ≈ 9 px кадра 1080p); в замахе ярче и шире. Огонь дрожит и светит на мир, Земля ровная и не светится (как её камень):
+ * стихии отличаются не только оттенком (GDD 6).
+ */
+const HAND_HALO_M = 0.34;
+const HAND_HALO_PER_M = 0.012;
+const HAND_LIGHT_M = 2.2;
+const HAND_GLOW: Readonly<Record<Element, { color: readonly [number, number, number]; intensity: number; light: number }>> = {
+  fire: { color: FX_COLOR.fire, intensity: 0.9, light: HAND_LIGHT_M },
+  earth: { color: FX_COLOR.jade, intensity: 0.8, light: 0 },
+};
+/** Свечение рук уступает свет мира снарядам, стенам и вспышкам, но не горению (prio 1). */
+const HAND_PRIO = 0.6;
 const REST_PALM = { x: 0.26, y: -0.25, z: -0.62 } as const;
 
 /** Свет вспышек всплесков огня: радиус на мир, ореол, яркость, жизнь. Земля не светится. */
@@ -75,6 +101,7 @@ const BURST_LIGHT: Partial<Record<BurstPreset, { light: number; halo: number; in
   deathFire: { light: 4, halo: 1.3, intensity: 1.3, life: 0.45, core: 0.8 },
 };
 
+/** Отклик юнита по id — общий у манекенов и магов: вспышка и вздрагивание приходят по id из эффектов. */
 interface DummyAnim {
   sx: Spring;
   sz: Spring;
@@ -84,6 +111,11 @@ interface DummyAnim {
   lastBurnS: number;
   landTick: number;
   seen: boolean;
+  /** Мага: фаза шага, сглаженная скорость, сколько секунд в воздухе, прошлая точка подошвы. */
+  stride: number;
+  speed: number;
+  airS: number;
+  last: Vec3 | null;
 }
 
 interface Flash {
@@ -113,6 +145,12 @@ interface Seen<T> {
 
 type GlowEntry = Glow & { prio: number };
 
+/** Угол между a и b по короткой дуге: доля t. */
+function lerpAngle(a: number, b: number, t: number): number {
+  const d = (((b - a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  return a + d * t;
+}
+
 function lineOfBox(z: Zone): { a: Vec3; b: Vec3 } | null {
   if (z.shape.type === "box") {
     const b = z.shape.box;
@@ -128,8 +166,9 @@ function lineOfBox(z: Zone): { a: Vec3; b: Vec3 } | null {
 
 /**
  * Эффекты магии поверх G-буфера: собирает пулы частиц, ореолы и свет, декали, стены огня, рельеф с прожилками,
- * манекенов с ореолом, ядра снарядов и обломки. Бюджет: G-буфер +6 вызовов (манекены 2, рельеф 1, ядра 2,
- * обломки 1), проход света +5 (стены огня, декали, частицы, ореолы, прожилки), ладони +1; пустые пулы не рисуются.
+ * манекенов и чужих магов с ореолом, ядра снарядов и обломки. Бюджет: G-буфер +8 вызовов (манекены 2, маги 2,
+ * рельеф 1, ядра 2, обломки 1), проход света +5 (стены огня, декали, частицы, ореолы, прожилки), ладони +1;
+ * пустые пулы не рисуются. Свечение рук магов — в общем меше ореолов, без своего вызова.
  */
 export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): Vfx {
   const time: TimeUniform = { value: 0 };
@@ -150,13 +189,14 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   walls.setCheap(preset !== "high");
   const veins = createVeinMeshes(gbuffer, time);
   const dummies = createDummyMeshes(8);
+  const mages = createMageMeshes(MAX_MAGES);
   const terrain = createTerrainMeshes(24);
   const cores = createProjectileMeshes(48);
   const debris = createDebris();
 
   const worldGroup = new Group();
   worldGroup.name = "vfx";
-  worldGroup.add(dummies.parts, dummies.shells, terrain.mesh, cores.fire, cores.stone, debris.mesh);
+  worldGroup.add(dummies.parts, dummies.shells, mages.group, terrain.mesh, cores.fire, cores.stone, debris.mesh);
   const fxWorld = new Scene();
   fxWorld.name = "fx-world";
   fxWorld.add(walls.mesh, decals.mesh, worldPool.mesh, glows.mesh, veins.mesh);
@@ -181,7 +221,10 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const anim = (id: UnitId): DummyAnim => {
     let a = anims.get(id);
     if (!a) {
-      a = { sx: { x: 0, v: 0 }, sz: { x: 0, v: 0 }, kick: { x: 0, v: 0 }, squash: { x: 0, v: 0 }, flashUntil: -1, lastBurnS: -1, landTick: -1, seen: true };
+      a = {
+        sx: { x: 0, v: 0 }, sz: { x: 0, v: 0 }, kick: { x: 0, v: 0 }, squash: { x: 0, v: 0 },
+        flashUntil: -1, lastBurnS: -1, landTick: -1, seen: true, stride: 0, speed: 0, airS: 0, last: null,
+      };
       anims.set(id, a);
     }
     return a;
@@ -256,18 +299,24 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       const decalList: { spec: DecalSpec; seed: number; intensity: number }[] = [];
       const roots: RootRing[] = [];
 
-      // юниты: манекены (поза, ореол, вспышка), горение и обездвиживание у всех
+      // юниты: манекены и чужие маги (поза, ореол, вспышка), горение и обездвиживание у всех
       for (const a of anims.values()) a.seen = false;
       const unitsOf = (s: MatchState) => s.units.map((u) => ({ id: u.id, pos: u.move.body.pos, u }));
+      const prevUnits = new Map<UnitId, Unit>();
+      for (const u of v.prev.units) prevUnits.set(u.id, u);
       const views: DummyView[] = [];
+      const mageViews: MagePose[] = [];
       for (const it of lerpById(unitsOf(v.prev), unitsOf(v.cur), v.alpha)) {
         const u = it.u;
         if (!u.alive) continue;
         const flags = statusFlags(u, v.cur.tick);
         if (flags.rooted) roots.push({ center: { x: it.pos.x, y: it.pos.y, z: it.pos.z }, radius: 0.65 });
-        if (u.kind !== "dummy") continue;
+        const mage = u.kind === "mage";
+        // свой маг — руки от первого лица, его фигуры нет
+        if (mage && (u.id === v.localId || mageViews.length >= MAX_MAGES)) continue;
         const a = anim(u.id);
         a.seen = true;
+        // наклон по отбрасыванию и толчок удара — у манекенов и магов одинаково
         const kb = Math.hypot(u.kb.x, u.kb.z);
         const lean = Math.min(LEAN_MAX, kb * LEAN_PER_MPS);
         const tx = kb > 1e-4 ? (lean * u.kb.z) / kb : 0;
@@ -275,25 +324,73 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         a.sx = stepSpring(a.sx, tx, LEAN_OMEGA, dt);
         a.sz = stepSpring(a.sz, tz, LEAN_OMEGA, dt);
         a.kick = stepSpring(a.kick, 0, FLINCH_OMEGA, dt);
-        if (u.move.landVel < -2 && a.landTick !== v.cur.tick) {
-          a.landTick = v.cur.tick;
-          a.squash = { x: a.squash.x, v: a.squash.v - Math.min(4, -u.move.landVel * 0.35) };
-        }
-        a.squash = stepSpring(a.squash, 0, 18, dt);
+        const leanX = Math.max(-LEAN_MAX * 1.6, Math.min(LEAN_MAX * 1.6, a.sx.x));
+        const leanZ = Math.max(-LEAN_MAX * 1.6, Math.min(LEAN_MAX * 1.6, a.sz.x));
         const pos = { x: it.pos.x, y: it.pos.y, z: it.pos.z };
-        views.push({
-          pose: {
+        if (mage) {
+          // взгляд — между тиками по короткой дуге; новый или прыгнувший (возрождение) — сразу как в cur
+          const pu = prevUnits.get(u.id);
+          const pp = pu?.move.body.pos;
+          const cp = u.move.body.pos;
+          const fresh = !pu || !pp || Math.hypot(cp.x - pp.x, cp.y - pp.y, cp.z - pp.z) > SNAP_M;
+          const yaw = fresh ? u.move.yaw : lerpAngle(pu.move.yaw, u.move.yaw, v.alpha);
+          const pitch = fresh ? u.move.pitch : pu.move.pitch + (u.move.pitch - pu.move.pitch) * v.alpha;
+          // фаза шага копится по пройденному пути; скачок дальше SNAP_M — не шаг
+          if (a.last) {
+            const d = Math.hypot(pos.x - a.last.x, pos.z - a.last.z);
+            if (d < SNAP_M) a.stride = (a.stride + d * STRIDE_PER_M) % (2 * Math.PI);
+          }
+          a.last = pos;
+          // размах ног — от своей скорости бега; отбрасывание несёт мага, ногами он не бежит
+          const run = u.kb.x === 0 && u.kb.z === 0 ? Math.hypot(u.move.body.vel.x, u.move.body.vel.z) : 0;
+          a.speed += (run - a.speed) * (1 - Math.exp(-dt / SPEED_TAU_S));
+          a.airS = u.move.onGround ? 0 : a.airS + dt;
+          const element: Element = u.mage?.element ?? "fire";
+          const pose: MagePose = {
             pos,
-            yaw: u.move.yaw,
-            leanX: Math.max(-LEAN_MAX * 1.6, Math.min(LEAN_MAX * 1.6, a.sx.x)),
-            leanZ: Math.max(-LEAN_MAX * 1.6, Math.min(LEAN_MAX * 1.6, a.sz.x)),
+            yaw,
+            pitch,
+            stride: a.stride,
+            speed01: Math.min(1, a.speed / ELEMENT_INFO[element].runSpeed),
+            airborne: a.airS > AIR_TUCK_S,
             flinch: a.kick.x,
-            squash: Math.max(0.72, Math.min(1.15, 1 + a.squash.x)),
             flash: v.nowS < a.flashUntil,
-            bob: 0.035 * Math.sin(v.nowS * 2.3 + u.id * 1.7),
-          },
-          distM: Math.hypot(pos.x - eye.x, pos.y + 0.9 - eye.y, pos.z - eye.z),
-        });
+            leanX,
+            leanZ,
+          };
+          mageViews.push(pose);
+          // стихия на руках: видно издалека и сбоку; в замахе руки разгораются
+          const hands = mageHands(pose);
+          const look = HAND_GLOW[element];
+          const casting = u.mage?.windup ? 1 : 0;
+          const far = Math.hypot(pos.x - eye.x, pos.y + 1.1 - eye.y, pos.z - eye.z) * HAND_HALO_PER_M;
+          const halo = Math.max(HAND_HALO_M, far) * (1 + 0.4 * casting);
+          const flicker =
+            element === "fire" ? 0.85 + 0.15 * Math.sin(v.nowS * 21 + u.id * 2.3) * Math.sin(v.nowS * 7.7 + u.id) : 0.93 + 0.07 * Math.sin(v.nowS * 2.6 + u.id);
+          const intensity = look.intensity * flicker * (1 + 0.5 * casting);
+          // свет на мир — от одной руки: маг занимает один источник из бюджета пресета
+          glowList.push({ pos: hands.right, color: look.color, halo, light: look.light, intensity, core: 0, prio: HAND_PRIO });
+          glowList.push({ pos: hands.left, color: look.color, halo, light: 0, intensity, core: 0, prio: HAND_PRIO });
+        } else {
+          if (u.move.landVel < -2 && a.landTick !== v.cur.tick) {
+            a.landTick = v.cur.tick;
+            a.squash = { x: a.squash.x, v: a.squash.v - Math.min(4, -u.move.landVel * 0.35) };
+          }
+          a.squash = stepSpring(a.squash, 0, 18, dt);
+          views.push({
+            pose: {
+              pos,
+              yaw: u.move.yaw,
+              leanX,
+              leanZ,
+              flinch: a.kick.x,
+              squash: Math.max(0.72, Math.min(1.15, 1 + a.squash.x)),
+              flash: v.nowS < a.flashUntil,
+              bob: 0.035 * Math.sin(v.nowS * 2.3 + u.id * 1.7),
+            },
+            distM: Math.hypot(pos.x - eye.x, pos.y + 0.9 - eye.y, pos.z - eye.z),
+          });
+        }
         if (flags.burning) {
           if (v.nowS - a.lastBurnS > 0.08) {
             a.lastBurnS = v.nowS;
@@ -305,7 +402,9 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         }
       }
       for (const [id, a] of anims) if (!a.seen && v.nowS > a.flashUntil + 1) anims.delete(id);
-      dummies.update(views, viewportH(), WORLD_FOV);
+      const vh = viewportH();
+      dummies.update(views, vh, WORLD_FOV);
+      mages.update(mageViews, mageLineScale(vh, WORLD_FOV), { x: eye.x, y: eye.y, z: eye.z });
 
       // снаряды: ядра, смещение «из ладони», следы, ореолы и свет
       for (const tr of tracks.values()) tr.seen = false;
@@ -463,6 +562,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       walls.dispose();
       veins.dispose();
       dummies.dispose();
+      mages.dispose();
       terrain.dispose();
       cores.dispose();
       debris.dispose();

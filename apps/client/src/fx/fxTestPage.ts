@@ -11,11 +11,13 @@ import {
   type Projectile,
   type RenderBox,
   type Terrain,
+  type Unit,
   type Vec3,
   type Zone,
 } from "@doodlemagic/sim";
 import "../render/canvas.css";
 import { BURST_PRESETS, type BurstPreset, type Effect } from "../feel/effects";
+import { createCombatHud, type CombatHud } from "../hud/combatHud";
 import { buildArenaMeshes } from "../render/arenaMeshes";
 import { FPS_METER_MAX_FRAME_MS, createFpsMeter } from "../render/fpsMeter";
 import { createInkMaterial } from "../render/gbuffer";
@@ -57,6 +59,22 @@ const DUMMY_C = 12;
 const DUMMY_A_POS = { x: -3.2, y: 0, z: -4.5 };
 const FIST_PERIOD = T(0.45);
 const STAGE = { x: -1.4, y: 0, z: 1.2 };
+/** Чужие маги ходят по кругу вокруг манекена C: Огонь снаружи по часовой (вид сверху), Земля внутри против. */
+const MAGE_FIRE = 20;
+const MAGE_EARTH = 21;
+const DUMMY_C_POS = { x: 3.7, y: 0, z: -4.3 };
+const MAGE_NAMES: ReadonlyMap<number, string> = new Map([
+  [MAGE_FIRE, "Искра 42"],
+  [MAGE_EARTH, "Валун 17"],
+]);
+const MAGE_RINGS = [
+  { id: MAGE_FIRE, element: "fire", radius: 1.55, speed: 4, phase: 0, hp: 0.7 },
+  { id: MAGE_EARTH, element: "earth", radius: 1.15, speed: -2, phase: 2.2, hp: 0.45 },
+] as const;
+/** Земля подпрыгивает раз в 5 с на 0,55 с; Огонь замахивается раз в 3 с; в Землю попадают раз в 3,3 с. */
+const HOP = { period: T(5), offset: T(1.5), len: T(0.55), height: 0.6 };
+const WINDUP = { period: T(3), offset: T(0.7), len: T(0.25) };
+const MAGE_HIT_PERIOD = T(3.3);
 
 interface View {
   pos: Vector3;
@@ -70,6 +88,8 @@ const VIEWS: Record<string, View> = {
   top: { pos: new Vector3(0, 9, 5.5), look: new Vector3(0, 0, -5) },
   // в 3,7 м от манекена A: взрыв прямо на нём не должен заливать силуэт
   dummy: { pos: new Vector3(-2.4, 1.6, -0.9), look: new Vector3(-3.2, 1.0, -4.5) },
+  // маги вокруг манекена C в 5–7 м: фигуры, свечение рук, ореол рядом с манекеном
+  mages: { pos: new Vector3(0.2, 1.7, 0.2), look: new Vector3(3.7, 1.0, -4.3) },
   // посреди площадки, полный оборот за 16 с: свет и ореолы за камерой не должны ни рисоваться, ни мерцать
   turn: { pos: new Vector3(-0.5, 1.7, -1.6), look: new Vector3(0, 1.4, -1), turn: (2 * Math.PI) / 16 },
 };
@@ -91,8 +111,36 @@ const cyc = (tick: number, period: number, offset = 0): { n: number; at: number 
   return { n, at: k - n * period };
 };
 
+/** Чужой маг на круге вокруг манекена C: бежит по касательной, кивает, Земля подпрыгивает, Огонь замахивается. */
+function ringMage(ring: (typeof MAGE_RINGS)[number], tick: number): Unit {
+  const t = tick / TICK_HZ;
+  const w = ring.speed / ring.radius;
+  const a = ring.phase + w * t;
+  const pos = { x: DUMMY_C_POS.x + ring.radius * Math.cos(a), y: 0, z: DUMMY_C_POS.z + ring.radius * Math.sin(a) };
+  // скорость — производная точки на круге; взгляд — вдоль неё (forwardXZ(yaw) = (−sin yaw, −cos yaw))
+  const vel = { x: -ring.radius * w * Math.sin(a), y: 0, z: ring.radius * w * Math.cos(a) };
+  const u = createMageUnit(ring.id, ring.element, { pos, yaw: Math.atan2(-vel.x, -vel.z) });
+  u.move.body.vel = vel;
+  u.move.pitch = 0.35 * Math.sin(t * 0.9 + ring.phase);
+  u.move.onGround = true;
+  u.hp = Math.round(u.maxHp * ring.hp);
+  if (ring.element === "earth") {
+    const hop = cyc(tick, HOP.period, HOP.offset);
+    if (hop.n >= 0 && hop.at < HOP.len) {
+      const s = hop.at / HOP.len;
+      u.move.body.pos.y = 4 * HOP.height * s * (1 - s);
+      u.move.onGround = false;
+    }
+  } else {
+    const wind = cyc(tick, WINDUP.period, WINDUP.offset);
+    if (u.mage && wind.n >= 0 && wind.at < WINDUP.len) u.mage.windup = { ability: "fireball", slot: "q", releaseTick: tick + WINDUP.len - wind.at };
+  }
+  return u;
+}
+
 /**
  * Синтетическое состояние матча на тике: три манекена (один мигает и качается, один горит, один обездвижен),
+ * два чужих мага (Огонь и Земля) ходят по кругу вокруг манекена C,
  * кулаки по манекену, огненный шар и камень туда-обратно, стена огня с телеграфом, столб и каменная стена
  * растут и проседают, землетрясение и след рывка.
  */
@@ -102,14 +150,14 @@ function buildState(tick: number, view: View, still: boolean): MatchState {
   const mage = createMageUnit(LOCAL, "fire", { pos: { x: eye.x, y: eye.y - 1.6, z: eye.z }, yaw: 0 });
   const a = createDummyUnit(DUMMY_A, { pos: DUMMY_A_POS, yaw: Math.PI + 0.25 });
   const bU = createDummyUnit(DUMMY_B, { pos: { x: 0.4, y: 0, z: -6.8 }, yaw: Math.PI - 0.15 });
-  const c = createDummyUnit(DUMMY_C, { pos: { x: 3.7, y: 0, z: -4.3 }, yaw: Math.PI - 0.5 });
+  const c = createDummyUnit(DUMMY_C, { pos: DUMMY_C_POS, yaw: Math.PI - 0.5 });
   // b качается под отбрасыванием и горит
   bU.kb = { x: Math.sin(t * 1.4) * 12, z: Math.cos(t * 0.9) * 4 };
   bU.status.burnPulses = 4;
   // c обездвижен половину цикла
   c.status.rootUntil = cyc(tick, T(4)).at < T(2) ? tick + 10 : 0;
   for (const u of [mage, a, bU, c]) u.move.onGround = true;
-  const s = createMatchState([mage, a, bU, c]);
+  const s = createMatchState([mage, a, bU, c, ...MAGE_RINGS.map((r) => ringMage(r, tick))]);
   s.tick = tick;
 
   const projectiles: Projectile[] = [];
@@ -215,6 +263,11 @@ const UP: Vec3 = { x: 0, y: 1, z: 0 };
 /** Эффекты, которые выдала бы карта событий на тике tick (синтетика: по расписанию состояния). */
 function effectsAt(tick: number, prev: MatchState, cur: MatchState): Effect[] {
   const out: Effect[] = [];
+  // в мага Земли попадают сбоку: вспышка и вздрагивание — как у манекена
+  if (tick % MAGE_HIT_PERIOD === 0) {
+    out.push({ kind: "flash", target: MAGE_EARTH });
+    out.push({ kind: "flinch", target: MAGE_EARTH, dir: { x: 1, y: 0, z: 0.3 }, amount: 0.6 });
+  }
   // исчезнувшие снаряды — попадания
   for (const p of prev.projectiles) {
     if (cur.projectiles.some((q) => q.id === p.id)) continue;
@@ -293,8 +346,9 @@ function disposeScene(scene: Scene): void {
 
 /**
  * /fx-test — эффекты магии на синтетическом состоянии, без симуляции.
- * ?preset=low|medium|high — пресет без автовыбора; ?view=wide|low|top|turn|dummy — точка обзора (turn — оборот на месте
- * посреди эффектов); ?still=1 — камера стоит;
+ * ?preset=low|medium|high — пресет без автовыбора; ?view=wide|low|top|turn|dummy|mages — точка обзора (turn — оборот
+ * на месте посреди эффектов, mages — маги у манекена C); ?still=1 — камера стоит; ?hud=1 — боевой HUD: полосы HP
+ * и имена над магами;
  * ?speed=0.25 — замедление; ?t=4.4 — начать с этой секунды расписания; ?burst=fireballBoom — первый всплеск
  * на площадке; ?stage=dummy — площадка всплесков на манекене A. Пробел — пауза. Возвращает функцию остановки страницы.
  */
@@ -318,6 +372,7 @@ export function mountFxTest(root: HTMLElement): () => void {
   const stage = params.get("stage") === "dummy" ? { x: DUMMY_A_POS.x, y: 0, z: DUMMY_A_POS.z + 0.3 } : STAGE;
   const startArg = Number.parseFloat(params.get("t") ?? "0");
   const start = Number.isFinite(startArg) && startArg > 0 ? Math.min(600, startArg) : 0;
+  const withHud = params.get("hud") === "1";
 
   let renderer: StyleRenderer;
   try {
@@ -336,6 +391,11 @@ export function mountFxTest(root: HTMLElement): () => void {
   const auto = isPresetId(fixed) ? null : createAutoQuality();
   const meter = createFpsMeter();
   const palms = { right: new Vector3(0.26, -0.22, -0.62), left: new Vector3(-0.26, -0.22, -0.62) };
+  let combat: CombatHud | null = null;
+  if (withHud) {
+    combat = createCombatHud(root);
+    combat.setVisible(true);
+  }
 
   let simT = start;
   let lastTick = Math.floor(start * TICK_HZ) - 1;
@@ -393,6 +453,7 @@ export function mountFxTest(root: HTMLElement): () => void {
     renderer.camera.lookAt(eye.look);
     vfx.sync({ prev, cur, alpha: tickF - tick, nowS: simT, camera: renderer.camera, localId: LOCAL, palms });
     renderer.render(world, overlay, vfx.fx);
+    combat?.update({ cur, prev, alpha: tickF - tick, localId: LOCAL, camera: renderer.camera, nowS: simT, visible: () => true, names: MAGE_NAMES });
     meter.push(Math.min(raw, FPS_METER_MAX_FRAME_MS));
     const next = auto?.push(raw);
     if (next) {
@@ -424,6 +485,7 @@ export function mountFxTest(root: HTMLElement): () => void {
     cancelAnimationFrame(raf);
     window.removeEventListener("keydown", onKey);
     unwatchSize();
+    combat?.dispose();
     vfx.dispose();
     disposeScene(world);
     disposeScene(overlay);

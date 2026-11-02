@@ -148,14 +148,16 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
 /**
  * Событие матча → эффекты ощущения (round1/03, round2/03, GDD 5). Чистая функция: частицы, звук, камера, руки
  * и HUD исполняют результат сами. Мой каст отзывается на кадре нажатия; в эффектах каста gesture всегда раньше
- * palm — по нему интеграция узнаёт, какой рукой бьёт кулак.
+ * palm — по нему интеграция узнаёт, какой рукой бьёт кулак. Чужой каст слышно там, где он кастует; чужой рывок —
+ * пламя за его спиной, без моей камеры.
  */
 export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
   const me = unitById(view.state, view.localId);
   const mine = (unit: UnitId): boolean => unit === view.localId;
   switch (ev.type) {
     case "cast": {
-      if (!mine(ev.unit)) return [];
+      // чужой каст: только звук в точке каста — без жестов, ладоней и толчка моей камеры
+      if (!mine(ev.unit)) return [sound(CAST_SOUND[ev.ability], ev.pos)];
       const caster = unitById(view.state, ev.unit);
       const element = caster?.mage?.element ?? elementOf(ev.ability);
       const out: Effect[] = [
@@ -201,15 +203,14 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
       if (ev.phase === "expire") return [burst("wallDust", ev.pos)];
       return [];
     case "dash": {
-      if (!mine(ev.unit) || ev.phase !== "start") return [];
+      if (ev.phase !== "start") return [];
+      // пламя бьёт назад, за спину рывка
+      const blast = burst("dashBlast", ev.pos, { x: -ev.dir.x + 0, y: -ev.dir.y + 0, z: -ev.dir.z + 0 });
+      if (!mine(ev.unit)) return [blast];
       const r = rightXZ(me?.move.yaw ?? 0);
       const side = ev.dir.x * r.x + ev.dir.z * r.z;
-      // крен в сторону рывка (вправо — по часовой, rotation.z < 0); пламя бьёт назад, за спину
-      return [
-        { kind: "fov", deg: 6, holdS: 0.2 },
-        { kind: "kick", pitchDeg: 0, yawDeg: 0, rollDeg: -3 * side + 0 },
-        burst("dashBlast", ev.pos, { x: -ev.dir.x + 0, y: -ev.dir.y + 0, z: -ev.dir.z + 0 }),
-      ];
+      // крен в сторону рывка (вправо — по часовой, rotation.z < 0)
+      return [{ kind: "fov", deg: 6, holdS: 0.2 }, { kind: "kick", pitchDeg: 0, yawDeg: 0, rollDeg: -3 * side + 0 }, blast];
     }
     case "reject": {
       if (!mine(ev.unit)) return [];
