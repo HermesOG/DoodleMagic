@@ -1,8 +1,6 @@
 import type { DataConnection } from "peerjs";
 import { CONN_OPTIONS, keepSignalling, openPeer } from "../nettest/p2p";
-
-/** Временно до слияния задачи 2: заменить импортом из ./room. */
-const gamePeerId = (code: string): string => `doodlemagic-g1-${code.toLowerCase()}-host`;
+import { gamePeerId } from "./room";
 
 // ---------------------------------------------------------------- имитация сети
 
