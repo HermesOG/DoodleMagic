@@ -35,6 +35,8 @@ export interface Statuses {
   airborne: boolean; noControlUntil: number;
   /** Иммунитет к жёсткому контролю (подброс, обездвиживание); отбрасывание в это время ×0,5. */
   immuneUntil: number;
+  /** «Защита после появления»: урона нет, пока now < shieldUntil; свой принятый каст снимает. */
+  shieldUntil: number;
 }
 
 export interface MageState {
@@ -54,8 +56,10 @@ export interface MageState {
   heat: number; overheatUntil: number; lastShotTick: number;
   /** Реактивный рывок: направление по XZ, тик окончания, id зоны следа. */
   dash: { dirX: number; dirZ: number; endTick: number; trailZone: number } | null;
+  /** Где маг появился последним: в PvP — точка pickSpawn, на полигоне — своя. */
   spawn: Spawn;
-  stats: { damage: number; kills: number; falls: number };
+  /** deaths — смерти от урона и падения, в том числе свои. */
+  stats: { damage: number; kills: number; falls: number; deaths: number };
 }
 
 /** Манекен ходит вдоль rightXZ(yaw) на ±patrolHalfM от точки; без patrolHalfM стоит. */
@@ -132,11 +136,24 @@ export type MatchEvent =
 
 export interface MatchStep { state: MatchState; events: MatchEvent[] }
 
-/** Статика матча: статический мир арены (без рельефа) и высота сброса (низ арены). */
-export interface MatchContext { readonly world: World; readonly killBelowY: number }
+/** Статика матча: статический мир арены (без рельефа) и высота сброса (низ арены). Новые поля необязательны: без них полигон считается как раньше. */
+export interface MatchContext {
+  readonly world: World;
+  readonly killBelowY: number;
+  /** PvP: точки возрождения. Маг встаёт на дальнюю от живых врагов (pickSpawn). Нет поля — на свою mage.spawn. */
+  readonly spawns?: readonly Spawn[];
+  /** Через сколько секунд возрождается маг. Нет поля — MATCH.mageRespawnS (полигон, 1 с). */
+  readonly mageRespawnS?: number;
+  /** Защита после появления, с. Нет поля — 0: защиты нет. */
+  readonly spawnShieldS?: number;
+}
 
 /**
  * Что видит один тик: мир с рельефом на начало тика и куда писать события. Динамический коллайдер k
  * (номер colliders.length + k) — рельеф terrainIds[k], если k < terrainIds.length; дальше — стены огня.
+ * spawns, mageRespawnTicks и spawnShieldTicks stepMatch берёт из MatchContext (нет точек — null).
  */
-export interface TickCtx { readonly world: World; readonly terrainIds: readonly number[]; readonly killBelowY: number; readonly now: number; readonly ev: MatchEvent[] }
+export interface TickCtx {
+  readonly world: World; readonly terrainIds: readonly number[]; readonly killBelowY: number; readonly now: number; readonly ev: MatchEvent[];
+  readonly spawns: readonly Spawn[] | null; readonly mageRespawnTicks: number; readonly spawnShieldTicks: number;
+}

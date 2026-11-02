@@ -8,7 +8,7 @@ import { NOBODY, type MatchContext, type MatchEvent, type MatchState, type TickC
 import { moveUnits, stepLife } from "./units";
 
 const ctx = testContext();
-const tickOf = (c: MatchContext, now: number, ev: MatchEvent[]): TickCtx => ({ world: c.world, terrainIds: [], killBelowY: c.killBelowY, now, ev });
+const tickOf = (c: MatchContext, now: number, ev: MatchEvent[]): TickCtx => ({ world: c.world, terrainIds: [], killBelowY: c.killBelowY, now, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 });
 /** Тики без ввода в порядке stepMatch: движение, статусы, жизнь. */
 function run(s: MatchState, c: MatchContext, ticks: number, each?: (s: MatchState) => void): MatchEvent[] {
   const ev: MatchEvent[] = [];

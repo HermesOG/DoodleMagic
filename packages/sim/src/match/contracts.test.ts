@@ -71,6 +71,6 @@ describe("match state", () => {
     const up = aimDir(0, 0.5);
     expect([up.y, Math.hypot(up.x, up.y, up.z)].map((v) => Number(v.toFixed(12)))).toEqual([Number(Math.sin(0.5).toFixed(12)), 1]);
     expect(rightXZ(0)).toEqual({ x: 1, z: 0 });
-    expect(statusFlags(dummy, 0)).toEqual({ burning: false, slowed: false, rooted: false, airborne: false });
+    expect(statusFlags(dummy, 0)).toEqual({ burning: false, slowed: false, rooted: false, airborne: false, shielded: false });
   });
 });

@@ -2,6 +2,7 @@ import { sanitizeInput } from "../player";
 import type { ArenaData, Spawn } from "../types";
 import { createWorld } from "../world";
 import { stepStatuses } from "./combat";
+import { MATCH, ticks } from "./defs";
 import { buildTickWorld } from "./dynamic";
 import { EARTH_KIT } from "./earth";
 import { FIRE_KIT } from "./fire";
@@ -47,7 +48,10 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
   const s = clonePlain(state as MatchState);
   const ev: MatchEvent[] = [];
   const tw = buildTickWorld(ctx.world, s);
-  const t: TickCtx = { world: tw.world, terrainIds: tw.terrainIds, killBelowY: ctx.killBelowY, now: s.tick, ev };
+  const t: TickCtx = {
+    world: tw.world, terrainIds: tw.terrainIds, killBelowY: ctx.killBelowY, now: s.tick, ev,
+    spawns: ctx.spawns ?? null, mageRespawnTicks: ticks(ctx.mageRespawnS ?? MATCH.mageRespawnS), spawnShieldTicks: ticks(ctx.spawnShieldS ?? 0),
+  };
   const clean: Partial<Record<UnitId, MatchInput>> = {};
   for (const u of s.units) {
     const m = u.mage;

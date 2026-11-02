@@ -1,7 +1,7 @@
 import { bodyBox, moveBody } from "../body";
 import { DEFAULT_MOVE, NO_INPUT, stepPlayer } from "../player";
 import { groundBelow } from "../raycast";
-import { TICK_DT, type MoveParams, type PlayerInput } from "../types";
+import { TICK_DT, type MoveParams, type PlayerInput, type Spawn } from "../types";
 import { volumeAt, type World } from "../world";
 import { courage, respawnAt } from "./combat";
 import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ticks } from "./defs";
@@ -105,18 +105,50 @@ export function moveUnits(s: MatchState, t: TickCtx, inputs: Readonly<Partial<Re
   }
 }
 
-/** Свежий юнит на его точке; маг сохраняет счёт и перезарядки. */
-function respawned(u: Unit): Unit {
+/**
+ * Точка появления мага id в PvP: дальняя от живых врагов. Для каждой точки — наименьшее расстояние по XZ до живых
+ * магов, кроме самого id (их нет — Infinity); берётся наибольшее, при равенстве — меньший номер. Возвращает саму точку
+ * из списка, не копию. Пустой список — ошибка. Квадраты расстояний вместо корней: порядок тот же, а счёт точен.
+ */
+export function pickSpawn(s: Readonly<MatchState>, id: UnitId, spawns: readonly Spawn[]): Spawn {
+  if (spawns.length === 0) throw new Error("pickSpawn: нет точек появления");
+  let best = 0;
+  let bestD2 = -1;
+  for (let k = 0; k < spawns.length; k++) {
+    const p = spawns[k]!.pos;
+    let d2 = Infinity;
+    for (const u of s.units) {
+      if (u.kind !== "mage" || !u.alive || u.id === id) continue;
+      const dx = u.move.body.pos.x - p.x;
+      const dz = u.move.body.pos.z - p.z;
+      d2 = Math.min(d2, dx * dx + dz * dz);
+    }
+    if (d2 > bestD2) {
+      best = k;
+      bestD2 = d2;
+    }
+  }
+  return spawns[best]!;
+}
+
+/**
+ * Свежий юнит; маг сохраняет счёт и перезарядки. Маг встаёт на pickSpawn, если в тике есть точки PvP (иначе — на свою
+ * mage.spawn), и получает защиту на t.spawnShieldTicks.
+ */
+function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
   if (!u.mage) return createDummyUnit(u.id, u.dummy!.spot);
-  const fresh = createMageUnit(u.id, u.mage.element, u.mage.spawn);
+  const at = t.spawns === null ? u.mage.spawn : pickSpawn(s, u.id, t.spawns);
+  const fresh = createMageUnit(u.id, u.mage.element, at);
   fresh.mage!.stats = { ...u.mage.stats };
   fresh.mage!.ready = { ...u.mage.ready };
+  if (t.spawnShieldTicks > 0) fresh.status.shieldUntil = t.now + t.spawnShieldTicks;
   return fresh;
 }
 
 /**
- * Сброс: живой в зоне смерти или ниже killBelowY выбывает; сброс засчитывается последнему ударившему за 5 с (Р13),
- * засчитанному магу — falls и «Кураж». Возрождение: на respawnTick юнит заменяется свежим на своей точке.
+ * Сброс: живой в зоне смерти или ниже killBelowY выбывает (маг +1 deaths, и когда упал сам); сброс засчитывается
+ * последнему ударившему за 5 с (Р13), засчитанному магу — falls и «Кураж». Возрождение: на respawnTick юнит
+ * заменяется свежим (respawned) — по текущему состоянию: маги, вставшие раньше в этом тике, уже стоят на своих точках.
  */
 export function stepLife(s: MatchState, t: TickCtx): void {
   const now = t.now;
@@ -126,7 +158,8 @@ export function stepLife(s: MatchState, t: TickCtx): void {
       const b = u.move.body;
       if (volumeAt(t.world, bodyBox(b), "kill") === null && !(b.pos.y < t.killBelowY)) continue;
       u.alive = false;
-      u.respawnTick = respawnAt(u, now);
+      u.respawnTick = respawnAt(u, t);
+      if (u.mage) u.mage.stats.deaths += 1;
       const by = u.lastHitBy;
       const credit = by !== NOBODY && by !== u.id && now - u.lastHitTick <= FALL_CREDIT_TICKS ? by : NOBODY;
       t.ev.push({ type: "fall", target: u.id, credit, pos: { x: b.pos.x, y: b.pos.y, z: b.pos.z } });
@@ -136,7 +169,7 @@ export function stepLife(s: MatchState, t: TickCtx): void {
         courage(t, c);
       }
     } else if (now >= u.respawnTick) {
-      const fresh = respawned(u);
+      const fresh = respawned(s, t, u);
       s.units[i] = fresh;
       const at = fresh.mage ? fresh.mage.spawn : fresh.dummy!.spot;
       t.ev.push({ type: "respawn", target: u.id, pos: { x: at.pos.x, y: at.pos.y, z: at.pos.z }, yaw: at.yaw });

@@ -13,7 +13,7 @@ import type { MatchEvent, MatchState, TickCtx } from "./types";
 const ctx = testContext();
 function tick(s: MatchState, now: number, ev: MatchEvent[] = []): TickCtx {
   const tw = buildTickWorld(ctx.world, s);
-  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: ctx.killBelowY, now, ev };
+  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: ctx.killBelowY, now, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 };
 }
 const solidWorld = (s: MatchState) => buildTickWorld(ctx.world, s).world;
 const WALL = aabb(-2, 0, -5.3, 2, 2.5, -4.7);

@@ -60,8 +60,9 @@ export function snappedWallBox(c: Vec3, yaw: number, lengthM: number, thickM: nu
   return aabb(c.x - hx, c.y, c.z - hz, c.x + hx, c.y + heightM, c.z + hz);
 }
 
-/** Событие cast: каст принят (замах или мгновенный). */
+/** Событие cast: каст принят (замах или мгновенный). Принятый каст снимает защиту после появления. */
 export function emitCast(t: TickCtx, u: Unit, ability: AbilityId, slot: Slot, aim: { eye: Vec3; dir: Vec3 }): void {
+  u.status.shieldUntil = Math.min(u.status.shieldUntil, t.now);
   t.ev.push({ type: "cast", unit: u.id, ability, slot, pos: { x: aim.eye.x, y: aim.eye.y, z: aim.eye.z }, dir: { x: aim.dir.x, y: aim.dir.y, z: aim.dir.z } });
 }
 

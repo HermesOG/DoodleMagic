@@ -1,6 +1,6 @@
 import { DEFAULT_MOVE } from "../player";
 import { TICK_HZ, type Vec3 } from "../types";
-import { CC_LIMITS, DUMMY, EARTH, KNOCKBACK, MAGE_REGEN, MATCH, STATUS, ticks } from "./defs";
+import { CC_LIMITS, DUMMY, EARTH, KNOCKBACK, MAGE_REGEN, STATUS, ticks } from "./defs";
 import { unitById } from "./state";
 import type { DamageSource, Knockback, MatchState, TickCtx, Unit, UnitId } from "./types";
 
@@ -45,8 +45,8 @@ const SLOW_MIN_MUL = 1 - CC_LIMITS.slowMaxFrac;
 /** Длительность контроля в секундах в пределах [0, max]; NaN и отрицательное — 0. */
 const ccSeconds = (s: number, max: number): number => (s > 0 ? Math.min(s, max) : 0);
 
-/** Тик возрождения после смерти или сброса: манекен через 3 с (Р12), маг через 1 с (Р17). */
-export const respawnAt = (u: Unit, now: number): number => now + ticks(u.mage ? MATCH.mageRespawnS : DUMMY.respawnS);
+/** Тик возрождения после смерти или сброса: манекен через 3 с (Р12), маг — через t.mageRespawnTicks (полигон 1 с, Р17). */
+export const respawnAt = (u: Unit, t: TickCtx): number => t.now + (u.mage ? t.mageRespawnTicks : ticks(DUMMY.respawnS));
 
 /**
  * Толчок: канал вбок с потолком 12 м, подброс — как прыжок, точной высоты upM. Подброшенный манекен теряет свою
@@ -67,14 +67,16 @@ function push(u: Unit, dir: { x: number; z: number }, k: Knockback): void {
 }
 
 /**
- * Наносит удар. Возвращает нанесённый урон: 0, если цель — сам источник, мертва или её нет.
+ * Наносит удар. Возвращает нанесённый урон: 0, если цель — сам источник, мертва, её нет или она под защитой после
+ * появления (тогда ни урона, ни толчка, ни статусов, ни события hit).
  * Порядок: урон (+15 % по цели «В воздухе» от прежнего подброса) → отбрасывание (×0,5 у мага Земли, ×0,5 в иммунитете,
- * потолок 12 / 6 м) → HP и засчитывание → событие hit → статусы → смерть.
+ * потолок 12 / 6 м) → HP и засчитывание → событие hit → статусы → смерть (цели +1 deaths).
  */
 export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
   if (h.source === h.target) return 0;
   const u = unitById(s, h.target);
   if (!u || !u.alive) return 0;
+  if (t.now < u.status.shieldUntil) return 0;
   const now = t.now;
   const st = u.status;
   const air = st.airborne;
@@ -134,7 +136,8 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     u.hp = 0;
     u.alive = false;
     Object.assign(u.kb, { x: 0, z: 0 });
-    u.respawnTick = respawnAt(u, now);
+    u.respawnTick = respawnAt(u, t);
+    if (u.mage) u.mage.stats.deaths += 1;
     const p = u.move.body.pos;
     t.ev.push({ type: "death", target: u.id, killer: h.source, ability: h.ability, pos: { x: p.x, y: p.y, z: p.z } });
     if (src?.mage) {
