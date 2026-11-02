@@ -1,0 +1,28 @@
+import type { Element, MatchEvent, MatchInput, MatchState, Spawn, UnitId } from "@doodlemagic/sim";
+
+/**
+ * Источник кадров игрового вида: полигон — одиночная игра, сеть — хост и предсказание игрока. Вид получает от драйвера
+ * одно «сейчас» на кадр (два последних состояния и долю между ними) и события, а сам отвечает за ввод, рендер,
+ * эффекты, звук, руки, камеру и HUD.
+ */
+
+export interface TickOut { state: MatchState; events: MatchEvent[] }
+export interface Frame {
+  /** Новые тики кадра по порядку; их события — эффекты «сейчас». */
+  ticks: TickOut[];
+  /** События не из новых тиков (сеть: хост посчитал, предсказание не показало) — тоже в эффекты. */
+  late: MatchEvent[];
+  /** Подтверждённые события, ставшие известны в этом кадре: полигон и хост — события тиков, игрок — из снапшотов. */
+  confirmed: MatchEvent[];
+  prev: MatchState;
+  cur: MatchState;
+  alpha: number;
+}
+export interface Driver {
+  readonly localId: UnitId;
+  /** Кадр длиной dtS. sample() — ввод игрока на тик; хост может звать его и между кадрами (из таймера). */
+  advance(dtS: number, sample: () => MatchInput): Frame;
+  /** Игрок выбрал стихию. Вернул точку — маг уже стоит там (вид ставит взгляд и руки); null — запрос ушёл хосту. */
+  chooseElement(e: Element): Spawn | null;
+  dispose(): void;
+}
