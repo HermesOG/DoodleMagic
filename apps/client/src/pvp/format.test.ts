@@ -5,6 +5,7 @@ import {
 } from "@doodlemagic/sim";
 import {
   ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, formatClock, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+  withKnownNames,
 } from "./format";
 
 const NAMES: ReadonlyMap<UnitId, string> = new Map([
@@ -172,8 +173,13 @@ describe("scoreRows", () => {
     expect(rows).toEqual([
       { place: 1, id: 2, name: "Валун 17", element: "earth", score: 3, kills: 2, falls: 1, deaths: 1, ping: "34", mine: false },
       { place: 2, id: 3, name: "Огонёк", element: "fire", score: 1, kills: 1, falls: 0, deaths: 1, ping: "—", mine: true },
-      { place: 3, id: 1, name: "Искра 42", element: "fire", score: 1, kills: 1, falls: 0, deaths: 3, ping: "0", mine: false },
+      { place: 2, id: 1, name: "Искра 42", element: "fire", score: 1, kills: 1, falls: 0, deaths: 3, ping: "0", mine: false },
     ]);
+  });
+
+  it("equal scores share a place, the next place skips (1, 1, 3, 3, 5)", () => {
+    const g = game("live", [{ id: 1, kills: 4 }, { id: 2, kills: 4, deaths: 1 }, { id: 3, kills: 2 }, { id: 4, kills: 2, deaths: 2 }, { id: 5 }]);
+    expect(scoreRows(g, NAMES, pings, 1).map((r) => [r.id, r.place])).toEqual([[1, 1], [2, 1], [3, 3], [4, 3], [5, 5]]);
   });
 
   it("on results the table is the final standings, not the stats that keep counting", () => {
@@ -186,6 +192,33 @@ describe("scoreRows", () => {
       [2, "Искра 42", "fire", 3, 3, true],
       [3, "Маг", null, 1, 1, false],
     ]);
+  });
+
+  it("a tie on results: both winners share 1st place", () => {
+    const g = game("results", [{ id: 1 }, { id: 2 }, { id: 3 }], {
+      results: [{ id: 1, score: 9, kills: 9, falls: 0, deaths: 1 }, { id: 2, score: 9, kills: 8, falls: 1, deaths: 2 }, { id: 3, score: 4, kills: 4, falls: 0, deaths: 3 }],
+    });
+    expect(scoreRows(g, NAMES, pings, 3).map((r) => r.place)).toEqual([1, 1, 3]);
+    expect(resultsTitle(g.results, NAMES)).toBe("Ничья: Искра 42, Валун 17");
+  });
+});
+
+describe("withKnownNames", () => {
+  it("keeps the names of mages who left, the current roster wins, the inputs stay as they were", () => {
+    const before = new Map<UnitId, string>([[1, "Искра 42"], [2, "Валун"]]);
+    const roster = new Map<UnitId, string>([[2, "Валун 17"], [3, "Огонёк"]]);
+    const known = withKnownNames(before, roster);
+    expect([...known]).toEqual([[1, "Искра 42"], [2, "Валун 17"], [3, "Огонёк"]]);
+    expect([...before]).toEqual([[1, "Искра 42"], [2, "Валун"]]);
+  });
+
+  it("the winner who closed the tab is named on results; the roster alone would say «Маг»", () => {
+    const left = { id: 1, score: 12, kills: 12, falls: 0, deaths: 0 };
+    const roster = new Map<UnitId, string>([[2, "Валун 17"]]);
+    const known = withKnownNames(new Map([[1, "Искра 42"], [2, "Валун 17"]]), roster);
+    const g = game("results", [{ id: 2 }], { results: [left, { id: 2, score: 5, kills: 5, falls: 0, deaths: 2 }] });
+    expect([resultsTitle(g.results, roster), resultsTitle(g.results, known)]).toEqual(["Победа: Маг", "Победа: Искра 42"]);
+    expect(scoreRows(g, known, new Map(), 2).map((r) => r.name)).toEqual(["Искра 42", "Валун 17"]);
   });
 });
 

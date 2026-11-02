@@ -1,7 +1,8 @@
 import { clonePlain, unitById, type MatchEvent } from "@doodlemagic/sim";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHostCore, type HostCore } from "../net/hostCore";
+import { LOCAL_PEER, createHostCore, type HostCore } from "../net/hostCore";
 import type { JoinHandlers } from "../net/link";
+import { OTHERS_STALL_MS } from "../net/predict";
 import { NET_VERSION, hostText, parseClientMsg } from "../net/protocol";
 import type { SnapshotMsg } from "../net/snapshot";
 import { input, testPvpContext } from "../net/testArena";
@@ -223,6 +224,31 @@ describe("connectClient: frames", () => {
     const f = d.advance(0, () => input());
     expect(f.late).toEqual([]);
     expect(f.prev).not.toBe(f.cur);
+  });
+
+  it(`other mages stop in the prediction after ${OTHERS_STALL_MS} ms without snapshots`, async () => {
+    const { host, d } = await joined();
+    const r = host.join(LOCAL_PEER, "Хост", "fire", 0);
+    if (!r.ok) throw new Error("full");
+    // маг хоста идёт: в снапшотах его последнее движение — вперёд
+    for (let k = 0; k < 6; k++) {
+      const t = host.tick(input({ moveZ: 1 }), now);
+      if (t.snapshot) deliver(t.snapshot);
+    }
+    await flush();
+    d.advance(0, () => input());
+    const z = () => unitById(d.game().match, r.id)!.move.body.pos.z;
+    /** 20 тиков (кадр — не больше 5). */
+    const walk = (): number => {
+      const z0 = z();
+      for (let k = 0; k < 4; k++) d.advance(5 * TICK_S + 1e-6, () => input());
+      return Math.abs(z() - z0);
+    };
+    now += OTHERS_STALL_MS;
+    expect(walk()).toBeGreaterThan(1);
+    now += 1;
+    walk(); // торможение (замедление по полу) — до 0,13 с
+    expect(walk()).toBeLessThan(1e-9);
   });
 
   it("is stale after 3 s without snapshots and closed when the host leaves", async () => {

@@ -61,6 +61,11 @@ export interface GameView {
   readonly input: InputDevice;
   readonly combat: CombatHud;
   route(e: Effect): void;
+  /**
+   * Выбор стихии, как с экрана выбора (экран смерти PvP): запоминается в настройках вида, уходит драйверу; вернул он
+   * точку — взгляд, руки и пыль появления, как у полигона.
+   */
+  chooseElement(e: Element): void;
   stop(): void;
 }
 
@@ -511,6 +516,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     input,
     combat,
     route: (e) => route(e, performance.now() / 1000),
+    chooseElement: (e) => guard.run("select", () => chooseElement(e), undefined),
     stop: halt,
   };
 }

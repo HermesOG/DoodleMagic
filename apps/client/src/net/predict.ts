@@ -8,7 +8,8 @@ import type { SnapshotMsg } from "./snapshot";
 /**
  * Предсказание игрока (решения Н1, Н4, Н5). «Сейчас» — последний снапшот хоста плюс свой неподтверждённый ввод,
  * переигранный поверх. Чужие маги и в шаге, и в переигровке идут по своему последнему движению и взгляду из снапшота,
- * без прыжка и кнопок. Поправка после переигровки не дёргает картинку: рендер сдвигается на гаснущий сдвиг.
+ * без прыжка и кнопок; снапшоты встали (step с othersStill) — стоят. Поправка после переигровки не дёргает картинку:
+ * рендер сдвигается на гаснущий сдвиг.
  */
 
 export const MAX_REPLAY = 90;          // тиков переигровки, старше — выбрасываются
@@ -25,6 +26,11 @@ const SHOWN_MAX = 1024;
 const SEEN_KEEP_TICKS = 600;
 /** Сдвиг рендера короче — удаляется, м. */
 const OFFSET_MIN_M = 0.001;
+/**
+ * Снапшотов нет дольше, мс по часам игрока, — хост, видимо, встал: чужие маги в предсказании стоят (взгляд прежний),
+ * а не уходят по последнему движению. Как у хоста: тишина ввода больше 250 мс — маг стоит (Н2).
+ */
+export const OTHERS_STALL_MS = 250;
 
 export interface Predictor {
   readonly localId: UnitId;
@@ -37,8 +43,10 @@ export interface Predictor {
   /**
    * Новый тик: ввод → seq, шаг предсказания. События нового тика и пакет отправки (последние INPUTS_PER_PACKET вводов).
    * Тик, который уже шагали («сейчас» откатилось после обрезки хвоста у хоста), не повторяет показанные на нём события.
+   * othersStill — снапшотов давно нет (решает вызывающий по своим часам, OTHERS_STALL_MS): чужие маги на этом тике
+   * стоят, взгляд — из снапшота. Переигровка на новом снапшоте ведёт их как обычно.
    */
-  step(input: MatchInput): { events: MatchEvent[]; packet: PackedInput[] };
+  step(input: MatchInput, othersStill?: boolean): { events: MatchEvent[]; packet: PackedInput[] };
   /** Снапшот хоста: новее прежнего — перебазировать и переиграть; события — один раз на снапшот. То же, что applySnapshots([s]). */
   applySnapshot(s: SnapshotMsg): { late: MatchEvent[]; confirmed: MatchEvent[] };
   /**
@@ -105,11 +113,12 @@ export function withOffsets(s: MatchState, offsets: ReadonlyMap<UnitId, Vec3>): 
 
 const length = (v: Vec3): number => Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 
-/** Ввод чужого мага по looks снапшота: движение и взгляд, без прыжка и кнопок. */
-function lookInputs(s: SnapshotMsg, localId: UnitId): Partial<Record<UnitId, MatchInput>> {
+/** Ввод чужого мага по looks снапшота: движение и взгляд, без прыжка и кнопок; still — без движения. */
+function lookInputs(s: SnapshotMsg, localId: UnitId, still = false): Partial<Record<UnitId, MatchInput>> {
   const out: Partial<Record<UnitId, MatchInput>> = {};
   for (const [id, moveX, moveZ, yaw, pitch] of s.looks) {
-    if (id !== localId) out[id] = { moveX, moveZ, yaw, pitch, jump: false, primary: false, q: false, e: false, c: false };
+    if (id === localId) continue;
+    out[id] = { moveX: still ? 0 : moveX, moveZ: still ? 0 : moveZ, yaw, pitch, jump: false, primary: false, q: false, e: false, c: false };
   }
   return out;
 }
@@ -126,8 +135,9 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
   let seq = 0;
   /** Свой ввод, которого хост ещё не применил, по возрастанию seq. */
   let unacked: SeqInput[] = [];
-  /** Ввод чужих магов из последнего снапшота. */
+  /** Ввод чужих магов из последнего снапшота; still — он же без движения (снапшоты встали). */
   let others: Partial<Record<UnitId, MatchInput>> = {};
+  let still: Partial<Record<UnitId, MatchInput>> = {};
   /** Тик самого нового снапшота и номера всех пришедших (за SEEN_KEEP_TICKS). */
   let newest = -Infinity;
   const seen = new Set<number>();
@@ -136,13 +146,13 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
   let stepped = -Infinity;
   const offs = new Map<UnitId, Vec3>();
 
-  function step(input: MatchInput): { events: MatchEvent[]; packet: PackedInput[] } {
+  function step(input: MatchInput, othersStill = false): { events: MatchEvent[]; packet: PackedInput[] } {
     if (!ready) return { events: [], packet: [] };
     seq += 1;
     unacked.push({ seq, input: { ...input } });
     if (unacked.length > MAX_REPLAY) unacked.splice(0, unacked.length - MAX_REPLAY);
     const tick = cur.match.tick;
-    const r = stepGame(cur, { ...others, [localId]: input }, ctx);
+    const r = stepGame(cur, { ...(othersStill ? still : others), [localId]: input }, ctx);
     prev = cur;
     cur = r.game;
     // Хост обрезал хвост ввода — «сейчас» откатилось, и тик считается второй раз. Его события, показанные в первый
@@ -188,6 +198,7 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
     confirmed = s.game;
     roster = s.roster;
     others = lookInputs(s, localId);
+    still = lookInputs(s, localId, true);
     const ack = s.acks.find(([id]) => id === localId)?.[1];
     if (ack !== undefined) unacked = unacked.filter((it) => it.seq > ack);
     if (unacked.length > MAX_REPLAY) unacked = unacked.slice(-MAX_REPLAY);

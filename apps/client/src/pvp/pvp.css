@@ -179,11 +179,16 @@
   text-shadow: var(--mh-halo);
 }
 
-/* килфид: справа сверху под счётчиком боевого HUD, новые сверху; свои строки — тушью */
+/* счётчик полигона «Урон · Убийства · Сбросы» в PvP не нужен (и он по предсказанию): его место — у килфида */
+.pvp-game .ch-score {
+  display: none;
+}
+
+/* килфид: справа сверху, новые сверху; свои строки — тушью */
 .mh-feed {
   position: absolute;
   right: 18px;
-  top: 44px;
+  top: 14px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;

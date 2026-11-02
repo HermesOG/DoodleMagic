@@ -1,9 +1,8 @@
 import { ELEMENT_INFO, PVP, TICK_HZ, statusFlags, unitById, type Element, type GameState, type UnitId } from "@doodlemagic/sim";
 import type { Frame } from "../game/driver";
 import type { GameView } from "../game/view";
-import { loadPrefs, savePrefs } from "../hud/prefs";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine, withKnownNames,
   type ScoreRow,
 } from "./format";
 import type { PvpDriver } from "./hostDriver";
@@ -169,6 +168,9 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   let topFor: GameState | null = null;
   let topSec = Number.NaN;
   let topNames: ReadonlyMap<UnitId, string> | null = null;
+  /** Имена всех магов за сессию (для таблицы и итогов: вышедший победитель — по имени); пересчёт — со сменой состава. */
+  let known: ReadonlyMap<UnitId, string> = new Map();
+  let knownFrom: ReadonlyMap<UnitId, string> | null = null;
   /** Когда таблица (Tab или итоги) пересобиралась; −∞ — пересобрать в ближайшем кадре. */
   let tableAt = -Infinity;
   let tableKind: "board" | "results" | null = null;
@@ -177,12 +179,14 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     for (const c of chips) c.el.classList.toggle("is-on", c.element === current);
   };
 
-  /** Цифра на экране смерти: стихия при возрождении (хост — сразу в ядре, игрок — запросом); запоминаем, как меню. */
+  /**
+   * Цифра на экране смерти: стихия при возрождении (хост — сразу в ядре, игрок — запросом). Через вид, как выбор в меню:
+   * его настройки и меню знают новую стихию.
+   */
   const pick = (e: Element): void => {
     picked = e;
     renderChoice(e);
-    driver.chooseElement(e);
-    savePrefs({ ...loadPrefs(), element: e });
+    view.chooseElement(e);
   };
 
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -195,7 +199,8 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       return;
     }
     if (e.repeat) return;
-    if (deadShown) {
+    // цифры — только в игре: экран смерти под открытым меню спрятан
+    if (deadShown && view.input.locked) {
       const k = ELEMENT_KEYS.find((x) => x.code === e.code);
       if (k) pick(k.element);
       return;
@@ -250,6 +255,10 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       const id = driver.localId;
       const now = g.match.tick;
       phase = c.phase;
+      if (names !== knownFrom) {
+        knownFrom = names;
+        known = withKnownNames(known, names);
+      }
 
       if (view.input.locked !== locked) {
         locked = view.input.locked;
@@ -303,7 +312,7 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
         renderChoice(picked ?? me.mage?.element ?? null);
       } else deathText = "";
 
-      // таблица по Tab или итоги: пересборка не чаще BOARD_EVERY_S
+      // таблица по Tab или итоги: пересборка не чаще BOARD_EVERY_S; имена — всех за сессию (вышедший — не «Маг»)
       const kind = over ? "results" : boardHeld ? "board" : null;
       setHidden(board, kind !== "board");
       setHidden(results, kind !== "results");
@@ -313,12 +322,12 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       }
       if (kind && nowS - tableAt >= BOARD_EVERY_S) {
         tableAt = nowS;
-        const rows = scoreRows(c, names, driver.pings(), id);
+        const rows = scoreRows(c, known, driver.pings(), id);
         if (kind === "board") {
           setText(boardHead, boardTitle(driver.roomCode, driver.ownPing()));
           fillTable(boardTable, rows);
         } else {
-          setText(resultsHead, resultsTitle(c.results, names));
+          setText(resultsHead, resultsTitle(c.results, known));
           fillTable(resultsTable, rows);
         }
       }

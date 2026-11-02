@@ -224,6 +224,8 @@ function startGame(root: HTMLElement, arena: ArenaData, ctx: MatchContext, drive
     driver.dispose();
     return;
   }
+  // счётчик полигона «Урон · Убийства · Сбросы» (боевой HUD, по предсказанию) в PvP прячется: счёт — в строке сверху и в таблице
+  root.classList.add("pvp-game");
   match = createMatchHud(root, driver, view);
   // зайти снова — та же ссылка с тем же запросом (?lag=…): страница заново подключится к хосту
   ui = createOverlay(root, driver.isHost ? null : `/r/${code}${location.search}`);

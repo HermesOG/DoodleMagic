@@ -5,7 +5,7 @@ import {
 import type { Frame, TickOut } from "../game/driver";
 import { decodeBinary } from "../net/codec";
 import { openJoinLink, type JoinFailure, type JoinLink, type LagOptions } from "../net/link";
-import { SNAP_DIST_M, createPredictor, withOffsets, type Predictor } from "../net/predict";
+import { OTHERS_STALL_MS, SNAP_DIST_M, createPredictor, withOffsets, type Predictor } from "../net/predict";
 import { NET_VERSION, elementText, inputText, joinText, parseHostText, pingText } from "../net/protocol";
 import { isSnapshot, type SnapshotMsg } from "../net/snapshot";
 import { advanceClock } from "../sandbox/fixedStep";
@@ -223,10 +223,12 @@ export function connectClient(o: ClientOptions): ClientSession {
         let face: number | null = snap.respawn?.yaw ?? null;
         const clock = advanceClock(acc, dtS, TICK_DT);
         acc = clock.acc;
+        // хост молчит дольше OTHERS_STALL_MS: чужие маги в предсказании стоят, а не уходят по последнему движению
+        const othersStill = performance.now() - lastSnapAt > OTHERS_STALL_MS;
         const ticks: TickOut[] = [];
         for (let k = 0; k < clock.ticks; k++) {
           const input = sample();
-          const r = p.step(face === null ? input : { ...input, yaw: face, pitch: 0 });
+          const r = p.step(face === null ? input : { ...input, yaw: face, pitch: 0 }, othersStill);
           if (r.packet.length > 0) send(inputText(r.packet));
           ticks.push({ state: p.cur.match, events: r.events });
           for (const ev of r.events) if (isOwnRespawn(ev)) face = ev.yaw;

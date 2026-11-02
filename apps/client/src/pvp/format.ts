@@ -129,14 +129,17 @@ export interface ScoreRow {
 
 /**
  * Строки таблицы: место, имя, стихия, очки, убийства, сбросы, смерти, пинг; свои помечены. Порядок — standings, на
- * итогах — results (бой после конца идёт без счёта, статистика магов меняется, а итог — нет).
+ * итогах — results (бой после конца идёт без счёта, статистика магов меняется, а итог — нет). Место — по очкам:
+ * равные очки делят место (1, 1, 3), как «Ничья: …» в заголовке итогов.
  */
 export function scoreRows(g: GameState, names: ReadonlyMap<UnitId, string>, pings: ReadonlyMap<UnitId, number>, localId: UnitId): ScoreRow[] {
   const list = g.phase === "results" ? g.results : standings(g);
+  let place = 0;
   return list.map((s, k) => {
     const ping = pings.get(s.id) ?? -1;
+    if (k === 0 || list[k - 1]!.score !== s.score) place = k + 1;
     return {
-      place: k + 1,
+      place,
       id: s.id,
       name: nameOf(names, s.id),
       element: unitById(g.match, s.id)?.mage?.element ?? null,
@@ -148,6 +151,16 @@ export function scoreRows(g: GameState, names: ReadonlyMap<UnitId, string>, ping
       mine: s.id === localId,
     };
   });
+}
+
+/**
+ * Имена всех магов, виденных за сессию: прежние плюс нынешний состав (он главнее). Для итогов и таблицы — победитель,
+ * закрывший вкладку, остаётся по имени, а не «Маг»; id не переиспользуются. Килфид берёт только нынешний состав.
+ */
+export function withKnownNames(known: ReadonlyMap<UnitId, string>, roster: ReadonlyMap<UnitId, string>): Map<UnitId, string> {
+  const all = new Map(known);
+  for (const [id, name] of roster) all.set(id, name);
+  return all;
 }
 
 /** Заголовок итогов: победитель или все первые при ничьей (внезапная смерть кончилась, двое дошли до лимита разом). */

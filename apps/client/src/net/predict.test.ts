@@ -366,3 +366,40 @@ describe("predictor: smoothing", () => {
     expect(p.offsets(0).has(HOST_ID)).toBe(false);
   });
 });
+
+describe("predictor: a host stall", () => {
+  // хост на последнем тике снапшота шёл вперёд и смотрел на yaw 1.5, pitch 0.1
+  const walking = (): SnapshotMsg =>
+    later(hostSnapshots(3)[0]!, 0, (c) => (c.looks = c.looks.map(([id, mx, mz, yaw, pitch]) => (id === HOST_ID ? [id, 0, 1, 1.5, 0.1] : [id, mx, mz, yaw, pitch]))));
+  const horizontal = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.z - b.z);
+
+  it("othersStill: other mages stand with the snapshot's look, the own mage still moves; without it they walk on", () => {
+    const s = walking();
+    const start = posOf(s.game.match, HOST_ID);
+    const run = (still: boolean): Predictor => {
+      const p = createPredictor(ctx, ME);
+      p.applySnapshot(s);
+      for (let k = 0; k < 30; k++) p.step(input({ moveX: 1 }), still);
+      return p;
+    };
+    const walked = run(false);
+    const stood = run(true);
+    const host = (p: Predictor) => p.cur.match.units.find((u) => u.id === HOST_ID)!;
+    expect(horizontal(posOf(walked.cur.match, HOST_ID), start)).toBeGreaterThan(2);
+    expect(horizontal(posOf(stood.cur.match, HOST_ID), start)).toBeLessThan(1e-9);
+    expect([host(stood).move.yaw, host(stood).move.pitch]).toEqual([host(walked).move.yaw, host(walked).move.pitch]);
+    expect(host(stood).move.yaw).toBe(1.5);
+    expect(posOf(stood.cur.match, ME)).toEqual(posOf(walked.cur.match, ME));
+  });
+
+  it("a fresh snapshot's replay walks the others again", () => {
+    const s = walking();
+    const p = createPredictor(ctx, ME);
+    p.applySnapshot(s);
+    for (let k = 0; k < 10; k++) p.step(input(), true);
+    expect(horizontal(posOf(p.cur.match, HOST_ID), posOf(s.game.match, HOST_ID))).toBeLessThan(1e-9);
+    // хост ожил: снапшот на 1 тик новее, 10 неподтверждённых вводов переигрываются — хост в них снова идёт
+    p.applySnapshot(later(s, 1, (c) => (c.looks = s.looks)));
+    expect(horizontal(posOf(p.cur.match, HOST_ID), posOf(s.game.match, HOST_ID))).toBeGreaterThan(0.2);
+  });
+});
