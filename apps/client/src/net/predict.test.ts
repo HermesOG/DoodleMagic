@@ -1,5 +1,5 @@
-import type { MatchEvent, MatchState, UnitId, Vec3 } from "@doodlemagic/sim";
-import { describe, expect, it } from "vitest";
+import { stepGame, type MatchEvent, type MatchState, type UnitId, type Vec3 } from "@doodlemagic/sim";
+import { describe, expect, it, vi } from "vitest";
 import { LOCAL_PEER, createHostCore } from "./hostCore";
 import {
   DEDUP_WINDOW, LATE_FX_MAX_AGE, MAX_REPLAY, SMOOTH_SELF_TAU_S, SMOOTH_TAU_S, SNAP_DIST_M, createPredictor, eventKey, withOffsets,
@@ -7,6 +7,17 @@ import {
 } from "./predict";
 import type { SnapshotMsg } from "./snapshot";
 import { input, testPvpContext } from "./testArena";
+
+// stepGame — тот же, но с подсчётом вызовов: сколько тиков переиграл предсказатель
+vi.mock("@doodlemagic/sim", async (importOriginal) => {
+  const sim = await importOriginal<typeof import("@doodlemagic/sim")>();
+  return { ...sim, stepGame: vi.fn(sim.stepGame) };
+});
+const stepCalls = (run: () => void): number => {
+  vi.mocked(stepGame).mockClear();
+  run();
+  return vi.mocked(stepGame).mock.calls.length;
+};
 
 const ctx = testPvpContext();
 const HOST_ID = 1;
@@ -197,6 +208,118 @@ describe("predictor: host events against the shown ones", () => {
     const other: MatchEvent = { type: "cast", unit: HOST_ID, ability: "fireFists", slot: "primary", pos: { x: 0, y: 1.6, z: 0 }, dir: { x: 0, y: 0, z: -1 } };
     const r = p.applySnapshot(later(s, LATE_FX_MAX_AGE + 10, (c) => (c.events = [[tick, other], [tick + 20, other]])));
     expect(r).toEqual({ late: [other], confirmed: [other, other] });
+  });
+
+  it("the age counts from the predicted now: after a host stall a fresh snapshot plays no stale effects", () => {
+    const s = hostSnapshots(3)[0]!;
+    const hostCast: MatchEvent = { type: "cast", unit: HOST_ID, ability: "fireFists", slot: "primary", pos: { x: 0, y: 1.6, z: 0 }, dir: { x: 0, y: 0, z: -1 } };
+    const withEvent = () => later(s, 3, (c) => (c.events = [[s.tick + 1, hostCast]]));
+    const afterSteps = (n: number) => {
+      const p = createPredictor(ctx, ME);
+      p.applySnapshot(s);
+      for (let k = 0; k < n; k++) p.step(input());
+      return p.applySnapshot(withEvent());
+    };
+    // снапшот всего на 3 тика новее, но «сейчас» (снапшот + 70 неподтверждённых тиков) на 72 тика позже события
+    expect(afterSteps(LATE_FX_MAX_AGE + 10)).toEqual({ late: [], confirmed: [hostCast] });
+    expect(afterSteps(5)).toEqual({ late: [hostCast], confirmed: [hostCast] });
+    // своего мага нет — возраст от тика снапшота
+    const watcher = createPredictor(ctx, 99);
+    watcher.applySnapshot(s);
+    expect(watcher.applySnapshot(withEvent()).late).toEqual([hostCast]);
+  });
+});
+
+describe("predictor: a tick stepped again", () => {
+  /** Снапшот на тике at: маг хоста мёртв и встаёт по таймеру на тике 8; хост применил свои вводы по ack. */
+  const deadHost = (s: SnapshotMsg, at: number, ack: number): SnapshotMsg =>
+    later(s, at - s.tick, (c) => {
+      const u = c.game.match.units.find((x) => x.id === HOST_ID)!;
+      u.alive = false;
+      u.respawnTick = 8;
+      c.acks = [[ME, ack]];
+    });
+  const respawns = (list: MatchEvent[]): MatchEvent[] => list.filter((e) => e.type === "respawn" && e.target === HOST_ID);
+
+  it("after the prediction falls back, a tick stepped again does not repeat its shown events; new ones still come", () => {
+    const s = hostSnapshots(3)[0]!;
+    const p = createPredictor(ctx, ME);
+    p.applySnapshot(deadHost(s, 3, -1));
+    const first: MatchEvent[] = [];
+    for (let k = 0; k < 8; k++) first.push(...p.step(input()).events); // тики 3…10
+    expect(respawns(first)).toHaveLength(1);
+    // хост обрезал хвост: все 8 вводов применены, а снапшот — тика 5; «сейчас» откатилось с 11 на 5
+    p.applySnapshot(deadHost(s, 5, 8));
+    expect(p.cur.match.tick).toBe(5);
+    const again: MatchEvent[] = [];
+    for (let k = 0; k < 6; k++) again.push(...p.step(input({ primary: k === 0, yaw: Math.PI })).events); // тики 5…10
+    expect(respawns(again)).toEqual([]);
+    expect(again.filter((e) => e.type === "cast" && e.unit === ME)).toHaveLength(1); // новое на этих тиках идёт
+    // показанное в первый раз ждёт сверки: возрождение от хоста не повторяется
+    const host = respawns(first)[0]!;
+    const r = p.applySnapshot(later(s, 9, (c) => {
+      c.events = [[8, host]];
+      c.acks = [[ME, 14]];
+    }));
+    expect(r).toEqual({ late: [], confirmed: [host] });
+  });
+});
+
+describe("predictor: a batch of snapshots", () => {
+  /** Пять снапшотов хоста (тики 3…15) с событиями; хост подтверждает свои вводы: −1, −1, 2, 4, 6. */
+  function snapshotsWithAcks(): SnapshotMsg[] {
+    return hostSnapshots(15).map((s, k) =>
+      later(s, 0, (c) => {
+        c.events = structuredClone(s.events);
+        c.acks = [[ME, k < 2 ? -1 : 2 * (k - 1)]];
+      }),
+    );
+  }
+  /** Предсказатель на первом снапшоте и 10 своих шагов. */
+  function warmed(first: SnapshotMsg): Predictor {
+    const p = createPredictor(ctx, ME);
+    p.applySnapshot(first);
+    for (let k = 0; k < 10; k++) p.step(input({ moveZ: 1, moveX: k % 3 === 0 ? 1 : 0, yaw: Math.PI + k / 20, jump: k === 3 }));
+    return p;
+  }
+
+  it("gives the same state and events as one by one, with a single replay on the newest", () => {
+    const [s1, s2, s3, s4, s5] = snapshotsWithAcks() as [SnapshotMsg, SnapshotMsg, SnapshotMsg, SnapshotMsg, SnapshotMsg];
+    const one = warmed(s1);
+    const batch = warmed(s1);
+    const oneOut = { late: [] as MatchEvent[], confirmed: [] as MatchEvent[] };
+    const oneCalls = stepCalls(() => {
+      for (const s of [s2, s3, s4, s5]) {
+        const r = one.applySnapshot(s);
+        oneOut.late.push(...r.late);
+        oneOut.confirmed.push(...r.confirmed);
+      }
+    });
+    let batchOut = { late: [] as MatchEvent[], confirmed: [] as MatchEvent[] };
+    const batchCalls = stepCalls(() => (batchOut = batch.applySnapshots([s4, s2, s5, s3])));
+    expect([oneCalls, batchCalls]).toEqual([10 + 8 + 6 + 4, 4]);
+    expect(oneOut.confirmed.length).toBeGreaterThan(0);
+    expect(batchOut).toEqual(oneOut);
+    expect([batch.cur, batch.prev, batch.roster, batch.ready]).toEqual([one.cur, one.prev, one.roster, one.ready]);
+    expect(batch.confirmed).toBe(s5.game);
+    const a = one.offsets(0);
+    const b = batch.offsets(0);
+    expect([...b.keys()]).toEqual([...a.keys()]);
+    for (const [id, o] of a) for (const ax of ["x", "y", "z"] as const) expect(b.get(id)![ax]).toBeCloseTo(o[ax], 9);
+  });
+
+  it("old and repeated snapshots in a batch count once and do not roll the state back", () => {
+    const [s1, s2, s3] = hostSnapshots(9) as [SnapshotMsg, SnapshotMsg, SnapshotMsg];
+    const p = createPredictor(ctx, ME);
+    p.applySnapshot(s1);
+    p.applySnapshot(s3);
+    const cur = p.cur;
+    let r = { late: [] as MatchEvent[], confirmed: [] as MatchEvent[] };
+    expect(stepCalls(() => (r = p.applySnapshots([s2, s2, s1, s3])))).toBe(0);
+    expect(p.cur).toBe(cur);
+    expect(r.confirmed).toEqual(s2.events.map(([, e]) => e));
+    expect(p.applySnapshots([s1, s2, s3])).toEqual({ late: [], confirmed: [] });
+    expect(p.applySnapshots([])).toEqual({ late: [], confirmed: [] });
   });
 });
 

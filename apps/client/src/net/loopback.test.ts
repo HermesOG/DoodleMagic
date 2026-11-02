@@ -2,7 +2,7 @@ import type { Element, GameState, MatchEvent, MatchInput, MatchState, UnitId, Ve
 import { describe, expect, it } from "vitest";
 import { quantize } from "./codec";
 import { LOCAL_PEER, createHostCore, type HostCore } from "./hostCore";
-import { createPredictor, type Predictor } from "./predict";
+import { createPredictor, eventKey, type Predictor } from "./predict";
 import { inputText, parseClientMsg } from "./protocol";
 import { isSnapshot, type SnapshotMsg } from "./snapshot";
 import { input, testPvpContext } from "./testArena";
@@ -21,6 +21,8 @@ interface ClientSpec {
   script: (t: number) => MatchInput;
   /** Правка снапшота, пришедшего этому игроку (после сети). */
   tamper?: (s: SnapshotMsg, id: UnitId) => void;
+  /** Пока true, пакеты игрока копятся; первый пакет после — уходит вместе со всеми накопленными (пачка у хоста). */
+  hold?: (t: number) => boolean;
 }
 
 interface Client {
@@ -29,10 +31,13 @@ interface Client {
   pred: Predictor;
   spec: ClientSpec;
   up: { at: number; text: string }[];
+  held: string[];
   down: { at: number; snap: SnapshotMsg }[];
-  /** События из step с тиком петли. */
-  shown: { t: number; e: MatchEvent }[];
+  /** События из step: тик петли и тик матча, который считал шаг. */
+  shown: { t: number; tick: number; e: MatchEvent }[];
   late: MatchEvent[];
+  /** late с тиками хоста. */
+  lateTicked: [number, MatchEvent][];
   confirmed: MatchEvent[];
   /** События снапшотов, которые предсказатель засчитал (confirmed не пуст), с тиками. */
   confirmedTicked: [number, MatchEvent][];
@@ -65,7 +70,10 @@ function createLoop(opts: LoopOptions) {
     const peer = `peer-${k}`;
     const r = host.join(peer, `Гость ${k}`, spec.element ?? "fire", 0);
     if (!r.ok) throw new Error("комната полна");
-    return { peer, id: r.id, pred: createPredictor(ctx, r.id), spec, up: [], down: [], shown: [], late: [], confirmed: [], confirmedTicked: [], curTicks: [], rebases: [], predicted: [] };
+    return {
+      peer, id: r.id, pred: createPredictor(ctx, r.id), spec, up: [], held: [], down: [], shown: [], late: [], lateTicked: [], confirmed: [], confirmedTicked: [],
+      curTicks: [], rebases: [], predicted: [],
+    };
   });
   /** Состояние хоста по тику матча и все его события с тиком. */
   const history = new Map<number, GameState>([[host.game.match.tick, host.game]]);
@@ -88,6 +96,7 @@ function createLoop(opts: LoopOptions) {
       const confirmedBefore = c.pred.confirmed;
       const r = c.pred.applySnapshot(snap);
       c.late.push(...r.late);
+      for (const e of r.late) c.lateTicked.push([snap.events.find(([, x]) => x === e)![0], e]);
       c.confirmed.push(...r.confirmed);
       c.curTicks.push(c.pred.cur.match.tick);
       // снапшот засчитан целиком или никак
@@ -122,10 +131,15 @@ function createLoop(opts: LoopOptions) {
     for (const c of clients) {
       deliverDown(c);
       c.pred.offsets(1 / 60);
+      const tick = c.pred.cur.match.tick;
       const s = c.pred.step(c.spec.script(t));
       c.curTicks.push(c.pred.cur.match.tick);
-      for (const e of s.events) c.shown.push({ t, e });
-      if (s.packet.length > 0) c.up.push({ at: t + opts.delay, text: inputText(s.packet) });
+      for (const e of s.events) c.shown.push({ t, tick, e });
+      if (s.packet.length === 0) continue;
+      c.held.push(inputText(s.packet));
+      if (c.spec.hold?.(t)) continue;
+      for (const text of c.held) c.up.push({ at: t + opts.delay, text });
+      c.held = [];
     }
     t += 1;
   }
@@ -221,6 +235,29 @@ describe("loopback: events", () => {
     expect(sent.length).toBeGreaterThan(15);
     expect(cut(c.confirmedTicked)).toEqual(sent);
     for (let k = 1; k < c.curTicks.length; k++) expect(c.curTicks[k]!).toBeGreaterThanOrEqual(c.curTicks[k - 1]!);
+  });
+
+  it("a burst of held inputs makes the host trim its queue: the prediction falls back, yet no event is shown twice", () => {
+    const loop = createLoop({
+      delay: 3,
+      // маг хоста стоит и бьёт ЛКМ в пол перед собой: попадания идут по времени, их предсказывает и игрок
+      host: () => input({ primary: true, yaw: Math.PI, pitch: -0.1 }),
+      // 12 тиков пакеты игрока копятся (≈ 200 мс — хост повторяет последний ввод), потом пачкой из 13 приходят разом
+      clients: [{ script: runAndJump, hold: (t) => t >= 100 && t < 112 }],
+    });
+    loop.run(220);
+    const c = loop.clients[0]!;
+    const back = c.curTicks.findIndex((x, k) => k > 0 && x < c.curTicks[k - 1]!);
+    expect(back).toBeGreaterThan(0);
+    expect(c.curTicks[back - 1]! - c.curTicks[back]!).toBeGreaterThanOrEqual(5); // откат на обрезку хвоста
+    const emitted: [number, MatchEvent][] = [...c.shown.map((s): [number, MatchEvent] => [s.tick, s.e]), ...c.lateTicked];
+    const ids = emitted.map(([tick, e]) => `${tick}|${eventKey(e)}`);
+    expect(new Set(ids).size).toBe(ids.length);
+    // попадания хоста в пол — каждое ровно один раз и на своём тике
+    const impacts = (list: [number, MatchEvent][]) =>
+      list.filter(([tick, e]) => e.type === "impact" && e.owner === 1 && tick >= 60 && tick < 180).map(([tick]) => tick).sort((a, b) => a - b);
+    expect(impacts(loop.hostLog).length).toBeGreaterThan(5);
+    expect(impacts(emitted)).toEqual(impacts(loop.hostLog));
   });
 
   it("own mage respawned at another point than predicted (enemy moved in the snapshot): late has the host's respawn", () => {

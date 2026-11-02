@@ -13,7 +13,7 @@ import type { SnapshotMsg } from "./snapshot";
 
 export const MAX_REPLAY = 90;          // тиков переигровки, старше — выбрасываются
 export const DEDUP_WINDOW = 8;         // тиков: событие хоста совпало с предсказанным
-export const LATE_FX_MAX_AGE = 60;     // тиков: старше — в эффекты не идёт (только в килфид)
+export const LATE_FX_MAX_AGE = 60;     // тиков от предсказанного «сейчас» (без своего мага — от снапшота): старше — в эффекты не идёт (только в килфид)
 export const SMOOTH_TAU_S = 0.1;
 export const SMOOTH_SELF_TAU_S = 0.06;
 export const SNAP_DIST_M = 3;
@@ -34,10 +34,18 @@ export interface Predictor {
   readonly prev: GameState;
   readonly confirmed: GameState | null;
   readonly roster: readonly [UnitId, string, number][];
-  /** Новый тик: ввод → seq, шаг предсказания. События нового тика и пакет отправки (последние INPUTS_PER_PACKET вводов). */
+  /**
+   * Новый тик: ввод → seq, шаг предсказания. События нового тика и пакет отправки (последние INPUTS_PER_PACKET вводов).
+   * Тик, который уже шагали («сейчас» откатилось после обрезки хвоста у хоста), не повторяет показанные на нём события.
+   */
   step(input: MatchInput): { events: MatchEvent[]; packet: PackedInput[] };
-  /** Снапшот хоста: новее прежнего — перебазировать и переиграть; события — один раз на снапшот. */
+  /** Снапшот хоста: новее прежнего — перебазировать и переиграть; события — один раз на снапшот. То же, что applySnapshots([s]). */
   applySnapshot(s: SnapshotMsg): { late: MatchEvent[]; confirmed: MatchEvent[] };
+  /**
+   * Пачка снапшотов (пришли за один кадр): события каждого нового — один раз, по возрастанию тика; перебазирование и
+   * переигровка — один раз, на самый новый, если он новее прежнего.
+   */
+  applySnapshots(list: readonly SnapshotMsg[]): { late: MatchEvent[]; confirmed: MatchEvent[] };
   /** Сглаживающие сдвиги рендера: гаснут на dtS и возвращаются по id юнита. */
   offsets(dtS: number): ReadonlyMap<UnitId, Vec3>;
 }
@@ -124,6 +132,8 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
   let newest = -Infinity;
   const seen = new Set<number>();
   let shown: Shown[] = [];
+  /** Самый поздний тик, который уже считал step. */
+  let stepped = -Infinity;
   const offs = new Map<UnitId, Vec3>();
 
   function step(input: MatchInput): { events: MatchEvent[]; packet: PackedInput[] } {
@@ -131,24 +141,37 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
     seq += 1;
     unacked.push({ seq, input: { ...input } });
     if (unacked.length > MAX_REPLAY) unacked.splice(0, unacked.length - MAX_REPLAY);
+    const tick = cur.match.tick;
     const r = stepGame(cur, { ...others, [localId]: input }, ctx);
     prev = cur;
     cur = r.game;
-    for (const e of r.events) shown.push({ tick: prev.match.tick, key: eventKey(e) });
+    // Хост обрезал хвост ввода — «сейчас» откатилось, и тик считается второй раз. Его события, показанные в первый
+    // раз (тот же ключ на том же тике, одно за одно), не повторяются: попадание, взрыв, фаза зоны, возрождение по таймеру.
+    const again = tick <= stepped ? shown.filter((e) => e.tick === tick) : [];
+    stepped = Math.max(stepped, tick);
+    const events: MatchEvent[] = [];
+    for (const e of r.events) {
+      const key = eventKey(e);
+      const k = again.findIndex((x) => x.key === key);
+      if (k >= 0) {
+        again.splice(k, 1);
+        continue;
+      }
+      events.push(e);
+      shown.push({ tick, key });
+    }
     if (shown.length > SHOWN_MAX) shown.splice(0, shown.length - SHOWN_MAX);
-    return { events: r.events, packet: unacked.slice(-INPUTS_PER_PACKET).map((it) => packInput(it.seq, it.input)) };
+    return { events, packet: unacked.slice(-INPUTS_PER_PACKET).map((it) => packInput(it.seq, it.input)) };
   }
 
   /**
-   * События снапшота: все — в confirmed. В эффекты (late) — только не старше LATE_FX_MAX_AGE от последнего снапшота и
-   * не показанные предсказанием: показанное с тем же ключом в ±DEDUP_WINDOW тиков (ближайшее) забирается из «показанных».
+   * События снапшота: все — в confirmed. В эффекты (late) — только не старше LATE_FX_MAX_AGE от now и не показанные
+   * предсказанием: показанное с тем же ключом в ±DEDUP_WINDOW тиков (ближайшее) забирается из «показанных».
    */
-  function sortEvents(s: SnapshotMsg): { late: MatchEvent[]; confirmed: MatchEvent[] } {
-    const late: MatchEvent[] = [];
-    const all: MatchEvent[] = [];
+  function sortEvents(s: SnapshotMsg, now: number, late: MatchEvent[], all: MatchEvent[]): void {
     for (const [tick, ev] of s.events) {
       all.push(ev);
-      if (newest - tick > LATE_FX_MAX_AGE) continue;
+      if (now - tick > LATE_FX_MAX_AGE) continue;
       const key = eventKey(ev);
       let best = -1;
       for (let k = 0; k < shown.length; k++) {
@@ -158,7 +181,6 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
       if (best >= 0) shown.splice(best, 1);
       else late.push(ev);
     }
-    return { late, confirmed: all };
   }
 
   /** Перебазирование на снапшот новее прежнего: подтверждённое + переигровка своего неподтверждённого ввода. */
@@ -205,22 +227,30 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
     for (const [id, d] of next) offs.set(id, d);
   }
 
-  function applySnapshot(s: SnapshotMsg): { late: MatchEvent[]; confirmed: MatchEvent[] } {
-    if (seen.has(s.tick) || s.tick <= newest - SEEN_KEEP_TICKS) return { late: [], confirmed: [] };
-    seen.add(s.tick);
-    const isNewer = s.tick > newest;
-    if (isNewer) {
-      newest = s.tick;
-      for (const t of seen) if (t <= newest - SEEN_KEEP_TICKS) seen.delete(t);
+  function applySnapshots(list: readonly SnapshotMsg[]): { late: MatchEvent[]; confirmed: MatchEvent[] } {
+    // новые — ещё не приходили (и не старше окна памяти), каждый тик один раз, по возрастанию
+    const fresh: SnapshotMsg[] = [];
+    for (const s of [...list].sort((a, b) => a.tick - b.tick)) {
+      if (seen.has(s.tick) || s.tick <= newest - SEEN_KEEP_TICKS) continue;
+      seen.add(s.tick);
+      fresh.push(s);
     }
-    const out = sortEvents(s);
-    if (isNewer) {
+    const top = fresh.at(-1);
+    if (!top) return { late: [], confirmed: [] };
+    if (top.tick > newest) {
+      newest = top.tick;
+      for (const t of seen) if (t <= newest - SEEN_KEEP_TICKS) seen.delete(t);
       const before = cur.match;
-      rebase(s);
+      rebase(top);
       smooth(before, cur.match);
     }
+    // возраст события — от предсказанного «сейчас»: пачка снапшотов после заминки не играет секунды старых эффектов
+    const now = ready ? Math.max(cur.match.tick, newest) : newest;
+    const late: MatchEvent[] = [];
+    const all: MatchEvent[] = [];
+    for (const s of fresh) sortEvents(s, now, late, all);
     shown = shown.filter((e) => e.tick >= newest - SHOWN_KEEP_TICKS);
-    return out;
+    return { late, confirmed: all };
   }
 
   function offsets(dtS: number): ReadonlyMap<UnitId, Vec3> {
@@ -252,7 +282,8 @@ export function createPredictor(ctx: MatchContext, localId: UnitId): Predictor {
       return roster;
     },
     step,
-    applySnapshot,
+    applySnapshot: (s) => applySnapshots([s]),
+    applySnapshots,
     offsets,
   };
 }
