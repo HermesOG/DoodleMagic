@@ -50,7 +50,7 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
   const tw = buildTickWorld(ctx.world, s);
   const t: TickCtx = {
     world: tw.world, terrainIds: tw.terrainIds, killBelowY: ctx.killBelowY, now: s.tick, ev,
-    spawns: ctx.spawns ?? null, mageRespawnTicks: ticks(ctx.mageRespawnS ?? MATCH.mageRespawnS), spawnShieldTicks: ticks(ctx.spawnShieldS ?? 0),
+    spawns: ctx.spawns !== undefined && ctx.spawns.length > 0 ? ctx.spawns : null, mageRespawnTicks: ticks(ctx.mageRespawnS ?? MATCH.mageRespawnS), spawnShieldTicks: ticks(ctx.spawnShieldS ?? 0),
   };
   const clean: Partial<Record<UnitId, MatchInput>> = {};
   for (const u of s.units) {

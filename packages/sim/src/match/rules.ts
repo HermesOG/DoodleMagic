@@ -108,7 +108,8 @@ export function removeMage(g: Readonly<GameState>, id: UnitId): GameState {
 }
 
 /**
- * Смена стихии (Н12). Нет такого мага — копия без изменений. Мёртвый — меняется только стихия: возродится ею.
+ * Смена стихии (Н12). Нет такого мага или стихия та же — копия без изменений. Мёртвый — меняется стихия, перезарядки
+ * прежней сбрасываются: возродится новой с готовым набором.
  * Живой в разминке, на отсчёте и на итогах — сразу свежий маг этой стихии на pickSpawn (без точек в ctx — на своей
  * точке) с прежним счётом и защитой; его снаряды, зоны и рельеф убраны. Живой в бою — без изменений.
  */
@@ -117,9 +118,11 @@ export function setElement(g: Readonly<GameState>, id: UnitId, element: Element,
   const s = game.match;
   const k = s.units.findIndex((u) => u.id === id);
   const old = s.units[k];
-  if (!old?.mage) return game;
+  if (!old?.mage || old.mage.element === element) return game;
   if (!old.alive) {
+    // перезарядки прежней стихии к новой не относятся: новый набор возрождается готовым
     old.mage.element = element;
+    old.mage.ready = { primary: 0, q: 0, e: 0, c: 0 };
     return game;
   }
   if (game.phase === "live") return game;

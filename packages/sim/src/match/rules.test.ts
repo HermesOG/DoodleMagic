@@ -248,7 +248,8 @@ describe("deaths and scoring", () => {
     const back = r.log.filter(({ e }) => e.type === "respawn");
     expect(back).toEqual([{ t: k + 180, e: { type: "respawn", target: 1, pos: SPAWNS[1]!.pos, yaw: Math.PI } }]);
     const u = mageOf(r.g, 1);
-    expect([u.alive, u.mage!.spawn, u.status.shieldUntil, statusFlags(u, r.g.match.tick).shielded, u.mage!.stats.deaths]).toEqual([true, SPAWNS[1], k + 300, true, 1]);
+    // встал в конце тика k + 180: защита на полные 120 тиков после него
+    expect([u.alive, u.mage!.spawn, u.status.shieldUntil, statusFlags(u, r.g.match.tick).shielded, u.mage!.stats.deaths]).toEqual([true, SPAWNS[1], k + 301, true, 1]);
   });
 });
 
@@ -348,6 +349,16 @@ describe("setElement", () => {
     const g = live("fire", "earth");
     expect(setElement(g, 1, "earth", ctx)).toEqual(g);
     expect(setElement(gameWith("fire"), 7, "earth", ctx)).toEqual(gameWith("fire"));
+  });
+
+  it("a dead mage switching element drops the old element's cooldowns; the same element changes nothing", () => {
+    const g = gameWith("fire", "earth");
+    Object.assign(mageOf(g, 1), { alive: false, hp: 0, respawnTick: g.match.tick + 5 });
+    mageOf(g, 1).mage!.ready = { primary: 50, q: 400, e: 400, c: 600 };
+    expect(mageOf(setElement(g, 1, "earth", ctx), 1).mage!.ready).toEqual({ primary: 0, q: 0, e: 0, c: 0 });
+    expect(setElement(g, 1, "fire", ctx)).toEqual(g);
+    const alive = gameWith("fire", "earth");
+    expect(setElement(alive, 1, "fire", ctx)).toEqual(alive);
   });
 });
 

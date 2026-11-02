@@ -141,7 +141,8 @@ function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
   const fresh = createMageUnit(u.id, u.mage.element, at);
   fresh.mage!.stats = { ...u.mage.stats };
   fresh.mage!.ready = { ...u.mage.ready };
-  if (t.spawnShieldTicks > 0) fresh.status.shieldUntil = t.now + t.spawnShieldTicks;
+  // маг встаёт в конце тика now: защита на полные spawnShieldTicks тиков, как у addMage и старта боя
+  if (t.spawnShieldTicks > 0) fresh.status.shieldUntil = t.now + 1 + t.spawnShieldTicks;
   return fresh;
 }
 
