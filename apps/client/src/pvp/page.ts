@@ -1,5 +1,6 @@
 import { buildGallery } from "@doodlemagic/arena";
 import { pvpContext, unitById, type ArenaData, type Element, type MatchContext } from "@doodlemagic/sim";
+import type { Frame } from "../game/driver";
 import { mountGameView, type GameView } from "../game/view";
 import { loadPrefs, savePrefs } from "../hud/prefs";
 import { lagFromQuery, type LagOptions } from "../net/link";
@@ -10,15 +11,18 @@ import { startHost, type HostDriver, type LinkState, type PvpDriver } from "./ho
 import {
   HOST_LEFT_TEXT, SIGNALLING_TEXT, createLobby, initialName, joinErrorText, joinStatusText, loadName, saveName,
 } from "./lobby";
+import { createMatchHud, type MatchHud } from "./matchHud";
 import "./pvp.css";
 
 const COPY_LABEL = "Скопировать ссылку";
 const COPIED_MS = 2000;
+/** Хост ушёл посреди игры (в лобби — короткое HOST_LEFT_TEXT). */
+const HOST_LEFT_GAME_TEXT = "Хост вышел из игры";
 
 /**
  * Бой с друзьями: /play — хост (комната открывается сразу, вход — по «Войти» в лобби), /r/КОД — игрок (канал к хосту
  * сразу, вход — по «Войти»). Арена — «Галерея над ущельем» с точками появления (pvpContext). После входа — общий
- * игровой вид с драйвером хоста или игрока; интерфейс матча — задача 8.
+ * игровой вид с драйвером хоста или игрока и интерфейс матча (matchHud).
  */
 export function mountPvp(root: HTMLElement, code: string | null): void {
   const arena = buildGallery("full");
@@ -134,12 +138,10 @@ function copyLink(url: string, button: MenuButton): void {
 }
 
 /**
- * Строка сверху (заготовка до интерфейса матча), плашка «нет связи» и экран «Хост вышел». rejoin — ссылка комнаты
+ * Плашка «нет связи» и окно «Хост вышел из игры» (строка сверху — в интерфейсе матча). rejoin — ссылка комнаты
  * для игрока: канал мог оборваться у него самого, а хост ещё в комнате, — «Зайти снова».
  */
-function createOverlay(root: HTMLElement, rejoin: string | null): { top: HTMLElement; stale: HTMLElement; over: HTMLElement } {
-  const top = document.createElement("div");
-  top.className = "pvp-top";
+function createOverlay(root: HTMLElement, rejoin: string | null): { stale: HTMLElement; over: HTMLElement } {
   const stale = document.createElement("div");
   stale.className = "pvp-stale";
   stale.setAttribute("role", "status");
@@ -161,29 +163,29 @@ function createOverlay(root: HTMLElement, rejoin: string | null): { top: HTMLEle
     again.href = rejoin;
     again.hidden = false;
   }
-  over.querySelector("h1")!.textContent = HOST_LEFT_TEXT;
+  over.querySelector("h1")!.textContent = HOST_LEFT_GAME_TEXT;
   over.querySelector("p")!.textContent = "Матч окончен. Новая комната — у того, кто нажмёт «Играть с друзьями».";
-  root.append(top, stale, over);
-  return { top, stale, over };
+  root.append(stale, over);
+  return { stale, over };
 }
 
 /**
- * Игровой вид поверх драйвера сети: без экрана стихий (её выбрали в лобби), имена над магами. Меню: «Начать матч»
- * у хоста (в разминке, «Ещё раз» на итогах) и «Скопировать ссылку» у всех.
+ * Игровой вид поверх драйвера сети: без экрана стихий (её выбрали в лобби), имена над магами, интерфейс матча
+ * (matchHud) по onFrame. Меню: «Начать матч» у хоста (в разминке, «Ещё раз» на итогах) и «Скопировать ссылку» у всех.
  */
 function startGame(root: HTMLElement, arena: ArenaData, ctx: MatchContext, driver: PvpDriver, element: Element): void {
   const code = driver.roomCode;
   const url = roomLink(location.origin, code);
   let view: GameView | null = null;
   let ui: ReturnType<typeof createOverlay> | null = null;
+  let match: MatchHud | null = null;
   let startButton: MenuButton | null = null;
   let shownPhase = "";
-  let shownTop = "";
   let shownLink: LinkState = "ok";
   let shownElement = element;
   let wasLocked = false;
 
-  const onFrame = (): void => {
+  const onFrame = (f: Frame, nowS: number): void => {
     if (!view || !ui) return;
     const g = driver.game();
     if (g.phase !== shownPhase) {
@@ -191,8 +193,6 @@ function startGame(root: HTMLElement, arena: ArenaData, ctx: MatchContext, drive
       startButton?.setVisible(g.phase === "warmup" || g.phase === "results");
       startButton?.setLabel(g.phase === "results" ? "Ещё раз" : "Начать матч");
     }
-    const top = `Комната ${code} · магов ${g.match.units.filter((u) => u.mage !== null).length}`;
-    if (top !== shownTop) ui.top.textContent = shownTop = top;
     // стихия в меню — как у мага в игре: хост мог отказать (в бою живым нельзя), а смена у игрока идёт через хоста
     const mine = unitById(g.match, driver.localId)?.mage?.element;
     const unlocked = wasLocked && !view.input.locked;
@@ -202,15 +202,20 @@ function startGame(root: HTMLElement, arena: ArenaData, ctx: MatchContext, drive
       view.hud.setElement(mine);
     }
     const state = driver.link();
-    if (state === shownLink) return;
-    shownLink = state;
-    ui.stale.hidden = state !== "stale";
-    if (state === "closed") {
-      // хост ушёл (Н10): матч окончен, кадры встают, мышь отпускается
-      ui.over.hidden = false;
-      view.stop();
-      driver.dispose();
+    if (state !== shownLink) {
+      shownLink = state;
+      ui.stale.hidden = state !== "stale";
+      if (state === "closed") {
+        // хост ушёл (Н10): матч окончен, кадры встают, мышь отпускается; интерфейс матча — под окном, без клавиш
+        ui.over.hidden = false;
+        match?.dispose();
+        match = null;
+        view.stop();
+        driver.dispose();
+        return;
+      }
     }
+    match?.update(f, nowS);
   };
 
   view = mountGameView({ root, arena, ctx, driver, element, selectOnStart: false, names: () => driver.names(), onFrame });
@@ -219,6 +224,7 @@ function startGame(root: HTMLElement, arena: ArenaData, ctx: MatchContext, drive
     driver.dispose();
     return;
   }
+  match = createMatchHud(root, driver, view);
   // зайти снова — та же ссылка с тем же запросом (?lag=…): страница заново подключится к хосту
   ui = createOverlay(root, driver.isHost ? null : `/r/${code}${location.search}`);
   const lead = driver.isHost

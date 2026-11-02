@@ -1,0 +1,217 @@
+import { describe, expect, it } from "vitest";
+import {
+  NOBODY, createGame, createMageUnit, createMatchState, standings,
+  type DamageSource, type Element, type GameState, type MatchEvent, type UnitId,
+} from "@doodlemagic/sim";
+import {
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, formatClock, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+} from "./format";
+
+const NAMES: ReadonlyMap<UnitId, string> = new Map([
+  [1, "Искра 42"],
+  [2, "Валун 17"],
+  [3, "Огонёк"],
+]);
+const pos = { x: 0, y: 0, z: 0 };
+
+/** Маг со счётом: kills + falls — очки. */
+interface Spec { id: UnitId; el?: Element; kills?: number; falls?: number; deaths?: number; hp?: number; alive?: boolean }
+
+/** Игра в фазе phase с магами по spec; тик 1000. */
+function game(phase: GameState["phase"], specs: Spec[], patch: Partial<GameState> = {}): GameState {
+  const units = specs.map((s) => {
+    const u = createMageUnit(s.id, s.el ?? "fire", { pos, yaw: 0 });
+    u.mage!.stats = { damage: 0, kills: s.kills ?? 0, falls: s.falls ?? 0, deaths: s.deaths ?? 0 };
+    if (s.hp !== undefined) u.hp = s.hp;
+    if (s.alive === false) u.alive = false;
+    return u;
+  });
+  const match = createMatchState(units);
+  match.tick = 1000;
+  return { ...createGame(), phase, match, scoreLimit: 12, ...patch };
+}
+
+describe("formatClock", () => {
+  it("rounds ticks up to whole seconds as m:ss", () => {
+    expect([formatClock(25200), formatClock(1), formatClock(0), formatClock(60), formatClock(61), formatClock(2460)]).toEqual([
+      "7:00", "0:01", "0:00", "0:01", "0:02", "0:41",
+    ]);
+  });
+
+  it("shows 0:00 for negative and broken values", () => {
+    expect([formatClock(-5), formatClock(Number.NaN), formatClock(-Infinity), formatClock(Infinity)]).toEqual(["0:00", "0:00", "0:00", "0:00"]);
+  });
+});
+
+describe("topLine", () => {
+  const three = [{ id: 1, kills: 4, falls: 1 }, { id: 2, kills: 3 }, { id: 3 }];
+
+  it("warmup: mage count and who starts the match", () => {
+    const g = game("warmup", three);
+    expect(topLine(g, 2, NAMES, false)).toBe("Разминка · магов: 3 · хост начнёт матч");
+    expect(topLine(g, 1, NAMES, true)).toBe("Разминка · магов: 3 · Esc → «Начать матч»");
+  });
+
+  it("countdown: the limit the fight will start with", () => {
+    expect(topLine(game("countdown", three, { phaseEnd: 1100 }), 2, NAMES, false)).toBe("Матч начинается · магов: 3 · до 12");
+    expect(topLine(game("countdown", three.slice(0, 2), { phaseEnd: 1100 }), 2, NAMES, false)).toBe("Матч начинается · магов: 2 · до 10");
+  });
+
+  it("live: clock, own score, leader and limit", () => {
+    const g = game("live", three, { phaseEnd: 1000 + 402 * 60 });
+    expect(topLine(g, 2, NAMES, false)).toBe("6:42 · Ты 3 · Лидер: Искра 42 — 5 · до 12");
+    expect(topLine(g, 1, NAMES, true)).toBe("6:42 · Ты 5 · Лидер — ты · до 12");
+  });
+
+  it("live: the clock counts from the given tick (prediction), not the state's", () => {
+    const g = game("live", three, { phaseEnd: 1000 + 402 * 60 });
+    expect(topLine(g, 2, NAMES, false, 1000 + 60)).toBe("6:41 · Ты 3 · Лидер: Искра 42 — 5 · до 12");
+    expect(topLine(g, 2, NAMES, false, 1000 + 403 * 60)).toBe("0:00 · Ты 3 · Лидер: Искра 42 — 5 · до 12");
+  });
+
+  it("live: nobody leads at 0, tied leaders are listed with «ты» first", () => {
+    expect(topLine(game("live", [{ id: 1 }, { id: 2 }], { phaseEnd: 1000 + 420 * 60, scoreLimit: 10 }), 2, NAMES, false)).toBe("7:00 · Ты 0 · до 10");
+    const tied = game("live", [{ id: 1, kills: 2 }, { id: 2, kills: 2 }, { id: 3, kills: 2, deaths: 1 }], { phaseEnd: 1000 + 30 * 60 });
+    expect(topLine(tied, 1, NAMES, false)).toBe("0:30 · Ты 2 · Лидеры: ты, Валун 17, Огонёк — 2 · до 12");
+    expect(topLine(tied, 3, NAMES, false)).toBe("0:30 · Ты 2 · Лидеры: ты, Искра 42, Валун 17 — 2 · до 12");
+  });
+
+  it("live: sudden death", () => {
+    const g = game("live", [{ id: 1, kills: 5 }, { id: 2, kills: 5, deaths: 2 }, { id: 3, kills: 3 }], { phaseEnd: 1000 + 41 * 60, suddenDeath: true });
+    expect(topLine(g, 3, NAMES, false)).toBe("Внезапная смерть 0:41 · Ты 3 · Лидеры: Искра 42, Валун 17 — 5 · до 12");
+  });
+
+  it("results", () => {
+    expect(topLine(game("results", three), 1, NAMES, true)).toBe("Итоги · магов: 3");
+  });
+});
+
+describe("countdownDigit and respawnLine", () => {
+  it("counts 3, 2, 1 and never shows 0", () => {
+    expect([180, 121, 120, 61, 60, 1, 0, -10].map((left) => countdownDigit(1000 + left, 1000))).toEqual(["3", "3", "2", "2", "1", "1", "1", "1"]);
+  });
+
+  it("counts whole seconds to the respawn, at least 1", () => {
+    expect([respawnLine(1180, 1000), respawnLine(1180, 1060), respawnLine(1180, 1179), respawnLine(1180, 1180)]).toEqual([
+      "Возрождение через 3", "Возрождение через 2", "Возрождение через 1", "Возрождение через 1",
+    ]);
+  });
+});
+
+describe("feedLine", () => {
+  const death = (killer: UnitId, target: UnitId, ability: DamageSource): MatchEvent => ({ type: "death", target, killer, ability, pos });
+  const fall = (credit: UnitId, target: UnitId): MatchEvent => ({ type: "fall", target, credit, pos });
+
+  it("death: killer → victim · ability, burning as «Горение»", () => {
+    expect(feedLine(death(1, 2, "fireball"), NAMES, 3)).toEqual({ text: "Искра 42 → Валун 17 · Огненный шар", mine: false });
+    expect(feedLine(death(1, 2, "burning"), NAMES, 3)).toEqual({ text: "Искра 42 → Валун 17 · Горение", mine: false });
+    expect(feedLine(death(2, 1, "stoneShot"), NAMES, 3)).toEqual({ text: "Валун 17 → Искра 42 · Каменный снаряд", mine: false });
+  });
+
+  it("death: a killer who left the room is dropped", () => {
+    expect(feedLine(death(9, 2, "burning"), NAMES, 3)).toEqual({ text: "Валун 17 · Горение", mine: false });
+    expect(feedLine(death(NOBODY, 2, "burning"), NAMES, 3)).toEqual({ text: "Валун 17 · Горение", mine: false });
+  });
+
+  it("fall: credited push, missing pusher, own slip", () => {
+    expect(feedLine(fall(1, 2), NAMES, 3)).toEqual({ text: "Искра 42 ⇣ Валун 17 · сброс", mine: false });
+    expect(feedLine(fall(9, 2), NAMES, 3)).toEqual({ text: "Валун 17 · сброс", mine: false });
+    expect(feedLine(fall(NOBODY, 2), NAMES, 3)).toEqual({ text: "Валун 17 · в ущелье", mine: false });
+  });
+
+  it("marks lines where I am the killer or the victim", () => {
+    expect([death(1, 2, "fireball"), fall(1, 2), death(2, 1, "earthquake"), fall(NOBODY, 1)].map((e) => feedLine(e, NAMES, 1)?.mine)).toEqual([true, true, true, true]);
+  });
+
+  it("ignores every other event", () => {
+    const others: MatchEvent[] = [
+      { type: "respawn", target: 1, pos, yaw: 0 },
+      { type: "hit", source: 1, target: 2, ability: "fireball", amount: 50, pos, dir: pos, knock: { distM: 0, upM: 0 }, airborne: false, dot: false, killed: true },
+      { type: "courage", unit: 1 },
+    ];
+    expect(others.map((e) => feedLine(e, NAMES, 1))).toEqual([null, null, null]);
+  });
+
+  it("an unknown victim still gets a line", () => {
+    expect(feedLine(fall(NOBODY, 9), NAMES, 1)).toEqual({ text: "Маг · в ущелье", mine: false });
+  });
+});
+
+describe("deathLine", () => {
+  const g = game("live", [{ id: 1, hp: 63.4 }, { id: 2, alive: false, hp: 0 }, { id: 3, alive: false, hp: 0 }]);
+
+  it("who won, with what and how much HP they kept", () => {
+    expect(deathLine({ type: "death", target: 2, killer: 1, ability: "fireball", pos }, g, NAMES)).toBe("Тебя победил Искра 42 · Огненный шар · у него 64 HP");
+    expect(deathLine({ type: "death", target: 2, killer: 1, ability: "burning", pos }, g, NAMES)).toBe("Тебя победил Искра 42 · Горение · у него 64 HP");
+  });
+
+  it("no HP when the killer is dead too, no name when they left", () => {
+    expect(deathLine({ type: "death", target: 2, killer: 3, ability: "stoneShot", pos }, g, NAMES)).toBe("Тебя победил Огонёк · Каменный снаряд");
+    expect(deathLine({ type: "death", target: 2, killer: 9, ability: "burning", pos }, g, NAMES)).toBe("Тебя победили · Горение");
+  });
+
+  it("falls: pushed, pushed by someone who left, slipped", () => {
+    expect(deathLine({ type: "fall", target: 2, credit: 1, pos }, g, NAMES)).toBe("Тебя сбросил Искра 42");
+    expect(deathLine({ type: "fall", target: 2, credit: 9, pos }, g, NAMES)).toBe("Тебя сбросили");
+    expect(deathLine({ type: "fall", target: 2, credit: NOBODY, pos }, g, NAMES)).toBe("Сорвался в ущелье");
+  });
+
+  it("nothing known — empty", () => {
+    expect(deathLine(null, g, NAMES)).toBe("");
+    expect(deathLine({ type: "respawn", target: 2, pos, yaw: 0 }, g, NAMES)).toBe("");
+  });
+});
+
+describe("scoreRows", () => {
+  const pings: ReadonlyMap<UnitId, number> = new Map([[1, 0], [2, 34], [3, -1]]);
+
+  it("rows in standings order with place, element, stats, ping and own mark", () => {
+    const g = game("live", [{ id: 1, kills: 1, deaths: 3 }, { id: 2, el: "earth", kills: 2, falls: 1, deaths: 1 }, { id: 3, kills: 1, deaths: 1 }]);
+    const rows = scoreRows(g, NAMES, pings, 3);
+    expect(rows.map((r) => r.id)).toEqual(standings(g).map((s) => s.id));
+    expect(rows).toEqual([
+      { place: 1, id: 2, name: "Валун 17", element: "earth", score: 3, kills: 2, falls: 1, deaths: 1, ping: "34", mine: false },
+      { place: 2, id: 3, name: "Огонёк", element: "fire", score: 1, kills: 1, falls: 0, deaths: 1, ping: "—", mine: true },
+      { place: 3, id: 1, name: "Искра 42", element: "fire", score: 1, kills: 1, falls: 0, deaths: 3, ping: "0", mine: false },
+    ]);
+  });
+
+  it("on results the table is the final standings, not the stats that keep counting", () => {
+    const g = game("results", [{ id: 1, kills: 9 }, { id: 2, kills: 2 }], {
+      results: [{ id: 2, score: 12, kills: 10, falls: 2, deaths: 0 }, { id: 1, score: 3, kills: 3, falls: 0, deaths: 4 }, { id: 3, score: 1, kills: 1, falls: 0, deaths: 2 }],
+    });
+    const rows = scoreRows(g, new Map([[1, "Искра 42"], [2, "Валун 17"]]), pings, 1);
+    expect(rows.map((r) => [r.place, r.name, r.element, r.score, r.kills, r.mine])).toEqual([
+      [1, "Валун 17", "fire", 12, 10, false],
+      [2, "Искра 42", "fire", 3, 3, true],
+      [3, "Маг", null, 1, 1, false],
+    ]);
+  });
+});
+
+describe("results and board texts", () => {
+  const st = (id: UnitId, score: number) => ({ id, score, kills: score, falls: 0, deaths: 0 });
+
+  it("names the winner or everyone tied at the top", () => {
+    expect(resultsTitle([st(1, 12), st(2, 7)], NAMES)).toBe("Победа: Искра 42");
+    expect(resultsTitle([st(1, 9), st(2, 9), st(3, 4)], NAMES)).toBe("Ничья: Искра 42, Валун 17");
+    expect(resultsTitle([], NAMES)).toBe("Итоги");
+  });
+
+  it("tells the host how to go again and the others to wait", () => {
+    expect([resultsHint(true), resultsHint(false)]).toEqual(["R или Esc → «Ещё раз»", "Ждём, когда хост начнёт снова"]);
+  });
+
+  it("board title: room and own ping", () => {
+    expect([boardTitle("ABCD", 34), boardTitle("ABCD", 0), boardTitle("ABCD", -1)]).toEqual([
+      "Комната ABCD · пинг 34 мс", "Комната ABCD · пинг 0 мс", "Комната ABCD · пинг —",
+    ]);
+  });
+
+  it("1 and 2 pick Fire and Earth", () => {
+    expect(ELEMENT_KEYS).toEqual([
+      { code: "Digit1", element: "fire", label: "1 — Огонь" },
+      { code: "Digit2", element: "earth", label: "2 — Земля" },
+    ]);
+  });
+});

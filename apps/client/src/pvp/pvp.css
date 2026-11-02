@@ -1,4 +1,7 @@
-/* Бой с друзьями: лобби комнаты (обычная страница, цвета из style.css) и поверх игры — строка комнаты, плашка «нет связи», «Хост вышел». */
+/*
+ * Бой с друзьями: лобби комнаты (обычная страница, цвета из style.css) и поверх игры — интерфейс матча (строка сверху,
+ * отсчёт, килфид, экран смерти, таблица, итоги, «Защита»), плашка «нет связи», «Хост вышел из игры».
+ */
 .pvp-lobby .pvp-title {
   margin-bottom: 12px;
 }
@@ -107,11 +110,253 @@
   background: rgba(29, 27, 22, 0.72);
   color: #f6f3ea;
   font: 600 14px/1.4 system-ui, sans-serif;
+  /* часы боя не пляшут по ширине цифр */
+  font-variant-numeric: tabular-nums;
   pointer-events: none;
   white-space: nowrap;
 }
 .pvp-top:empty {
   display: none;
+}
+
+/*
+ * Интерфейс матча: «кисть и печать», как боевой HUD (hud/combatHud.css) — бумага, тушь, цвета стихий только на метках
+ * стихий; киноварь не трогаем (она — HP и урон). Над боевым HUD (z 5), под меню (z 10). Мышь не ловит.
+ */
+.mh {
+  --mh-paper: #f6f3ea;
+  --mh-card: #fffdf7;
+  --mh-wash: rgba(246, 243, 234, 0.82);
+  --mh-ink: #1d1b16;
+  --mh-muted: #6b665a;
+  --mh-line: #d9d3c3;
+  --mh-fire: #ff7a1a;
+  --mh-earth: #3dbe7a;
+  --mh-head: "Cormorant SC", "Cormorant Garamond", "Forum", Georgia, "Times New Roman", serif;
+  --mh-ui: "Manrope", system-ui, "Segoe UI", sans-serif;
+  --mh-halo: 0 0 2px #f6f3ea, 0 0 2px #f6f3ea, 0 0 5px rgba(246, 243, 234, 0.9);
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  color: var(--mh-ink);
+  font: 600 14px/1.3 var(--mh-ui);
+  font-variant-numeric: tabular-nums;
+}
+.mh [hidden],
+.mh[hidden] {
+  display: none !important;
+}
+.mh-play {
+  position: absolute;
+  inset: 0;
+}
+
+/* отсчёт 3-2-1: крупная печать над прицелом; по ширине на весь экран — transform свободен для удара */
+.mh-count {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 22vh;
+  text-align: center;
+  font: 700 140px/1 var(--mh-head);
+  text-shadow: var(--mh-halo);
+  will-change: transform, opacity;
+}
+
+/* «Защита» под прицелом */
+.mh-shield {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 20px);
+  text-align: center;
+  font: 700 13px/1 var(--mh-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: var(--mh-halo);
+}
+
+/* килфид: справа сверху под счётчиком боевого HUD, новые сверху; свои строки — тушью */
+.mh-feed {
+  position: absolute;
+  right: 18px;
+  top: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.mh-feed-line {
+  max-width: 46vw;
+  padding: 3px 10px;
+  border-radius: 6px 8px 7px 5px / 7px 5px 8px 6px;
+  background: var(--mh-wash);
+  font: 600 14px/1.3 var(--mh-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  will-change: transform, opacity;
+}
+.mh-feed-line.is-mine {
+  background: var(--mh-ink);
+  color: var(--mh-paper);
+  font-weight: 700;
+}
+
+/* экран смерти: карточка под прицелом — причина, секунды до возрождения, выбор стихии 1 / 2 */
+.mh-death {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 14px 22px 16px;
+  border: 1px solid var(--mh-line);
+  border-radius: 10px 12px 9px 11px / 11px 9px 12px 10px;
+  background: rgba(255, 253, 247, 0.92);
+  box-shadow: 0 8px 24px rgba(29, 27, 22, 0.16);
+  text-align: center;
+  transform: translateX(-50%);
+  will-change: transform, opacity;
+}
+.mh-death-cause {
+  font: 700 26px/1.15 var(--mh-head);
+}
+.mh-death-respawn {
+  margin-top: 6px;
+  color: var(--mh-muted);
+  font: 600 15px/1.3 var(--mh-ui);
+}
+.mh-death-els {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font: 600 15px/1.3 var(--mh-ui);
+}
+.mh-sep {
+  color: var(--mh-muted);
+}
+.mh-chip {
+  padding: 3px 10px 3px 9px;
+  border: 1.5px solid var(--mh-line);
+  border-left: 5px solid var(--mh-el, var(--mh-line));
+  border-radius: 6px;
+  color: var(--mh-muted);
+}
+.mh-chip[data-element="fire"] {
+  --mh-el: var(--mh-fire);
+}
+.mh-chip[data-element="earth"] {
+  --mh-el: var(--mh-earth);
+}
+.mh-chip.is-on {
+  border-color: var(--mh-ink);
+  border-left-color: var(--mh-el);
+  background: var(--mh-card);
+  color: var(--mh-ink);
+  font-weight: 700;
+}
+
+/* таблица по Tab и итоги — бумажная карточка по центру; на итогах — ещё и лёгкая промывка поверх боя */
+.mh-board,
+.mh-results {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.mh-results {
+  background: rgba(242, 237, 224, 0.55);
+}
+.mh-card {
+  width: min(640px, 100%);
+  padding: 16px 18px 18px;
+  border: 1px solid var(--mh-line);
+  border-radius: 12px;
+  background: var(--mh-card);
+  box-shadow: 0 10px 30px rgba(29, 27, 22, 0.18);
+}
+.mh-board-title {
+  margin-bottom: 8px;
+  color: var(--mh-muted);
+  font: 600 14px/1.3 var(--mh-ui);
+}
+.mh-results-title {
+  margin: 0 0 12px;
+  font: 700 34px/1.1 var(--mh-head);
+  overflow-wrap: anywhere;
+}
+.mh-results-hint {
+  margin: 14px 0 0;
+  color: var(--mh-muted);
+  font: 600 15px/1.4 var(--mh-ui);
+}
+.mh-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 500 15px/1.35 var(--mh-ui);
+  font-variant-numeric: tabular-nums;
+}
+.mh-table th {
+  padding: 4px 6px 6px;
+  border-bottom: 1px solid var(--mh-line);
+  color: var(--mh-muted);
+  font: 600 12px/1.2 var(--mh-ui);
+  text-align: right;
+  white-space: nowrap;
+}
+.mh-table td {
+  padding: 6px;
+  border-bottom: 1px solid #efe9da;
+  text-align: right;
+}
+.mh-table th:nth-child(2),
+.mh-table td:nth-child(2),
+.mh-table th:nth-child(3),
+.mh-table td:nth-child(3) {
+  text-align: left;
+}
+.mh-table td:nth-child(1) {
+  color: var(--mh-muted);
+}
+.mh-table td:nth-child(2) {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+/* очки — главное число строки */
+.mh-table td:nth-child(4) {
+  font-weight: 800;
+}
+.mh-table td:nth-child(3)[data-element]::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--mh-line);
+  vertical-align: 1px;
+}
+.mh-table td:nth-child(3)[data-element="fire"]::before {
+  background: var(--mh-fire);
+}
+.mh-table td:nth-child(3)[data-element="earth"]::before {
+  background: var(--mh-earth);
+}
+.mh-table tr.is-mine td {
+  background: #f2ede0;
+}
+.mh-table tr.is-mine td:first-child {
+  box-shadow: inset 4px 0 0 var(--mh-ink);
 }
 .pvp-stale {
   position: fixed;
