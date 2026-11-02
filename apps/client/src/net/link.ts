@@ -79,7 +79,9 @@ function sendOver(dc: DataConnection, data: string | Uint8Array, lag: LagOptions
     return;
   }
   const { drop, delayMs } = lagDecision(lag, Math.random);
-  if (drop) return;
+  // Настоящий канал (ordered: false без maxRetransmits) ничего не теряет, только путает порядок: теряем лишь
+  // снапшоты, у которых есть замена, а текстовые сообщения (вход, ввод, стихия) только задерживаем.
+  if (drop && typeof data !== "string") return;
   if (delayMs <= 0) {
     push(data);
     return;
@@ -97,7 +99,9 @@ export interface Conn {
   /** Уникален для соединения (connectionId PeerJS). */
   readonly id: string;
   readonly open: boolean;
+  /** Без лага Uint8Array уходит в канал без копии: не переиспользовать буфер после отправки. */
   send(data: string | Uint8Array): void;
+  /** onClose этого канала зовётся синхронно, изнутри close(): не закрывать каналы на ходу по своей карте игроков. */
   close(): void;
 }
 
