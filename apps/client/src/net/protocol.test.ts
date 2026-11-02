@@ -80,13 +80,13 @@ describe("cleanName", () => {
 
   it("drops control and invisible characters", () => {
     expect(cleanName("A\u0000B\u0007C")).toBe("ABC");
-    expect(cleanName("Ма​г‮﻿")).toBe("Маг");
+    expect(cleanName("Ма\u200Bг\u202E\uFEFF")).toBe("Маг");
     expect(cleanName("a\nb\tc")).toBe("abc");
   });
 
   it("collapses runs of spaces and trims the edges", () => {
     expect(cleanName("   Искра    42   ")).toBe("Искра 42");
-    expect(cleanName("a   　 b")).toBe("a b");
+    expect(cleanName("a   \u3000 b")).toBe("a b");
     expect(cleanName("    ")).toBe("");
   });
 
@@ -110,7 +110,7 @@ describe("parseClientMsg: accepted", () => {
 
   it("falls back to «Маг» for an empty or missing name", () => {
     expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, name: "", element: "fire" }))).toMatchObject({ name: "Маг" });
-    expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, name: "​ \u0000", element: "fire" }))).toMatchObject({ name: "Маг" });
+    expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, name: "\u200B \u0000", element: "fire" }))).toMatchObject({ name: "Маг" });
     expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, element: "fire" }))).toMatchObject({ name: "Маг" });
     expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, name: 42, element: "fire" }))).toMatchObject({ name: "Маг" });
   });
