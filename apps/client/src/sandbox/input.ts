@@ -9,7 +9,7 @@ import { GAME_KEYS, KEYS } from "./controls";
 export interface InputDevice {
   readonly down: ReadonlySet<string>;
   readonly locked: boolean;
-  /** Тики кадра прочли down: нажатия, отпущенные раньше, чем их увидел тик, теперь гаснут. Звать, если тиков > 0. */
+  /** Тик прочёл down: нажатия, отпущенные раньше, чем их увидел тик, теперь гаснут. Зовёт сэмплер тика сразу после чтения (game/view.ts). */
   ticked(): void;
   /** Сдвиг мыши с прошлого вызова, пиксели. */
   takeMouse(): { dx: number; dy: number };
