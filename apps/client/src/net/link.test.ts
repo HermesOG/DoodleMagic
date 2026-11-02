@@ -387,16 +387,17 @@ describe("openHostLink", () => {
     expect(dc.sent).toEqual([new Uint8Array([1, 2, 3])]);
   });
 
-  it("drops a send when the loss roll hits", async () => {
+  it("drops a binary send when the loss roll hits, but never a text one", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.1);
     await openHostLink("ABCD", handlers, { lagMs: 0, lossPct: 50 });
     const dc = new FakeDc("dc_1");
     peer.incoming(dc);
     dc.opens();
-    conns[0]!.send("lost");
+    conns[0]!.send(new Uint8Array([1, 2, 3]));
+    conns[0]!.send("kept");
     vi.advanceTimersByTime(1000);
-    expect(dc.sent).toEqual([]);
+    expect(dc.sent).toEqual(["kept"]);
   });
 
   it("sends at once under zero lag without loss", async () => {
@@ -598,9 +599,13 @@ describe("openJoinLink", () => {
     vi.advanceTimersByTime(101);
     expect(dc.sent).toEqual(["kept"]);
     random.mockReturnValue(0.2);
-    link.send("lost");
+    link.send(new Uint8Array([7]));
     vi.advanceTimersByTime(1000);
     expect(dc.sent).toEqual(["kept"]);
+    // текст под тем же броском не теряется, только задерживается
+    link.send("late");
+    vi.advanceTimersByTime(1000);
+    expect(dc.sent).toEqual(["kept", "late"]);
   });
 
   it("close() destroys the peer and silences the handlers", async () => {
