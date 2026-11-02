@@ -56,12 +56,12 @@ export const PEER_OPTIONS = {
     ],
   },
 };
-const CONN_OPTIONS = { serialization: "raw", reliable: false };
+export const CONN_OPTIONS = { serialization: "raw", reliable: false };
 
 type PeerError = Error & { type?: string };
 
 /** relayOnly: браузер берёт только TURN-кандидатов — так проверяем запасной путь для строгих NAT. */
-function openPeer(id: string | null, relayOnly = false): Promise<Peer> {
+export function openPeer(id: string | null, relayOnly = false): Promise<Peer> {
   const options = relayOnly
     ? { ...PEER_OPTIONS, config: { ...PEER_OPTIONS.config, iceTransportPolicy: "relay" as RTCIceTransportPolicy } }
     : PEER_OPTIONS;
@@ -94,7 +94,7 @@ function openPeer(id: string | null, relayOnly = false): Promise<Peer> {
  * Сигналинг PeerJS иногда рвёт связь: открытые P2P-каналы живут, а для новых нужно переподключиться.
  * Повторы идут с нарастающей задержкой, не чаще одного ожидающего таймера; успешное открытие сбрасывает задержку.
  */
-function keepSignalling(peer: Peer): void {
+export function keepSignalling(peer: Peer): void {
   let delay = SIGNALLING_RETRY_MIN_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   peer.on("open", () => {
