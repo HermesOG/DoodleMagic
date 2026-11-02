@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_BACKLOG, MAX_PENDING, STALE_INPUT_MS, TRIM_TO, createInputQueue, pushInputs, takeInput } from "./inputQueue";
 import type { SeqInput } from "./protocol";
 
-/** Ввод номера seq; marker различает вводы по yaw. */
+/** Ввод номера seq; вводы различаются по yaw. */
 const item = (seq: number, over: Partial<MatchInput> = {}): SeqInput => ({ seq, input: { ...NO_MATCH_INPUT, yaw: seq / 100, ...over } });
 const range = (from: number, to: number): SeqInput[] => Array.from({ length: to - from + 1 }, (_, k) => item(from + k));
 

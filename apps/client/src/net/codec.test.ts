@@ -108,7 +108,7 @@ describe("encodeBinary / decodeBinary", () => {
 
   it("returns undefined when the unpacked data is over MAX_DECODED_BYTES", async () => {
     expect(MAX_DECODED_BYTES).toBe(4 * 1024 * 1024);
-    // 5 МБ нулей сжимаются в несколько КБ: бомба распаковки.
+    // 5 МБ одной буквы сжимаются в несколько КБ: бомба распаковки.
     const bomb = await encodeBinary("a".repeat(5 * 1024 * 1024));
     expect(bomb.length).toBeLessThan(64 * 1024);
     expect(await decodeBinary(bomb)).toBeUndefined();

@@ -59,13 +59,15 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array | undefined> {
   return out;
 }
 
-/** Первый байт — формат: 1 — JSON(quantize(value)) в deflate-raw; 0 — тот же JSON без сжатия (нет CompressionStream). */
+/** Первый байт — формат: 1 — JSON(quantize(value)) в deflate-raw; 0 — тот же JSON без сжатия (нет CompressionStream или deflate-raw). */
 export async function encodeBinary(value: unknown): Promise<Uint8Array> {
   const json = new TextEncoder().encode(JSON.stringify(quantize(value)) ?? "null");
-  const compress = typeof CompressionStream !== "undefined";
-  const body = compress ? await deflate(json) : json;
+  let packed: Uint8Array | null = null;
+  // Chrome 80–102: CompressionStream есть, а "deflate-raw" нет — конструктор бросает; тогда без сжатия
+  if (typeof CompressionStream !== "undefined") packed = await deflate(json).catch(() => null);
+  const body = packed ?? json;
   const out = new Uint8Array(1 + body.length);
-  out[0] = compress ? FORMAT_DEFLATE : FORMAT_JSON;
+  out[0] = packed ? FORMAT_DEFLATE : FORMAT_JSON;
   out.set(body, 1);
   return out;
 }
