@@ -73,12 +73,12 @@ describe("element registries: every id of the four elements has its entry", () =
     }
   });
 
-  it("every zone kind has a decal style entry: steam, tornado and spring draw none (element particles do), the rest a ring", () => {
+  it("every zone kind has a decal style entry: steam draws none (a cloud), the rest a ring", () => {
     const kinds: ZoneKind[] = ["fireWall", "fireTrail", "pillar", "quake", "tornado", "fireTornado", "spring", "steam"];
     const zone = (kind: ZoneKind, owner = 2): Zone => ({
       id: 1, owner, kind, ability: "tornado", shape: { type: "disc", center: V(), radius: 3 }, bornTick: 0, armTick: 30, endTick: 300, rehit: [],
     });
-    const none = new Set<ZoneKind>(["steam", "tornado", "fireTornado", "spring"]);
+    const none = new Set<ZoneKind>(["steam"]);
     for (const k of kinds) {
       const d = zoneDecal(zone(k), 10);
       if (none.has(k)) expect(d, k).toBeNull();
