@@ -16,7 +16,6 @@ const VORTEX: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["tornado", "fireTornado
 const OWN_FLOOR = 0.6;
 /** Толчок камеры средней ступени (TIERS.medium.kickDeg) и её trauma — у выпуска Порыва и удара о стену. */
 const MEDIUM_KICK_DEG = 1.25;
-const MEDIUM_TRAUMA = 0.5;
 /** Зерно парения — раз в 0,35 с на мага; гул Смерча — раз в 0,5 с на вихрь (Р15). */
 export const GLIDE_GRAIN_S = 0.35;
 export const HUM_GRAIN_S = 0.5;
@@ -102,8 +101,9 @@ export function airEffects(ev: MatchEvent, view: EventView, me: Unit | undefined
       // Порыв сдул снаряд: клочья ветра в точке снаряда
       return [burst("airBlown", ev.pos), ownSound("airBlown", ev.pos, mine(ev.unit))];
     case "slam": {
-      // удар о стену: хлопок и глухой удар; жертве — тряска средней ступени и звук у уха
-      if (mine(ev.target)) return [burst("airSlam", ev.pos), sound("airSlam"), { kind: "trauma", amount: MEDIUM_TRAUMA, profile: "earth" }];
+      // удар о стену: хлопок и глухой удар; жертве — звук у уха. Тряску средней ступени даёт событие hit того же
+      // удара (общая карта), вторая сверху свела бы её к максимуму
+      if (mine(ev.target)) return [burst("airSlam", ev.pos), sound("airSlam")];
       return [burst("airSlam", ev.pos), ownSound("airSlam", ev.pos, mine(ev.source))];
     }
     case "airJump":

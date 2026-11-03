@@ -92,14 +92,13 @@ describe("airEffects: own events", () => {
     expect(wall?.at(-1)).toEqual({ kind: "sound", id: "sickleHit", pos: V(), gain: 1 });
   });
 
-  it("blown, slam on me (medium shake, sound at the ear), double jump ring, glide pulse, charge chime, swoop FOV like a dash", () => {
+  it("blown, slam on me (sound at the ear; the medium shake comes from the slam's hit), double jump ring, glide pulse, charge chime, swoop FOV like a dash", () => {
     const [, , , , , , , blown, slam, jump, glide, charge, dash] = airEvents(ME).map((e) => fx(e));
     expect(bursts(blown)).toEqual(["airBlown"]);
     expect(sounds(blown)).toEqual(["airBlown"]);
     expect(slam).toEqual([
       { kind: "burst", preset: "airSlam", pos: V(0, 1, -5), dir: V(0, 1, 0), scale: 1 },
       { kind: "sound", id: "airSlam", pos: null, gain: 1 },
-      { kind: "trauma", amount: 0.5, profile: "earth" },
     ]);
     expect(jump).toEqual([{ kind: "burst", preset: "airJumpRing", pos: V(0, 2, 0), dir: V(0, 1, 0), scale: 1 }, { kind: "sound", id: "airJump", pos: null, gain: 1 }]);
     expect(glide).toEqual([{ kind: "fov", deg: 1.5 }]);
