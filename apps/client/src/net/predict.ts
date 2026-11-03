@@ -84,7 +84,7 @@ export function eventKey(ev: MatchEvent): string {
     case "terrain":
       return `terrain:${ev.owner}:${ev.kind}:${ev.phase}`;
     case "dash":
-      return `dash:${ev.unit}:${ev.phase}`;
+      return `dash:${ev.unit}:${ev.ability}:${ev.phase}`;
     case "overheat":
       return `overheat:${ev.unit}:${ev.on}`;
     case "courage":
@@ -95,6 +95,28 @@ export function eventKey(ev: MatchEvent): string {
       return `fall:${ev.credit}:${ev.target}`;
     case "respawn":
       return `respawn:${ev.target}:${dm(ev.pos.x)}:${dm(ev.pos.y)}:${dm(ev.pos.z)}`;
+    case "beam":
+      return `beam:${ev.unit}:${ev.ability}`;
+    case "blown":
+      return `blown:${ev.unit}:${ev.kind}`;
+    case "slam":
+      return `slam:${ev.source}:${ev.target}`;
+    case "airJump":
+      return `airJump:${ev.unit}`;
+    case "glide":
+      return `glide:${ev.unit}:${ev.on}`;
+    case "charge":
+      return `charge:${ev.unit}:${ev.slot}:${ev.charges}`;
+    case "absorb":
+      return `absorb:${ev.unit}:${ev.kind}`;
+    case "ward":
+      return `ward:${ev.unit}:${ev.phase}`;
+    case "tow":
+      return `tow:${ev.source}:${ev.target}:${ev.phase}`;
+    case "heal":
+      return `heal:${ev.source}:${ev.target}`;
+    case "reaction":
+      return `reaction:${ev.owner}:${ev.kind}`;
     default:
       return String((ev as { type: unknown }).type); // чужая версия хоста: вид без подробностей
   }
@@ -113,12 +135,15 @@ export function withOffsets(s: MatchState, offsets: ReadonlyMap<UnitId, Vec3>): 
 
 const length = (v: Vec3): number => Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 
-/** Ввод чужого мага по looks снапшота: движение и взгляд, без прыжка и кнопок; still — без движения. */
+/**
+ * Ввод чужого мага по looks снапшота: движение, взгляд и зажатый прыжок (парение Воздуха, Р16), без кнопок;
+ * still — без движения.
+ */
 function lookInputs(s: SnapshotMsg, localId: UnitId, still = false): Partial<Record<UnitId, MatchInput>> {
   const out: Partial<Record<UnitId, MatchInput>> = {};
-  for (const [id, moveX, moveZ, yaw, pitch] of s.looks) {
+  for (const [id, moveX, moveZ, yaw, pitch, j] of s.looks) {
     if (id === localId) continue;
-    out[id] = { moveX: still ? 0 : moveX, moveZ: still ? 0 : moveZ, yaw, pitch, jump: false, primary: false, q: false, e: false, c: false };
+    out[id] = { moveX: still ? 0 : moveX, moveZ: still ? 0 : moveZ, yaw, pitch, jump: j === 1, primary: false, q: false, e: false, c: false };
   }
   return out;
 }

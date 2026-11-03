@@ -1,7 +1,7 @@
 import { ELEMENTS, type Element, type MatchInput, type UnitId } from "@doodlemagic/sim";
 
-/** Версия сетевого протокола игры: хост и игрок разных версий вместе не играют. */
-export const NET_VERSION = 1;
+/** Версия сетевого протокола игры: хост и игрок разных версий вместе не играют. 2 — фаза 4: четыре стихии, прыжок в looks. */
+export const NET_VERSION = 2;
 export const NAME_MAX = 16;
 /** Предел текстового сообщения игрока, знаков. */
 export const MAX_TEXT_CHARS = 4096;

@@ -8,7 +8,7 @@ export interface SnapshotMsg {
   tick: number;                                        // game.match.tick
   game: GameState;
   acks: [UnitId, number][];                            // последний применённый seq игроков (хоста здесь нет)
-  looks: [UnitId, number, number, number, number][];   // id, moveX, moveZ, yaw, pitch — ввод каждого мага на последнем тике
+  looks: [UnitId, number, number, number, number, number][]; // id, moveX, moveZ, yaw, pitch, прыжок 0/1 — ввод каждого мага на последнем тике
   roster: [UnitId, string, number][];                  // id, имя, пинг мс (−1 — неизвестен)
   events: [number, MatchEvent][];                      // тик (match.tick до шага), событие — всё с прошлого снапшота
 }
@@ -33,7 +33,7 @@ export function isSnapshot(x: unknown): x is SnapshotMsg {
   if (!m.units.every((u) => isObject(u) && isNumber(u.id))) return false;
   return (
     isRows(x.acks, 2, (r) => r.every(isNumber)) &&
-    isRows(x.looks, 5, (r) => r.every(isNumber)) &&
+    isRows(x.looks, 6, (r) => r.every(isNumber)) &&
     isRows(x.roster, 3, (r) => isNumber(r[0]) && typeof r[1] === "string" && isNumber(r[2])) &&
     isRows(x.events, 2, (r) => isNumber(r[0]) && isObject(r[1]) && typeof r[1].type === "string")
   );

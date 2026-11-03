@@ -82,7 +82,8 @@ export function createHostCore(ctx: MatchContext): HostCore {
     for (const u of game.match.units) {
       if (!u.mage) continue;
       const inp = inputs[u.id];
-      looks.push(inp ? [u.id, inp.moveX, inp.moveZ, inp.yaw, inp.pitch] : [u.id, 0, 0, u.move.yaw, u.move.pitch]);
+      // прыжок зажат — чужое парение в переигровке игрока не обрывается (Р16)
+      looks.push(inp ? [u.id, inp.moveX, inp.moveZ, inp.yaw, inp.pitch, inp.jump ? 1 : 0] : [u.id, 0, 0, u.move.yaw, u.move.pitch, 0]);
     }
     const acks: SnapshotMsg["acks"] = [];
     const roster: SnapshotMsg["roster"] = [];

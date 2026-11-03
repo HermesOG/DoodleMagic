@@ -370,7 +370,7 @@ describe("predictor: smoothing", () => {
 describe("predictor: a host stall", () => {
   // хост на последнем тике снапшота шёл вперёд и смотрел на yaw 1.5, pitch 0.1
   const walking = (): SnapshotMsg =>
-    later(hostSnapshots(3)[0]!, 0, (c) => (c.looks = c.looks.map(([id, mx, mz, yaw, pitch]) => (id === HOST_ID ? [id, 0, 1, 1.5, 0.1] : [id, mx, mz, yaw, pitch]))));
+    later(hostSnapshots(3)[0]!, 0, (c) => (c.looks = c.looks.map(([id, mx, mz, yaw, pitch, j]) => (id === HOST_ID ? [id, 0, 1, 1.5, 0.1, 0] : [id, mx, mz, yaw, pitch, j]))));
   const horizontal = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.z - b.z);
 
   it("othersStill: other mages stand with the snapshot's look, the own mage still moves; without it they walk on", () => {

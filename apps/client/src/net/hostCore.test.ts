@@ -149,7 +149,7 @@ describe("hostCore: ticks and inputs", () => {
     expect(zAt[15]!).toBeLessThan(zAt[0]! - 1);
     expect(zAt[59]).toBe(zAt[40]);
     const u = unit(h, id);
-    expect(last!.looks).toEqual([[id, 0, 0, u.move.yaw, u.move.pitch]]);
+    expect(last!.looks).toEqual([[id, 0, 0, u.move.yaw, u.move.pitch, 0]]);
     expect([u.move.yaw, u.move.pitch]).toEqual([0.3, -0.2]);
   });
 
@@ -179,9 +179,9 @@ describe("hostCore: ticks and inputs", () => {
     const b = unit(h, 3);
     expect(s.acks).toEqual([[2, 12], [3, -1]]);
     expect(s.looks).toEqual([
-      [1, -1, 0.75, 2, -0.5],
-      [2, 0.5, -1, 1.2, 0.25],
-      [3, 0, 0, b.move.yaw, b.move.pitch],
+      [1, -1, 0.75, 2, -0.5, 0],
+      [2, 0.5, -1, 1.2, 0.25, 0],
+      [3, 0, 0, b.move.yaw, b.move.pitch, 0],
     ]);
     expect(b.move.yaw).toBe(TEST_SPAWNS.find((p) => p.pos.x === b.mage!.spawn.pos.x && p.pos.z === b.mage!.spawn.pos.z)!.yaw);
   });
@@ -238,7 +238,8 @@ describe("isSnapshot", () => {
       (s) => (s.game.match.tick = s.tick + 1),
       (s) => (s.game.match.units[0] = null),
       (s) => (s.acks = [[1]]),
-      (s) => (s.looks = [[1, 0, 0, 0, "x"]]),
+      (s) => (s.looks = [[1, 0, 0, 0, 0, "x"]]),
+      (s) => (s.looks = [[1, 0, 0, 0, 0]]),
       (s) => (s.roster = [[1, 2, 3]]),
       (s) => (s.events = [[1, { kind: "cast" }]]),
       (s) => (s.events = null),

@@ -92,8 +92,8 @@ describe("parseRoomPath", () => {
 
 describe("gamePeerId and roomLink", () => {
   it("builds the host's peer id in lower case, different from the connection test's", () => {
-    expect(gamePeerId("ABCD")).toBe("doodlemagic-g1-abcd-host");
-    expect(gamePeerId("2K9Z")).toBe("doodlemagic-g1-2k9z-host");
+    expect(gamePeerId("ABCD")).toBe("doodlemagic-g2-abcd-host");
+    expect(gamePeerId("2K9Z")).toBe("doodlemagic-g2-2k9z-host");
     expect(gamePeerId("ABCD")).not.toContain("doodlemagic-nt-");
   });
 
