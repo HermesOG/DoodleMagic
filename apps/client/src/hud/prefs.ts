@@ -1,4 +1,4 @@
-import type { Element } from "@doodlemagic/sim";
+import { ELEMENTS, type Element } from "@doodlemagic/sim";
 
 /** Боевые настройки игрока: выбранная стихия и множитель «Движение камеры» 0…1 (GDD 5: доступность). */
 export interface CombatPrefs {
@@ -9,7 +9,7 @@ export interface CombatPrefs {
 const KEY = "doodlemagic_combat";
 export const DEFAULT_PREFS: Readonly<CombatPrefs> = Object.freeze({ element: "fire", cameraMotion: 1 });
 
-/** Настройки из localStorage: стихия — только fire или earth, движение камеры прижато к [0; 1], остальное — по умолчанию. */
+/** Настройки из localStorage: стихия — одна из ELEMENTS, движение камеры прижато к [0; 1], остальное — по умолчанию. */
 export function parsePrefs(raw: string | null): CombatPrefs {
   let x: unknown = null;
   try {
@@ -18,7 +18,7 @@ export function parsePrefs(raw: string | null): CombatPrefs {
     x = null;
   }
   const o = typeof x === "object" && x !== null ? (x as Record<string, unknown>) : {};
-  const element: Element = o.element === "fire" || o.element === "earth" ? o.element : DEFAULT_PREFS.element;
+  const element: Element = ELEMENTS.find((e) => e === o.element) ?? DEFAULT_PREFS.element;
   const m = o.cameraMotion;
   const cameraMotion = typeof m === "number" && Number.isFinite(m) ? Math.min(1, Math.max(0, m)) : DEFAULT_PREFS.cameraMotion;
   return { element, cameraMotion };

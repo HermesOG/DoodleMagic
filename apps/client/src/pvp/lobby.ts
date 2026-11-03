@@ -125,7 +125,7 @@ function el<T extends HTMLElement>(root: HTMLElement, selector: string): T {
 }
 
 /**
- * Лобби комнаты: имя, две карточки стихий и «Войти». У хоста сверху «Комната ABCD», ссылка и «Скопировать ссылку»
+ * Лобби комнаты: имя, четыре карточки стихий и «Войти». У хоста сверху «Комната ABCD», ссылка и «Скопировать ссылку»
  * (буфер обмена; отказал — ссылка выделяется для Ctrl+C), ниже — кто уже в комнате. Текст из данных — только через
  * textContent и value.
  */
@@ -182,7 +182,7 @@ export function createLobby(o: LobbyOptions): Lobby {
     }
   };
   for (const b of cards) {
-    const e: Element = b.dataset.element === "earth" ? "earth" : "fire";
+    const e: Element = ELEMENTS.find((x) => x === b.dataset.element) ?? "fire";
     const info = ELEMENT_INFO[e];
     el(b, ".pvp-el-name").textContent = `${info.name} — ${info.title}`;
     el(b, ".pvp-el-motto").textContent = info.motto;

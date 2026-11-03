@@ -1,14 +1,17 @@
 import { ELEMENTS, ELEMENT_INFO, type Element } from "@doodlemagic/sim";
 import "./combatHud.css";
+import "./elementSelect.css";
 
 /** Скорость с запятой и одним знаком: 6,5 м/с, 6,0 м/с. */
 const speed = (v: number): string => v.toFixed(1).replace(".", ",");
-/** Цифры 1 и 2 — по event.code: и в верхнем ряду, и на цифровом блоке, на любой раскладке. */
-const KEY_OF: Readonly<Record<string, Element>> = { Digit1: "fire", Numpad1: "fire", Digit2: "earth", Numpad2: "earth" };
+/** Цифры 1–4 по порядку ELEMENTS — по event.code: и в верхнем ряду, и на цифровом блоке, на любой раскладке. */
+const KEY_OF: Readonly<Record<string, Element>> = Object.fromEntries(
+  ELEMENTS.flatMap((e, k) => [[`Digit${k + 1}`, e], [`Numpad${k + 1}`, e]] as const),
+);
 
 /**
- * Экран «Выбери стихию» (GDD 4.1, 9): две карточки из ELEMENT_INFO, initial подсвечена и в фокусе (Enter или
- * пробел выбирают её). 1 / 2 или клик — выбор; через autoS секунд подтверждается подсвеченная (byClick: false).
+ * Экран «Выбери стихию» (GDD 4.1, 9): четыре карточки из ELEMENT_INFO, initial подсвечена и в фокусе (Enter или
+ * пробел выбирают её). 1–4 или клик — выбор; через autoS секунд подтверждается подсвеченная (byClick: false).
  * byClick: true — выбрал сам игрок кликом или клавишей: это жест пользователя, и в его обработчике странице
  * можно сразу захватить мышь и включить звук (keydown в Chrome — такой же жест, как клик). Выбор по таймеру —
  * не жест: после него нужен клик «Играть».
@@ -30,7 +33,7 @@ export function showElementSelect(root: HTMLElement, initial: Element, autoS = 1
   screen.setAttribute("role", "dialog");
   screen.setAttribute("aria-label", "Выбери стихию");
   if (auto) screen.style.setProperty("--es-auto", `${auto}s`);
-  const hint = auto ? `1 / 2 или клик · через ${Number(auto.toFixed(1))} с — выбранная` : "1 / 2 или клик";
+  const hint = auto ? `1–4 или клик · через ${Number(auto.toFixed(1))} с — выбранная` : "1–4 или клик";
   screen.innerHTML = `<section class="es-panel">
     <h1 class="es-title">Выбери стихию</h1>
     <div class="es-cards">${ELEMENTS.map((e, k) => card(e, k + 1)).join("")}</div>
@@ -55,7 +58,7 @@ export function showElementSelect(root: HTMLElement, initial: Element, autoS = 1
     };
     // Enter и пробел на кнопке в фокусе приходят сюда же как click
     for (const b of screen.querySelectorAll<HTMLButtonElement>(".es-card")) {
-      b.addEventListener("click", () => done(b.dataset.element === "earth" ? "earth" : "fire", true));
+      b.addEventListener("click", () => done(ELEMENTS.find((e) => e === b.dataset.element) ?? initial, true));
     }
     screen.querySelector<HTMLButtonElement>(".es-card.is-on")?.focus({ preventScroll: true });
     window.addEventListener("keydown", onKey);

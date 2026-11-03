@@ -28,7 +28,7 @@
   margin: 12px 0 6px;
   font-weight: 600;
 }
-/* карточки стихий: полоска цвета стихии слева, выбранная — с рамкой тушью */
+/* карточки стихий: четыре — сеткой 2 × 2, полоска цвета стихии слева, выбранная — с рамкой тушью */
 .pvp-els {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -68,6 +68,12 @@
 }
 .pvp-el[data-element="earth"] {
   --pvp-el: #3dbe7a;
+}
+.pvp-el[data-element="air"] {
+  --pvp-el: #8f84d6;
+}
+.pvp-el[data-element="water"] {
+  --pvp-el: #2ea8e6;
 }
 .pvp-el:hover {
   border-color: var(--muted);
@@ -132,6 +138,8 @@
   --mh-line: #d9d3c3;
   --mh-fire: #ff7a1a;
   --mh-earth: #3dbe7a;
+  --mh-air: #8f84d6;
+  --mh-water: #2ea8e6;
   --mh-head: "Cormorant SC", "Cormorant Garamond", "Forum", Georgia, "Times New Roman", serif;
   --mh-ui: "Manrope", system-ui, "Segoe UI", sans-serif;
   --mh-halo: 0 0 2px #f6f3ea, 0 0 2px #f6f3ea, 0 0 5px rgba(246, 243, 234, 0.9);
@@ -259,6 +267,12 @@
 .mh-chip[data-element="earth"] {
   --mh-el: var(--mh-earth);
 }
+.mh-chip[data-element="air"] {
+  --mh-el: var(--mh-air);
+}
+.mh-chip[data-element="water"] {
+  --mh-el: var(--mh-water);
+}
 .mh-chip.is-on {
   border-color: var(--mh-ink);
   border-left-color: var(--mh-el);
@@ -356,6 +370,12 @@
 }
 .mh-table td:nth-child(3)[data-element="earth"]::before {
   background: var(--mh-earth);
+}
+.mh-table td:nth-child(3)[data-element="air"]::before {
+  background: var(--mh-air);
+}
+.mh-table td:nth-child(3)[data-element="water"]::before {
+  background: var(--mh-water);
 }
 .mh-table tr.is-mine td {
   background: #f2ede0;
