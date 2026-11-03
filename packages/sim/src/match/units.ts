@@ -33,8 +33,8 @@ const TOW_ARRIVE_M = 1e-6;
 /**
  * Второй вызов moveBody — по каналу отбрасывания, со своими стенами и ступенькой; заблокированная ось гасит канал.
  * Канал гаснет как на полу, если юнит на полу или парит (Р1 фазы 4), иначе как в воздухе.
- * Удар о стену (Порыв): ось заблокирована на скорости канала до шага ≥ KNOCKBACK.slamMinSpeed и ждёт u.slam — событие
- * slam и удар его урона (один раз). Скорость ниже порога или канал погас — удар о стену больше не ждёт.
+ * Удар о стену (Порыв): ось заблокирована, канал по ней до шага ≥ KNOCKBACK.slamMinSpeed, и ждёт u.slam — событие
+ * slam и удар его урона (один раз). Скорость канала ниже порога или канал погас — удар о стену больше не ждёт.
  */
 export function moveKnock(s: MatchState, t: TickCtx, u: Unit): void {
   const kb = u.kb;
@@ -49,14 +49,15 @@ export function moveKnock(s: MatchState, t: TickCtx, u: Unit): void {
   const own = b.vel;
   b.vel = { x: kb.x * k.mean, y: 0, z: kb.z * k.mean };
   const r = moveBody(t.world, b, TICK_DT, u.move.onGround);
-  const blocked = (kb.x !== 0 && b.vel.x === 0) || (kb.z !== 0 && b.vel.z === 0);
+  // Скорость канала в стену — по заблокированной оси: задеть стену вскользь на полной скорости — не удар.
+  const into = Math.max(kb.x !== 0 && b.vel.x === 0 ? Math.abs(kb.x) : 0, kb.z !== 0 && b.vel.z === 0 ? Math.abs(kb.z) : 0);
   kb.x = b.vel.x === 0 ? 0 : kb.x * k.e;
   kb.z = b.vel.z === 0 ? 0 : kb.z * k.e;
   b.vel = own;
   if (!r.onGround) u.move.onGround = false; // столкнули с края — следующий stepPlayer уже в воздухе
   const slam = u.slam;
   if (!slam) return;
-  if (blocked && sp >= KNOCKBACK.slamMinSpeed) {
+  if (into >= KNOCKBACK.slamMinSpeed) {
     u.slam = null;
     t.ev.push({ type: "slam", target: u.id, source: slam.by, pos: { x: b.pos.x, y: b.pos.y, z: b.pos.z } });
     applyHit(s, t, { source: slam.by, target: u.id, ability: slam.ability, damage: slam.damage, pos: { x: b.pos.x, y: b.pos.y + b.height / 2, z: b.pos.z }, dir: { x: 0, z: 0 } });
@@ -219,6 +220,8 @@ export function stepLife(s: MatchState, t: TickCtx): void {
       const b = u.move.body;
       if (volumeAt(t.world, bodyBox(b), "kill") === null && !(b.pos.y < t.killBelowY)) continue;
       u.alive = false;
+      endTow(t, u);
+      u.slam = null;
       u.respawnTick = respawnAt(u, t);
       if (u.mage) u.mage.stats.deaths += 1;
       const by = u.lastHitBy;

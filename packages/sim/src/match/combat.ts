@@ -87,12 +87,15 @@ export function pullMul(u: Unit, now: number): number {
 }
 
 /**
- * Сколько цель пролетит до опоры, с (честный полёт, Р1 фазы 4): на полу и в парении — 0, иначе по скорости вверх
- * и высоте над опорой под ней; опоры нет — Infinity.
+ * Сколько цель пролетит до опоры, с (честный полёт, Р1 фазы 4), уже после подброса толчка k. Без подброса на полу
+ * и в парении — 0. Стоявшая на полу (grounded — до подброса) летит с высоты 0: так и стоящая на краю уступа, у которой
+ * под центром пусто. Иначе — по скорости вверх и высоте над опорой под ней; опоры нет — Infinity. Подброшенный из
+ * парения летит честно: парение его не держит.
  */
-function flightOf(t: TickCtx, u: Unit): number {
-  if (u.move.onGround || u.mage?.flight.gliding === true) return 0;
+function flightOf(t: TickCtx, u: Unit, k: Knockback, grounded: boolean): number {
+  if (k.upM <= 0 && (grounded || u.mage?.flight.gliding === true)) return 0;
   const b = u.move.body;
+  if (grounded) return flightTime(b.vel.y, 0);
   const ground = groundBelow(t.world, { x: b.pos.x, y: b.pos.y + FLIGHT_PROBE_UP_M, z: b.pos.z }, KNOCKBACK.flightProbeM);
   return ground === null ? Infinity : flightTime(b.vel.y, b.pos.y - ground);
 }
@@ -105,6 +108,7 @@ function flightOf(t: TickCtx, u: Unit): number {
  */
 function push(u: Unit, t: TickCtx, dir: { x: number; z: number }, k: Knockback): void {
   const vel = u.move.body.vel;
+  const grounded = u.move.onGround;
   if (k.upM > 0) {
     vel.y = Math.max(vel.y, Math.sqrt(2 * G * k.upM));
     if (u.dummy) Object.assign(vel, { x: 0, z: 0 });
@@ -118,7 +122,7 @@ function push(u: Unit, t: TickCtx, dir: { x: number; z: number }, k: Knockback):
     }
     u.status.staggerUntil = Math.max(u.status.staggerUntil, t.now + STAGGER_TICKS);
   }
-  const v0 = knockbackSpeedFor(k.distM, flightOf(t, u));
+  const v0 = knockbackSpeedFor(k.distM, flightOf(t, u, k, grounded));
   u.kb.x += dir.x * v0;
   u.kb.z += dir.z * v0;
   const sp = Math.sqrt(u.kb.x * u.kb.x + u.kb.z * u.kb.z);
@@ -161,7 +165,10 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     knock.distM = Math.min(KNOCKBACK.maxSideM, h.knock.distM * sideMul);
     knock.upM = Math.min(KNOCKBACK.maxUpM, h.knock.upM * upMul);
     push(u, t, h.dir, knock);
-    if (knock.distM > 0) u.slam = h.slam !== undefined && h.slam > 0 && h.ability !== "burning" ? { by: h.source, ability: h.ability, damage: h.slam } : null;
+    // Удар о стену ждёт свой толчок: «сок» ЛКМ (< 1 м) его не стирает, новый толчок ≥ 1 м или свой slam — заменяет.
+    if (knock.distM > 0 && (h.slam !== undefined || knock.distM >= KNOCKBACK.staggerMinM)) {
+      u.slam = h.slam !== undefined && h.slam > 0 && h.ability !== "burning" ? { by: h.source, ability: h.ability, damage: h.slam } : null;
+    }
   }
 
   u.hp -= amount;
@@ -220,10 +227,12 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     if (!wasWet) status("wet", WET_TICKS);
   }
 
-  // Буксир (Р5): цель в рывке его обрывает сразу (Р22), поэтому её не тащит.
-  if (h.tow && !anchored && !killed && !(u.mage?.dash ?? null)) {
+  // Буксир (Р5): цель в рывке его обрывает сразу (Р22), поэтому её не тащит. Длительность — в пределе
+  // обездвиживания GDD 2.2 (≤ 1 с), как у корней: страховка от данных.
+  const towTicks = h.tow ? ticks(ccSeconds(h.tow.ticks / TICK_HZ, CC_LIMITS.rootMaxS)) : 0;
+  if (h.tow && towTicks > 0 && !anchored && !killed && !(u.mage?.dash ?? null)) {
     const p = u.move.body.pos;
-    u.tow = { x: h.tow.x, z: h.tow.z, speed: h.tow.speed, endTick: now + h.tow.ticks, by: h.source };
+    u.tow = { x: h.tow.x, z: h.tow.z, speed: h.tow.speed, endTick: now + towTicks, by: h.source };
     Object.assign(u.kb, { x: 0, z: 0 });
     u.slam = null;
     Object.assign(u.move.body.vel, { x: 0, y: 0, z: 0 });
@@ -238,7 +247,7 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     u.hp = 0;
     u.alive = false;
     Object.assign(u.kb, { x: 0, z: 0 });
-    u.tow = null;
+    endTow(t, u);
     u.slam = null;
     u.respawnTick = respawnAt(u, t);
     if (u.mage) u.mage.stats.deaths += 1;

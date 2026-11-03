@@ -193,6 +193,49 @@ describe("knockback v2 (K1, K2, honest flight)", () => {
   });
 });
 
+describe("knockback v2: review fixes", () => {
+  const near = testContext([{ box: aabb(-15, 0, 3.4, -5, 3, 4), tag: "wall" }]);
+
+  it("a later nudge under 1 m (the sickle's juice) keeps a pending wall slam; a new push ≥ 1 m without slam replaces it", () => {
+    const s = settled([mage("air"), dummy(-10)], near);
+    const ev: MatchEvent[] = [];
+    hit(s, ev, { ability: "gust", damage: 10, knock: { distM: 7, upM: 1 }, slam: 20 }, near);
+    hit(s, ev, { ability: "airSickle", damage: 16, knock: { distM: 0.2, upM: 0 } }, near);
+    expect(u(s, 2).slam).toEqual({ by: 1, ability: "gust", damage: 20 });
+    ev.push(...run(s, 120, { c: near }));
+    expect([ofType(ev, "slam").length, ofType(ev, "hit").map((e) => e.amount)]).toEqual([1, [10, 16, 20]]);
+    const r = settled([mage("air"), dummy(-10)], near);
+    hit(r, [], { ability: "gust", damage: 10, knock: { distM: 7, upM: 1 }, slam: 20 }, near);
+    hit(r, [], { ability: "fireball", knock: { distM: 4, upM: 1.5 } }, near);
+    expect(u(r, 2).slam).toBeNull();
+  });
+
+  it("brushing a wall at full channel speed is not a slam: only the speed along the blocked axis counts", () => {
+    const side = testContext([{ box: aabb(-9.55, 0, -20, -9, 3, 20), tag: "wall" }]); // грань x = −9,55: 0,05 м от бока
+    const s = settled([mage("air"), dummy(-10)], side);
+    const ev: MatchEvent[] = [];
+    const l = Math.hypot(0.2, 1);
+    hit(s, ev, { ability: "gust", damage: 10, dir: { x: 0.2 / l, z: 1 / l }, knock: { distM: 7, upM: 1 }, slam: 20 }, side);
+    expect(Math.hypot(u(s, 2).kb.x, u(s, 2).kb.z)).toBeGreaterThan(KNOCKBACK.slamMinSpeed);
+    expect(Math.abs(u(s, 2).kb.x)).toBeLessThan(KNOCKBACK.slamMinSpeed);
+    ev.push(...run(s, 120, { c: side }));
+    expect([ofType(ev, "slam"), ofType(ev, "hit").map((e) => e.amount), u(s, 2).move.body.pos.z > 5, u(s, 2).slam]).toEqual([[], [10], true, null]);
+  });
+
+  it("a gliding target launched upward flies honestly; one standing on a ledge edge flies from height 0", () => {
+    const g = createMatchState([mage(), mage("air", 2, { pos: { x: -10, y: 3, z: 0 }, yaw: 0 })]);
+    u(g, 2).mage!.flight.gliding = true;
+    hit(g, [], { knock: { distM: 3, upM: 1 } });
+    expect(u(g, 2).kb.z).toBeCloseTo(knockbackSpeedFor(3, flightTime(Math.sqrt(2 * 20 * 1), 3)), 9);
+    expect(u(g, 2).kb.z).toBeLessThan(KNOCKBACK.slamMinSpeed);
+    // центр манекена над пропастью (пол кончается на x = 20), стоит на кромке
+    const e = settled([mage(), dummy(20.3)]);
+    expect(u(e, 2).move.onGround).toBe(true);
+    hit(e, [], { dir: { x: -1, z: 0 }, knock: { distM: 3, upM: 1.2 } });
+    expect(u(e, 2).kb.x).toBeCloseTo(-knockbackSpeed(3, 1.2), 9);
+  });
+});
+
 describe("wet and steam (Р9)", () => {
   const five = () => settled([mage(), ...[0, 1, 2, 3, 4].map((k) => dummy(-10 + 3 * k, 0, 2 + k))]);
   const steams = (s: MatchState) => s.zones.filter((z) => z.kind === "steam");
@@ -328,6 +371,25 @@ describe("tow (Р5, Р22)", () => {
     ee.push(...run(e, 10, { each: (st) => zs.push(u(st, 2).move.body.pos.z) }));
     expect([u(e, 2).tow, ofType(ee, "tow").map((x) => x.phase)]).toEqual([null, ["start", "end"]]);
     expect(zs.slice(0, 5).map((z) => Number(z.toFixed(6)))).toEqual([1, 2, 3, 4, 4].map((k) => Number((k / 3).toFixed(6))));
+  });
+
+  it("lasts at most 1 s (the root limit); death by damage or by a fall ends it with tow/end and drops a pending slam", () => {
+    const s = settled([mage("water"), dummy(-10), dummy(-5, 0, 3)]);
+    const ev: MatchEvent[] = [];
+    grab(s, ev, 2, { x: -10, z: 30 }, 600);
+    expect(u(s, 2).tow!.endTick).toBe(s.tick + 60);
+    u(s, 2).slam = { by: 1, ability: "gust", damage: 20 };
+    hit(s, ev, { damage: 1000 });
+    expect([u(s, 2).alive, u(s, 2).tow, u(s, 2).slam, ev.filter((e) => e.type === "tow" || e.type === "death").map((e) => (e.type === "tow" ? `tow ${e.phase}` : e.type))]).toEqual([
+      false, null, null, ["tow start", "tow end", "death"],
+    ]);
+    const fe: MatchEvent[] = [];
+    grab(s, fe, 3, { x: -5, z: 30 }, 30);
+    u(s, 3).slam = { by: 1, ability: "gust", damage: 20 };
+    u(s, 3).move.body.pos = { x: 25, y: -5, z: 0 };
+    stepLife(s, tickOf(s, fe));
+    const trail = fe.filter((e) => e.type === "tow" || e.type === "fall").map((e) => (e.type === "tow" ? `tow ${e.phase}` : e.type));
+    expect([u(s, 3).alive, u(s, 3).tow, u(s, 3).slam, trail]).toEqual([false, null, null, ["tow start", "tow end", "fall"]]);
   });
 
   it("the target's jet dash breaks the tow", () => {
