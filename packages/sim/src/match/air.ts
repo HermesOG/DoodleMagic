@@ -325,7 +325,8 @@ function pullStep(t: TickCtx, v: Unit, c: Vec3, d: number, step: number): void {
 
 /**
  * Шаг вихря после взвода (Смерч и «Огненный смерч»): реакция (только у обычного) → тяга → импульсы → ядро.
- * - Тяга: живые не-хозяева без рывка и буксира в цилиндре (парящие тоже) — к центру 2,5 × pullMul м/с, не дальше центра.
+ * - Тяга: живые не-хозяева без рывка, буксира и защиты после появления в цилиндре (парящие тоже) — к центру
+ *   2,5 × pullMul м/с, не дальше центра.
  * - Импульсы: каждому в цилиндре раз в 0,5 с (rehit) — 4 урона по времени; у огненного — 8 и Горение.
  * - Ядро 1,5 м: не-хозяина подбрасывает на 3 м (launchUnit: не чаще иммунитета, сброс — хозяину вихря); хозяина на
  *   полу поднимает на 2 м без урона и статуса, раз в 1 с (запись rehit хозяина) — уйти парением.
@@ -338,7 +339,8 @@ const stepVortex: ZoneStep = (s, t, z) => {
   const r = z.shape.radius;
   const fire = z.kind === "fireTornado";
   for (const v of s.units) {
-    if (!v.alive || v.id === z.owner || v.tow || (v.mage?.dash ?? null)) continue;
+    // защищённого после появления не тянет, как не бьёт applyHit и не подбрасывает launchUnit
+    if (!v.alive || v.id === z.owner || v.tow || (v.mage?.dash ?? null) || now < v.status.shieldUntil) continue;
     const d = inVortex(c, r, v);
     const k = pullMul(v, now);
     if (d < 1e-9 || !(k > 0)) continue;

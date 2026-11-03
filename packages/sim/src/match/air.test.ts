@@ -352,6 +352,16 @@ describe("Air: tornado (C)", () => {
     expect(pulses.map(({ t, e }) => [t, e.amount, e.dot, e.source])).toEqual([[30, 4, true, 1], [60, 4, true, 1], [90, 4, true, 1]]);
   });
 
+  it("does not pull a unit under the spawn shield; pulls it once the shield is gone", () => {
+    const r = play(90, cast, {
+      dummies: [at(4, -10), at(-4, -10)],
+      each: (k, s) => void (k === 0 && (unitById(s, 2)!.status.shieldUntil = s.tick + 60)),
+    });
+    expect(pos(r.trace[59]!, 2).x).toBe(4);
+    // защищённый тянется только с k = 60: 30 тиков по 2,5 м/с; соседа без защиты тянет все 60
+    expect([pos(r.trace[89]!, 2).x, pos(r.trace[89]!, 3).x].map((v) => Number(v.toFixed(3)))).toEqual([2.75, -1.5]);
+  });
+
   it("does not reach 0.5 m below or 4 m above its base", () => {
     const c = testContext([{ box: aabb(-3, 0, -13, 3, 1, -7) }, { box: aabb(-4.5, 0, -10.5, -3.5, 5.1, -9.5) }, { box: aabb(-0.5, 0, -14.5, 0.5, 4.9, -13.5) }]);
     const r = play(70, () => ({ c: true, pitch: pitchTo(10, 1) }), { c, dummies: [at(4, -10), at(-4, -10, 5.1), at(0, -14, 4.9)] });
