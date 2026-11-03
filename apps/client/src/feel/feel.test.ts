@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDummyUnit, createMageUnit, createMatchState, type MatchEvent } from "@doodlemagic/sim";
 import { createGestures, startGesture, stepGestures } from "../hands/gestures";
-import { addFeel, createCameraFeel, stepCameraFeel } from "./camera";
+import { addFeel, addLanding, createCameraFeel, stepCameraFeel } from "./camera";
 import type { Effect } from "./effects";
 import { effectsFor } from "./eventMap";
 
@@ -26,21 +26,24 @@ describe("effectsFor", () => {
   it("splits a hit: the impact shows in the world, the hit confirms it", () => {
     const impact = kinds({ type: "impact", ability: "fireFists", owner: 1, pos: V(0, 1, -9.6), normal: V(0, 0, 1), target: 2, terrain: -1 });
     expect([impact.includes("burst"), impact.includes("sound"), impact.includes("hitmarker")]).toEqual([true, true, false]);
-    expect(kinds(hitOn(2))).toEqual(expect.arrayContaining(["hitmarker", "number", "flash", "flinch", "sound", "hitstop"]));
+    expect(kinds(hitOn(2))).toEqual(expect.arrayContaining(["hitmarker", "number", "flash", "flinch", "sound"]));
+    // кулак 5 раз/с — без паузы; камень — 30 мс (round3/01, 2.1)
+    expect(kinds(hitOn(2))).not.toContain("hitstop");
+    expect(fx(hitOn(2, { ability: "stoneShot", amount: 30 }))).toContainEqual({ kind: "hitstop", ms: 30 });
     expect(kinds(hitOn(2))).not.toContain("trauma");
   });
 
-  it("shakes me and pushes my camera ≤ 1° away from the source when I am hit, never for damage over time", () => {
+  it("shakes me and pushes my camera ≤ 1.25° away from the source when I am hit, never for damage over time", () => {
     const got = fx(hitOn(1, { ability: "fireball", amount: 50, dir: V(0, 0, 1), knock: { distM: 3, upM: 1.2 } }));
-    expect(got).toContainEqual(expect.objectContaining({ kind: "trauma", amount: 0.35 }));
+    expect(got).toContainEqual(expect.objectContaining({ kind: "trauma", amount: 0.5, profile: "fire" }));
     const kick = got.find((e) => e.kind === "kick");
-    expect(kick?.kind === "kick" && Math.abs(kick.pitchDeg) + Math.abs(kick.yawDeg) <= 1).toBe(true);
+    expect(kick?.kind === "kick" && Math.abs(kick.pitchDeg) + Math.abs(kick.yawDeg) <= 1.25 + 1e-12).toBe(true);
     expect([got.some((e) => e.kind === "indicator"), got.some((e) => e.kind === "hitmarker")]).toEqual([true, false]);
     expect(kinds(hitOn(1, { ability: "burning", amount: 3, dot: true })).filter((k) => k === "trauma" || k === "kick")).toEqual([]);
   });
 
   it("punches the FOV on a dash, marks kills, ring-outs and «Кураж», fizzles bad casts, wiggles on cooldown", () => {
-    expect(fx({ type: "dash", unit: 1, phase: "start", pos: V(), dir: V(1, 0, 0) })).toContainEqual(expect.objectContaining({ kind: "fov", deg: 6 }));
+    expect(fx({ type: "dash", unit: 1, phase: "start", pos: V(), dir: V(1, 0, 0) })).toContainEqual(expect.objectContaining({ kind: "fov", deg: 8 }));
     expect(fx(hitOn(2, { killed: true }))).toContainEqual(expect.objectContaining({ kind: "hitmarker", kill: true }));
     expect(fx({ type: "fall", target: 2, credit: 1, pos: V(2, -4, -3) })).toContainEqual(expect.objectContaining({ kind: "toast", text: "Сброс!" }));
     expect(fx({ type: "courage", unit: 1 })).toContainEqual(expect.objectContaining({ kind: "toast", text: "Кураж!" }));
@@ -64,18 +67,61 @@ describe("effectsFor", () => {
 describe("camera feel", () => {
   const deg = Math.PI / 180;
 
-  it("caps trauma at 1, decays it at 1.5/s, shakes ≤ 0.5° and ≤ 5 cm per axis", () => {
+  it("caps trauma at 1, decays it at 1.5/s, shakes ≤ 0.8° and ≤ 12 cm per axis (round3/01, H1)", () => {
     let f = addFeel(addFeel(createCameraFeel(), { kind: "trauma", amount: 0.7 }), { kind: "trauma", amount: 0.7 });
     expect([f.trauma, Number(stepCameraFeel(f, 0.5, 1).feel.trauma.toFixed(9))]).toEqual([1, 0.25]);
     let rot = 0;
     let shift = 0;
     for (let k = 0; k < 240; k++) {
       const r = stepCameraFeel(f, 1 / 120, 1);
-      f = { ...r.feel, trauma: 1 };
+      f = { ...r.feel, trauma: 1, traumaEarth: 1 };
       rot = Math.max(rot, Math.abs(r.offset.pitch), Math.abs(r.offset.yaw));
       shift = Math.max(shift, Math.abs(r.offset.x), Math.abs(r.offset.y));
     }
-    expect([rot > 0, rot <= 0.5 * deg + 1e-12, shift <= 0.05 + 1e-12]).toEqual([true, true, true]);
+    expect([rot > 0.4 * deg, rot <= 0.8 * deg + 1e-12, shift > 0.06, shift <= 0.12 + 1e-12]).toEqual([true, true, true, true]);
+  });
+
+  it("a fireball on the victim moves the camera ≈ 3 cm; Earth shakes slower, longer and pulls the camera down", () => {
+    const peak = (profile: "fire" | "earth", amount: number) => {
+      let f = addFeel(createCameraFeel(), { kind: "trauma", amount, profile });
+      let shift = 0;
+      let y = 0;
+      let crossings = 0;
+      let prev = 0;
+      for (let k = 0; k < 60; k++) {
+        const r = stepCameraFeel(f, 1 / 240, 1);
+        f = r.feel;
+        shift = Math.max(shift, Math.abs(r.offset.x));
+        y += r.offset.y;
+        if (prev !== 0 && Math.sign(r.offset.x) !== Math.sign(prev)) crossings++;
+        prev = r.offset.x;
+      }
+      return { shift, y, crossings, left: profile === "fire" ? f.trauma : f.traumaEarth };
+    };
+    const fire = peak("fire", 0.5);
+    const earth = peak("earth", 0.65);
+    expect([fire.shift > 0.01, fire.shift <= 0.03 + 1e-12]).toEqual([true, true]);
+    expect([earth.shift > 0.03, earth.y < 0, earth.crossings < fire.crossings, earth.left > fire.left]).toEqual([true, true, true, true]);
+  });
+
+  it("a ground slam drops the camera, a landing sinks it by 0.006 m per m/s (≤ 8 cm), both settle; no lift at motion 0", () => {
+    const deepest = (f: ReturnType<typeof createCameraFeel>) => {
+      let lo = 0;
+      let at = 0;
+      for (let k = 1; k <= 120; k++) {
+        const r = stepCameraFeel(f, 1 / 240, 1);
+        f = r.feel;
+        if (r.offset.lift < lo) [lo, at] = [r.offset.lift, k / 240];
+      }
+      return { lo, at, end: stepCameraFeel(f, 0.5, 1).offset.lift };
+    };
+    const slam = deepest(addFeel(createCameraFeel(), { kind: "kick", pitchDeg: -1.2, yawDeg: 0, rollDeg: 0, dropM: 0.04 }));
+    expect([slam.lo, slam.at]).toEqual([expect.closeTo(-0.04, 4), expect.closeTo(1 / 12, 1)]);
+    expect(deepest(addLanding(createCameraFeel(), -7)).lo).toBeCloseTo(-0.042, 4);
+    expect(deepest(addLanding(createCameraFeel(), -14)).lo).toBeCloseTo(-0.08, 4);
+    expect(addLanding(createCameraFeel(), -0.17)).toEqual(createCameraFeel());
+    expect(Math.abs(slam.end)).toBeLessThan(0.002);
+    expect(stepCameraFeel(addLanding(createCameraFeel(), -14), 1 / 60, 0).offset.lift).toBe(0);
   });
 
   it("peaks a kick at its amount and settles it within 0.25 s", () => {
@@ -89,21 +135,31 @@ describe("camera feel", () => {
     expect([Math.max(...path) > 0.9, Math.max(...path) < 1.05, Math.abs(path.at(-1)!) < 0.1]).toEqual([true, true, true]);
   });
 
-  it("holds a FOV punch, eases it back, and keeps the camera still at camera motion 0", () => {
-    let r = stepCameraFeel(addFeel(createCameraFeel(), { kind: "fov", deg: 6, holdS: 0.2 }), 0.1, 1);
-    expect(r.offset.fovDeg).toBeGreaterThan(3);
-    for (let k = 0; k < 60; k++) r = stepCameraFeel(r.feel, 1 / 60, 1);
-    expect(r.offset.fovDeg).toBeLessThan(0.2);
-    const busy = addFeel(addFeel(createCameraFeel(), { kind: "trauma", amount: 1 }), { kind: "kick", pitchDeg: 1, yawDeg: 1, rollDeg: 3 });
-    expect(stepCameraFeel(busy, 1 / 60, 0, true).offset).toEqual({ x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, fovDeg: 0 });
+  it("punches the FOV as an impulse: the dash's +8° peaks within ≈ 35 ms and eases back; still at camera motion 0 (M3)", () => {
+    let f = addFeel(createCameraFeel(), { kind: "fov", deg: 8 });
+    let top = 0;
+    let at = 0;
+    for (let k = 1; k <= 240; k++) {
+      const r = stepCameraFeel(f, 1 / 1000, 1);
+      f = r.feel;
+      if (r.offset.fovDeg > top) [top, at] = [r.offset.fovDeg, k / 1000];
+    }
+    expect([top, at]).toEqual([expect.closeTo(8, 3), expect.closeTo(1 / 30, 2)]);
+    let r = stepCameraFeel(f, 0.3, 1);
+    expect(r.offset.fovDeg).toBeLessThan(1);
+    r = stepCameraFeel(r.feel, 0.5, 1);
+    expect(r.offset.fovDeg).toBeLessThan(0.05);
+    const busy = addFeel(addFeel(createCameraFeel(), { kind: "trauma", amount: 1 }), { kind: "kick", pitchDeg: 1, yawDeg: 1, rollDeg: 3, dropM: 0.04 });
+    expect(stepCameraFeel(addFeel(busy, { kind: "fov", deg: 8 }), 1 / 60, 0, true).offset).toEqual({ x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, fovDeg: 0, lift: 0 });
   });
 
   // одно и то же движение при 30, 60 и 144 Гц: сравниваем в общие моменты, кратные 1/6 с
   it("plays the same shake, kick, FOV punch and hand gestures at 30, 60 and 144 Hz", () => {
     const start: Effect[] = [
       { kind: "trauma", amount: 0.8 },
-      { kind: "kick", pitchDeg: 1.5, yawDeg: -0.7, rollDeg: 3 },
-      { kind: "fov", deg: 6, holdS: 0.15 },
+      { kind: "trauma", amount: 0.6, profile: "earth" },
+      { kind: "kick", pitchDeg: 1.5, yawDeg: -0.7, rollDeg: 3, dropM: 0.04 },
+      { kind: "fov", deg: 6 },
     ];
     const play = (hz: number): number[][] => {
       let f = start.reduce((acc, e) => addFeel(acc, e), createCameraFeel());

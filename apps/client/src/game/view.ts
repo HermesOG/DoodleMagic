@@ -20,7 +20,8 @@ import {
 import "../render/canvas.css";
 import "../sandbox/sandbox.css";
 import { createAudio, unlockOnGesture } from "../audio/synth";
-import { addFeel, createCameraFeel, stepCameraFeel, type CameraOffset } from "../feel/camera";
+import { createEyeSmooth, createMoveTracker, stepEyeSmooth, trackMovement } from "../feel/body";
+import { addFeel, addLanding, createCameraFeel, stepCameraFeel, type CameraOffset } from "../feel/camera";
 import type { Effect } from "../feel/effects";
 import { effectsFor } from "../feel/eventMap";
 import { createVfx } from "../fx/vfx";
@@ -72,7 +73,7 @@ export interface GameView {
 const NO_KEYS: ReadonlySet<string> = new Set();
 const NO_EFFECTS: readonly Effect[] = [];
 const UP: Vec3 = { x: 0, y: 1, z: 0 };
-const STILL: CameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, fovDeg: 0 };
+const STILL: CameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, fovDeg: 0, lift: 0 };
 /** Пол ближе этого под падающим магом — не ущелье (ров на −1 м): камера идёт за ним, как обычно. */
 const FALL_PROBE_M = 2;
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -156,6 +157,9 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   let cur: MatchState = start.cur;
   look = { yaw: unitById(cur, driver.localId)?.move.yaw ?? 0, pitch: 0 };
   let feel = createCameraFeel();
+  /** Сглаживание ступеней лестницы (M1) и звуки шагов, прыжков и приземлений всех магов (M2). */
+  let eyeSmooth = createEyeSmooth();
+  const moves = createMoveTracker();
   let gestures = createGestures();
   let fistHand: "left" | "right" = "right";
   let hitstopUntil = 0;
@@ -199,9 +203,12 @@ export function mountGameView(o: GameViewOptions): GameView | null {
           if (e.ability === "fireFists") fistHand = gestures.nextFist;
           gestures = startGesture(gestures, e.ability);
         } else if (sink === "vfx") vfx.apply(e, nowS, fistHand);
-        else if (e.kind === "sound") audio.play(e.id, e.pos, e.gain);
+        else if (e.kind === "sound") audio.play(e.id, e.pos, e.gain, e.floor);
         else if (sink === "camera") feel = addFeel(feel, e);
-        else if (e.kind === "hitstop") hitstopUntil = Math.max(hitstopUntil, nowS + e.ms / 1000);
+        // пауза рук — только если жест ещё идёт: у снаряда жест кончился раньше, чем он долетел (round3/01, H2)
+        else if (e.kind === "hitstop") {
+          if (gestures.active.length > 0) hitstopUntil = Math.max(hitstopUntil, nowS + e.ms / 1000);
+        }
         else combat.apply(e, nowS);
       },
       undefined,
@@ -222,6 +229,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     gestures = createGestures();
     handRig = createHandRig();
     feel = createCameraFeel();
+    eyeSmooth = createEyeSmooth();
     hitstopUntil = 0;
     route({ kind: "burst", preset: "respawnPuff", pos: { ...spawn.pos }, dir: UP, scale: 1 }, performance.now() / 1000);
   };
@@ -327,7 +335,10 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     }
     const was = unitById(from, driver.localId) ?? me;
     const p = lerpVec(was.move.body.pos, me.move.body.pos, alpha);
-    const eye = { x: p.x, y: p.y + EYE_HEIGHT, z: p.z };
+    // ступени лестницы камера догоняет за ≈ 0,07 с, а не прыгает на 0,4 м за тик (M1)
+    const smooth = stepEyeSmooth(eyeSmooth, p.y + EYE_HEIGHT, was.move.onGround && me.move.onGround, dtS);
+    eyeSmooth = smooth.state;
+    const eye = { x: p.x, y: smooth.y, z: p.z };
     // в ров (пол на −1 м) маг тоже спрыгивает ниже FALL_HOLD_Y, но под ним пол: это не падение
     const falling = p.y < FALL_HOLD_Y && !me.move.onGround && groundBelow(ctx.world, p, FALL_PROBE_M) === null;
     fallCam = stepFallCamera(fallCam, { eye, target: { x: p.x, y: p.y + EYE_HEIGHT / 2, z: p.z }, falling, look, dt: dtS });
@@ -337,7 +348,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
       cam.position.set(hold.pos.x, hold.pos.y, hold.pos.z);
       cam.rotation.set(hold.pitch, hold.yaw, 0, "YXZ");
     } else {
-      cam.position.set(eye.x, eye.y, eye.z);
+      // проседание (приземление, удар ладонями в землю) — по вертикали мира, а не по осям взгляда
+      cam.position.set(eye.x, eye.y + offset.lift, eye.z);
       cam.rotation.set(look.pitch + offset.pitch, look.yaw + offset.yaw, offset.roll, "YXZ");
       cam.translateX(offset.x);
       cam.translateY(offset.y);
@@ -352,12 +364,16 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   };
 
   let last = 0;
+  /** Время текущего кадра для звуков движения: обработчик создаётся один раз, а не каждый кадр. */
+  let frameNowS = 0;
+  const emitMove = (e: Effect): void => route(e, frameNowS);
   const step = (now: number): void => {
     // метка rAF бывает чуть раньше performance.now(), снятого после прогрева: шаг не должен быть отрицательным
     const rawMs = Math.max(0, now - last);
     last = now;
     const dtS = rawMs / 1000;
     const nowS = now / 1000;
+    frameNowS = nowS;
 
     const mouse = input.takeMouse();
     const lookBefore = look;
@@ -393,10 +409,13 @@ export function mountGameView(o: GameViewOptions): GameView | null {
         landTick = k;
       }
       for (const ev of t.events) onEvent(ev, t.state);
+      guard.run("effects", () => trackMovement(moves, t.state, localId, emitMove), undefined);
     }
     for (const ev of frame.late) onEvent(ev, cur);
     // руки после возрождения — в покое, а не с отставанием и креном от падения
     if (respawned) handRig = createHandRig();
+    // приземление садит камеру: −0,006 м на 1 м/с, не глубже 8 см (M1)
+    else if (landVel < 0) feel = addLanding(feel, landVel);
 
     const shake = guard.run("camera", () => stepCameraFeel(feel, dtS, prefs.cameraMotion), null);
     if (shake) feel = shake.feel;

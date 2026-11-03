@@ -6,8 +6,13 @@ import { createVoiceLimiter } from "./voices";
 
 /** Голосов одновременно (голос — сыгранный звук со всеми слоями); лишние не запускаются. */
 export const MAX_VOICES = 24;
-/** «Тик» попадания не чаще 4 раз в секунду: кулаки бьют 5 раз в секунду, а тик не должен трещать. */
+/** Лёгкое подтверждение попадания (hitLight) не чаще 4 раз в секунду: кулаки бьют 5 раз в секунду, а тик не должен трещать. */
 export const HIT_TICK_PER_S = 4;
+/**
+ * Общий реверб (round3/01, A4): один ConvolverNode на мастере с процедурным импульсом 1,4 с — шум с экспонентой
+ * до −60 дБ, темнеющий к хвосту; первые 12 мс тишина (предзадержка). Посыл — у рецепта, по ступени отклика.
+ */
+export const REVERB = { lengthS: 1.4, preDelayS: 0.012 } as const;
 /**
  * За спиной у звука приглушается верх: StereoPanner перед и зад не различает. Полка −6 дБ выше 3 кГц,
  * а не lowpass: треск Огня (2–8 кГц) и сзади остаётся треском.
@@ -53,8 +58,11 @@ export interface GameAudio {
   /** Создаёт AudioContext при первом вызове — звать из обработчика жеста (клик «Играть»); дальше будит усыплённый. */
   unlock(): void;
   setListener(pos: Vec3, yaw: number): void;
-  /** pos null — у слушателя. До unlock(), без звука или при паузе контекста ничего не делает. */
-  play(id: SoundId, pos: Vec3 | null, gain: number): void;
+  /**
+   * pos null — у слушателя. floor — громкость не ниже этой после затухания с расстоянием (своё попадание слышно и
+   * с 20 м). До unlock(), без звука или при паузе контекста ничего не делает.
+   */
+  play(id: SoundId, pos: Vec3 | null, gain: number, floor?: number): void;
   /** Мастер-громкость 0…1. */
   setVolume(v: number): void;
   setMuted(m: boolean): void;
@@ -211,6 +219,27 @@ function glide(p: AudioParam, from: number, to: number, s: number, until: number
   if (to !== from) p.exponentialRampToValueAtTime(to, until);
 }
 
+/**
+ * Импульс реверба: стерео шум × e^(−6,9·t/len) (−60 дБ к концу), сглаженный однополюсным фильтром, который темнеет
+ * к хвосту — как в комнате, где верх гаснет быстрее низа.
+ */
+export function reverbImpulse(ctx: BaseAudioContext, rand: () => number): AudioBuffer {
+  const rate = ctx.sampleRate;
+  const n = Math.round(rate * REVERB.lengthS);
+  const pre = Math.round(rate * REVERB.preDelayS);
+  const ir = ctx.createBuffer(2, n, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch);
+    let y = 0;
+    for (let i = pre; i < n; i++) {
+      const u = (i - pre) / (n - pre);
+      y += (0.85 - 0.65 * u) * (rand() * 2 - 1 - y);
+      d[i] = y * Math.exp(-6.9 * u);
+    }
+  }
+  return ir;
+}
+
 function browserContextClass(): AudioOptions["contextClass"] {
   const g = globalThis as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
   return g.AudioContext ?? g.webkitAudioContext ?? null;
@@ -228,6 +257,8 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
   let contextClass = opts.contextClass;
   let ctx: AudioContext | null = null;
   let master: GainNode | null = null;
+  /** Вход реверба (его выход — в мастер); null — браузер не умеет ConvolverNode. */
+  let reverbIn: AudioNode | null = null;
   let kit: VoiceKit | null = null;
   let volume = DEFAULT_VOLUME;
   let muted = false;
@@ -279,8 +310,16 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
         m.connect(comp);
         kit = createVoiceKit(c, rand);
         master = m;
+        if (typeof c.createConvolver === "function") {
+          const conv = c.createConvolver();
+          conv.normalize = true;
+          conv.buffer = reverbImpulse(c, rand);
+          conv.connect(m);
+          reverbIn = conv;
+        }
       } catch {
         kit = null;
+        reverbIn = null;
         contextClass = null; // узлы не собрались: живём без звука
         try {
           c.close().catch(() => {});
@@ -300,15 +339,16 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
       listener.yaw = yaw;
     },
 
-    play(id, pos, gain) {
+    play(id, pos, gain, floor) {
       if (!ctx || !master || !kit || muted || ctx.state !== "running") return;
       if (!(gain > 0) || !Number.isFinite(gain)) return;
       let bus: GainNode | null = null;
       try {
         const now = ctx.currentTime;
-        if (id === "hitTick" && !tickOk(now)) return;
+        if (id === "hitLight" && !tickOk(now)) return;
         const sp = spatial(listener, pos);
-        const level = Math.min(gain, MAX_EVENT_GAIN) * sp.gain;
+        const near = floor !== undefined && Number.isFinite(floor) ? Math.max(sp.gain, Math.min(1, floor)) : sp.gain;
+        const level = Math.min(gain, MAX_EVENT_GAIN) * near;
         // NaN во взгляде или позиции: AudioParam бросил бы TypeError
         if (!(level >= MIN_LEVEL) || !Number.isFinite(level) || !Number.isFinite(sp.pan)) return;
         const recipe = RECIPES[id];
@@ -336,6 +376,14 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
           voiceNodes.push(p);
         }
         head.connect(master);
+        // посыл в реверб по ступени: малая ступень сухая
+        if (reverbIn && recipe.reverb) {
+          const send = ctx.createGain();
+          send.gain.value = recipe.reverb;
+          head.connect(send);
+          send.connect(reverbIn);
+          voiceNodes.push(send);
+        }
 
         const v = scheduleRecipe(ctx, recipe, bus, t0, kit);
         voiceNodes.push(...v.nodes);

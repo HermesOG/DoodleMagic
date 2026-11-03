@@ -253,17 +253,18 @@ describe("synth", () => {
     expect(levels.filter((v) => v === 1).length).toBe(RECIPES.fireFist.layers[0]!.clicks);
   });
 
-  it("hitTick is one 1.8 kHz sine, at most 4 a second", () => {
+  it("hitLight is a 1.8 kHz sine with a 3.6 kHz click, at most 4 a second", () => {
     const { audio, ctx } = setup();
     audio.unlock();
     for (const t of [0, 0.1, 0.2, 0.25, 0.3, 0.5]) {
       ctx().currentTime = t;
-      audio.play("hitTick", null, 1);
+      audio.play("hitLight", null, 1);
     }
-    const ticks = ctx().sources();
+    const ticks = ctx().sources().filter((s) => s instanceof FakeOsc && s.frequency.calls[0]![1] === 1800);
     expect(START_LEAD_S).toBe(0.005);
     expect(ticks.map((s) => s.started[0]! - START_LEAD_S).map((t) => Math.round(t * 1000))).toEqual([0, 250, 500]);
-    expect(ticks.every((s) => s instanceof FakeOsc && s.type === "sine" && s.frequency.calls[0]![1] === 1800)).toBe(true);
+    expect(ctx().sources().length).toBe(6);
+    expect(ctx().sources().every((s) => s instanceof FakeOsc && s.type === "sine")).toBe(true);
   });
 
   it(`caps concurrent voices at ${MAX_VOICES}: extra sounds do not start, and slots free up when voices end`, () => {
@@ -321,6 +322,22 @@ describe("synth", () => {
     expect([shelf.type, shelf.frequency.value, shelf.gain.value]).toEqual(["highshelf", BEHIND_SHELF_HZ, BEHIND_SHELF_DB]);
     expect([BEHIND_SHELF_HZ, BEHIND_SHELF_DB]).toEqual([3000, -6]);
     expect(behind.indexOf(shelf)).toBeLessThan(behind.findIndex((n) => n.kind === "panner"));
+  });
+
+  it("an own hit keeps its floor: 20 m away it plays at 0.6, not at 25 %, and a near one is not boosted (round3/01, H3)", () => {
+    const { audio, ctx } = setup();
+    audio.unlock();
+    audio.setListener({ x: 0, y: 1.6, z: 0 }, 0);
+    const busOf = (pos: { x: number; y: number; z: number }, floor?: number) => {
+      const before = ctx().sources().length;
+      ctx().currentTime += 2;
+      audio.play("stoneImpact", pos, 1, floor);
+      const path = pathFrom(ctx().sources()[before]!);
+      return (path[path.findIndex((n) => n.kind === "panner") - 1] as FakeNode & { gain: FakeParam }).gain.value;
+    };
+    expect(busOf({ x: 0, y: 1.6, z: -20 })).toBeCloseTo(0.25);
+    expect(busOf({ x: 0, y: 1.6, z: -20 }, 0.6)).toBeCloseTo(0.6);
+    expect(busOf({ x: 0, y: 1.6, z: -1 }, 0.6)).toBeCloseTo(1 / 1.15);
   });
 
   it("ignores silent or broken calls and disconnects a voice once its last layer ends", () => {
@@ -391,7 +408,7 @@ describe("synth", () => {
     ctx().createOscillator = () => {
       throw new Error("boom");
     };
-    expect(() => audio.play("hitTick", null, 1)).not.toThrow();
+    expect(() => audio.play("hitLight", null, 1)).not.toThrow();
   });
 
   it("never throws from unlock: a context whose nodes fail is closed and the game stays silent", () => {

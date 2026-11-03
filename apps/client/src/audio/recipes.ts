@@ -35,11 +35,18 @@ export interface Layer {
   ceiling?: number;
 }
 
-/** vary — разброс высоты ± за каждый запуск, чтобы частый звук (кулаки 5 раз в секунду) не звучал пулемётом. */
+/**
+ * vary — разброс высоты ± за каждый запуск, чтобы частый звук (кулаки 5 раз в секунду) не звучал пулемётом.
+ * reverb — посыл в общий реверб по ступени отклика (round3/01, A4): малая 0, средняя 0,2, крупная 0,35.
+ */
 export interface Recipe {
   layers: Layer[];
   vary?: number;
+  reverb?: number;
 }
+
+/** Посыл в реверб по ступени отклика (round3/01, 2.1). */
+export const REVERB_SEND = { small: 0, medium: 0.2, large: 0.35 } as const;
 
 type Opt = Partial<Pick<Layer, "q" | "delay" | "attack" | "signature" | "sweep" | "drive" | "clicks" | "ceiling">>;
 
@@ -93,16 +100,37 @@ export const RECIPES: Record<SoundId, Recipe> = {
       tone("triangle", 220, 330, 0.28, 0.1, { attack: 0.2 }),
     ],
   },
+  // выпуск шара (A1): «вуумп» 150 → 1500 Гц и треск, 0,25 с — самый сильный момент каста больше не беззвучен
+  fireballLaunch: {
+    vary: 0.03,
+    reverb: REVERB_SEND.medium,
+    layers: [
+      noise("lowpass", 150, 1500, 0.25, 0.85, { q: 3, attack: 0.012, sweep: 0.5, drive: 2 }),
+      noise("highpass", 3000, 5000, 0.22, 0.5, { q: 0, ceiling: 8000, delay: 0.01, clicks: 6, ...SIG }),
+    ],
+  },
+  // у взрыва есть «тело» 110 → 55 Гц (A4, наушники): подпись Огня — по-прежнему треск в первые 20–50 мс
   fireballBoom: {
     vary: 0.03,
+    reverb: REVERB_SEND.medium,
     layers: [
       noise("lowpass", 200, 2000, 0.4, 0.8, { q: 2, attack: 0.025, sweep: 0.6, drive: 2 }),
+      tone("sine", 110, 55, 0.15, 0.7, { sweep: 0.6, drive: 1.5 }),
       noise("highpass", 3000, 6000, 0.45, 0.6, { q: 0, ceiling: 8000, delay: 0.02, clicks: 10, ...SIG }),
       noise("bandpass", 900, 400, 0.12, 0.35, { q: 0.8 }),
     ],
   },
+  // попадание кулаком (H3): треск и сухой хлопок 1–2 кГц — не тот же звук, что у каста
+  fistHit: {
+    vary: 0.06,
+    layers: [
+      noise("highpass", 3500, 3000, 0.06, 0.55, { q: 0, ceiling: 8000, clicks: 3, ...SIG }),
+      noise("bandpass", 2000, 1000, 0.04, 0.7, { q: 1.2, attack: 0.001 }),
+    ],
+  },
   dash: {
     vary: 0.04,
+    reverb: REVERB_SEND.medium,
     layers: [
       noise("bandpass", 6000, 2500, 0.24, 0.55, { q: 1.6, attack: 0.012, ...SIG }),
       noise("lowpass", 1800, 300, 0.26, 0.5, { attack: 0.01, drive: 1.5 }),
@@ -116,6 +144,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
     ],
   },
   fireWallIgnite: {
+    reverb: REVERB_SEND.medium,
     layers: [
       noise("lowpass", 200, 2000, 0.4, 0.8, { q: 3, attack: 0.04, sweep: 0.7, drive: 2.5 }),
       noise("highpass", 3000, 6000, 0.55, 0.55, { q: 0, ceiling: 8000, delay: 0.03, clicks: 12, ...SIG }),
@@ -137,6 +166,15 @@ export const RECIPES: Record<SoundId, Recipe> = {
       noise("lowpass", 400, 220, 0.12, 0.6, { q: 0, clicks: 3 }),
     ],
   },
+  // бросок камня (A1): свист lowpass 800 → 300 Гц, щелчок 2 кГц на 20 мс и короткий глухой толчок — подпись Земли
+  stoneThrow: {
+    vary: 0.05,
+    layers: [
+      noise("lowpass", 800, 300, 0.14, 0.55, { q: 4, attack: 0.01 }),
+      tone("sine", 2000, 1800, 0.02, 0.3, { attack: 0.001 }),
+      tone("sine", 120, 50, 0.1, 0.7, { sweep: 0.5, drive: 1.5, ...SIG }),
+    ],
+  },
   stoneImpact: {
     vary: 0.05,
     layers: [
@@ -152,6 +190,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
     ],
   },
   pillarStrike: {
+    reverb: REVERB_SEND.medium,
     layers: [
       tone("sine", 70, 30, 0.5, 1, { sweep: 0.4, drive: 3, ...SIG }),
       noise("lowpass", 400, 150, 0.35, 0.75, { q: 2, clicks: 6 }),
@@ -159,6 +198,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
     ],
   },
   wallRise: {
+    reverb: REVERB_SEND.medium,
     layers: [
       noise("bandpass", 260, 340, 0.25, 0.75, { q: 3, attack: 0.03, drive: 2 }),
       tone("sine", 60, 35, 0.3, 0.7, { attack: 0.02, drive: 2, ...SIG }),
@@ -172,6 +212,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
     ],
   },
   quakeStrike: {
+    reverb: REVERB_SEND.medium,
     layers: [
       tone("sine", 70, 30, 0.75, 1, { sweep: 0.5, drive: 3.5, ...SIG }),
       noise("lowpass", 400, 120, 0.55, 0.8, { q: 2, clicks: 9 }),
@@ -188,6 +229,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
   },
   terrainBreak: {
     vary: 0.04,
+    reverb: REVERB_SEND.medium,
     layers: [
       tone("sine", 80, 40, 0.4, 0.85, { sweep: 0.4, drive: 2.5, ...SIG }),
       noise("lowpass", 600, 200, 0.45, 0.7, { q: 2, clicks: 12 }),
@@ -196,14 +238,31 @@ export const RECIPES: Record<SoundId, Recipe> = {
   },
 
   // ── Общие ──
-  hitTick: { layers: [tone("sine", 1800, 1800, 0.04, 0.5, { attack: 0.002 })] },
+  // подтверждение по ступеням (H3): малая — 1,8 кГц и щелчок 3,6 кГц, 30 мс
+  hitLight: {
+    layers: [tone("sine", 1800, 1800, 0.03, 0.5, { attack: 0.002 }), tone("sine", 3600, 3600, 0.012, 0.3, { attack: 0.001 })],
+  },
+  // средняя — то же, плюс «тело» 160 → 80 Гц на 90 мс и бумажный надрыв bandpass 1,5 кГц на 60 мс
+  hitHeavy: {
+    reverb: REVERB_SEND.medium,
+    layers: [
+      tone("sine", 1800, 1800, 0.03, 0.5, { attack: 0.002 }),
+      tone("sine", 3600, 3600, 0.012, 0.3, { attack: 0.001 }),
+      tone("sine", 160, 80, 0.09, 0.7, { attack: 0.002, drive: 1.5 }),
+      noise("bandpass", 1500, 1500, 0.06, 0.4, { q: 2, attack: 0.002, clicks: 3 }),
+    ],
+  },
+  // крупная — звон убийства и низкий удар
   kill: {
+    reverb: REVERB_SEND.large,
     layers: [
       tone("sine", 880, 880, 0.14, 0.45, { attack: 0.004 }),
       tone("sine", 1320, 1320, 0.3, 0.45, { delay: 0.09, attack: 0.004 }),
+      tone("sine", 110, 45, 0.25, 0.75, { sweep: 0.6, drive: 1.5 }),
     ],
   },
   fall: {
+    reverb: REVERB_SEND.large,
     layers: [
       tone("sine", 1200, 300, 0.7, 0.32, { attack: 0.04 }),
       noise("bandpass", 1600, 500, 0.7, 0.14, { q: 2, attack: 0.1 }),
@@ -220,6 +279,19 @@ export const RECIPES: Record<SoundId, Recipe> = {
       tone("triangle", f, f * 1.01, i === 3 ? 0.4 : 0.35, 0.22, { delay: i * 0.05, attack: 0.006 }),
     ),
   },
+
+  // ── Движение (M2): тихо, коротко, без подписи стихии ──
+  // шаг — шум bandpass 700 → 250 Гц, 45 мс
+  step: { vary: 0.1, layers: [noise("bandpass", 700, 250, 0.045, 0.8, { q: 1.2, attack: 0.002 })] },
+  // прыжок — «ткань» 0,12 с
+  jump: { vary: 0.08, layers: [noise("bandpass", 1200, 2400, 0.12, 0.45, { q: 0.8, attack: 0.03 })] },
+  // приземление — глухой удар; громкость задаёт событие (∝ скорости касания)
+  land: {
+    vary: 0.06,
+    layers: [tone("sine", 120, 50, 0.12, 0.8, { sweep: 0.5, drive: 1.5 }), noise("lowpass", 600, 200, 0.08, 0.5, { q: 0 })],
+  },
+  // «вжух» отбрасывания (K3): bandpass 1,2 → 0,4 кГц, 0,3 с
+  knockWhoosh: { layers: [noise("bandpass", 1200, 400, 0.3, 0.6, { q: 2, attack: 0.05 })] },
 };
 
 /** Чья это подпись: Огонь, Земля или общий звук (null). Рельеф — камень Земли, чем бы по нему ни попали. */
@@ -227,12 +299,15 @@ export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
   fireFist: "fire",
   fireballCharge: "fire",
   fireballBoom: "fire",
+  fireballLaunch: "fire",
+  fistHit: "fire",
   dash: "fire",
   fireWallTelegraph: "fire",
   fireWallIgnite: "fire",
   overheat: "fire",
   stoneCast: "earth",
   stoneImpact: "earth",
+  stoneThrow: "earth",
   pillarTelegraph: "earth",
   pillarStrike: "earth",
   wallRise: "earth",
@@ -240,11 +315,16 @@ export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
   quakeStrike: "earth",
   terrainHit: "earth",
   terrainBreak: "earth",
-  hitTick: null,
+  hitLight: null,
+  hitHeavy: null,
   kill: null,
   fall: null,
   fizzle: null,
   courage: null,
+  step: null,
+  jump: null,
+  land: null,
+  knockWhoosh: null,
 };
 
 /** Полоса слоя-подписи [низ, верх] в Гц; без подписи — самого громкого слоя. */

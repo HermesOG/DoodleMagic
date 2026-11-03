@@ -14,7 +14,7 @@ import {
   type UnitId,
   type Vec3,
 } from "@doodlemagic/sim";
-import type { Effect } from "../feel/effects";
+import type { Effect, FeelTier } from "../feel/effects";
 import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
 import { NUMBER_LIFE_S, cooldownFraction, formatDamage, heatFraction, hpBar, mergeNumbers, numberAnim, type FloatingNumber } from "./format";
@@ -42,7 +42,20 @@ export interface CombatHud {
 const NUMBER_POOL = 24;
 const TOAST_POOL = 3;
 const ARC_POOL = 4;
-const HITMARKER_S = 0.12;
+/** Хитмаркер по ступени отклика (round3/01, H3): малая 0,12 с, средняя 0,22 с, крупная 0,35 с. */
+export const HITMARKER_S: Readonly<Record<FeelTier, number>> = { none: 0.12, small: 0.12, medium: 0.22, large: 0.35 };
+
+/**
+ * Хитмаркер через age секунд после попадания: null — погас. Малая ступень вспыхивает ×1,18 и оседает; средняя
+ * и крупная — «поп» ×1,4 → 1 за первую треть; убийство крупнее (×1,45). Последние 40 % — гаснет.
+ */
+export function hitmarkerAnim(age: number, tier: FeelTier, kill: boolean): { alpha: number; scale: number } | null {
+  const dur = HITMARKER_S[tier];
+  if (!(age >= 0 && age < dur)) return null;
+  const u = age / dur;
+  const pop = tier === "medium" || tier === "large" ? 1 + 0.4 * Math.max(0, 1 - u * 3) ** 2 : 1.18 - 0.18 * u;
+  return { alpha: u < 0.6 ? 1 : 1 - (u - 0.6) / 0.4, scale: (kill ? 1.45 : 1) * pop };
+}
 const TOAST_S = 1.2;
 const INDICATOR_S = 1.2;
 const DENY_S = 0.15;
@@ -222,6 +235,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   let numbers: FloatingNumber[] = [];
   let hitAt = -Infinity;
   let hitKill = false;
+  let hitTier: FeelTier = "small";
   let vignetteK = 0;
   let lastNowS = Number.NaN;
   let element: Elem | null = null;
@@ -375,13 +389,11 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   };
 
   const updateCross = (view: HudView, dt: number): void => {
-    const ha = view.nowS - hitAt;
-    if (ha >= 0 && ha < HITMARKER_S) {
-      // мазки вспыхивают крупнее и оседают; убийство — крупнее
-      const u = ha / HITMARKER_S;
-      const s = (hitKill ? 1.45 : 1) * (1.18 - 0.18 * u);
-      setStyle(hit, "opacity", u < 0.6 ? "1" : (1 - (u - 0.6) / 0.4).toFixed(3));
-      setStyle(hit, "transform", `scale(${s.toFixed(3)})`);
+    // мазки вспыхивают крупнее и оседают; длительность и «поп» — по ступени, убийство — крупнее
+    const hm = hitmarkerAnim(view.nowS - hitAt, hitTier, hitKill);
+    if (hm) {
+      setStyle(hit, "opacity", hm.alpha >= 1 ? "1" : hm.alpha.toFixed(3));
+      setStyle(hit, "transform", `scale(${hm.scale.toFixed(3)})`);
     } else setStyle(hit, "opacity", "0");
 
     for (let k = 0; k < ARC_POOL; k++) {
@@ -436,6 +448,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
         case "hitmarker":
           hitAt = nowS;
           hitKill = e.kill;
+          hitTier = e.tier ?? (e.kill ? "large" : "small");
           hit.classList.toggle("is-kill", e.kill);
           hit.classList.toggle("is-air", e.air);
           break;

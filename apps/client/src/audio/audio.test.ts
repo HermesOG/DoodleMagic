@@ -66,8 +66,16 @@ describe("recipes table", () => {
     expect(crackle("pillarStrike")).toMatchObject({ kind: "tone", wave: "sine", freq: 70, freqEnd: 30 });
     expect(crackle("quakeStrike")).toMatchObject({ kind: "tone", wave: "sine", freq: 70, freqEnd: 30 });
     expect(crackle("pillarTelegraph")).toMatchObject({ freq: 40, freqEnd: 40 });
-    expect(RECIPES.hitTick.layers).toEqual([expect.objectContaining({ kind: "tone", freq: 1800, freqEnd: 1800, dur: 0.04 })]);
-    expect(RECIPES.kill.layers.map((l) => l.freq)).toEqual([880, 1320]);
+    // подтверждение по ступеням (round3/01, H3): малая — 1,8 кГц и щелчок 3,6 кГц за 30 мс; средняя — плюс «тело» и надрыв
+    expect(RECIPES.hitLight.layers).toEqual([
+      expect.objectContaining({ kind: "tone", freq: 1800, freqEnd: 1800, dur: 0.03 }),
+      expect.objectContaining({ kind: "tone", freq: 3600, freqEnd: 3600 }),
+    ]);
+    expect(RECIPES.hitHeavy.layers.slice(2)).toEqual([
+      expect.objectContaining({ kind: "tone", freq: 160, freqEnd: 80, dur: 0.09 }),
+      expect.objectContaining({ kind: "noise", filter: "bandpass", freq: 1500, dur: 0.06 }),
+    ]);
+    expect(RECIPES.kill.layers.map((l) => l.freq)).toEqual([880, 1320, 110]);
     expect(RECIPES.fizzle.layers[0]).toMatchObject({ kind: "tone", freq: 600, freqEnd: 200, dur: 0.12 });
     expect(RECIPES.fall.layers[0]).toMatchObject({ freq: 1200, freqEnd: 300 });
     const ignite = RECIPES.fireWallIgnite.layers.find((l) => l.filter === "lowpass");

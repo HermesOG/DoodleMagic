@@ -25,11 +25,19 @@ export const SOUND_LABELS: Record<SoundId, string> = {
   quakeStrike: "Землетрясение: удар",
   terrainHit: "Рельеф: попадание",
   terrainBreak: "Рельеф: разрушение",
-  hitTick: "Тик попадания",
+  hitLight: "Попадание: малое",
+  hitHeavy: "Попадание: среднее",
   kill: "Убийство",
   fall: "Падение",
   fizzle: "Пшик",
   courage: "Кураж",
+  fireballLaunch: "Шар: выпуск",
+  stoneThrow: "Камень: выпуск",
+  fistHit: "Кулак: попадание",
+  step: "Шаг",
+  jump: "Прыжок",
+  land: "Приземление",
+  knockWhoosh: "Отбрасывание: вжух",
 };
 
 const EAR = 1.6;
