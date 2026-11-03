@@ -2,15 +2,21 @@ import type { AABB, PlayerInput, PlayerState, Spawn, Vec3 } from "../types";
 import type { World } from "../world";
 
 /**
- * Контракты фазы 2-lite. Только простые данные: состояние и события уходят в JSON и по сети без потерь.
+ * Контракты фаз 2-lite и 4. Только простые данные: состояние и события уходят в JSON и по сети без потерь.
  * «Нет» — NOBODY (−1), а не undefined; времена — номера тиков (60 Гц), а не секунды.
  */
-export type Element = "fire" | "earth";
-export const ELEMENTS: readonly Element[] = ["fire", "earth"];
+export type Element = "fire" | "earth" | "air" | "water";
+/** Порядок стихий: клавиши 1–4 (Р17 фазы 4). */
+export const ELEMENTS: readonly Element[] = ["fire", "earth", "air", "water"];
 /** ЛКМ — атака, Q — приём, E — спасение, C — поле или контроль (GDD 2.2). */
 export type Slot = "primary" | "q" | "e" | "c";
 export const SLOTS: readonly Slot[] = ["primary", "q", "e", "c"];
-export const ABILITY_IDS = ["fireFists", "fireball", "jetDash", "fireWall", "stoneShot", "stonePillar", "stoneWall", "earthquake"] as const;
+export const ABILITY_IDS = [
+  "fireFists", "fireball", "jetDash", "fireWall",
+  "stoneShot", "stonePillar", "stoneWall", "earthquake",
+  "airSickle", "gust", "swoop", "tornado",
+  "waterWhip", "waterGrab", "waterWard", "spring",
+] as const;
 export type AbilityId = (typeof ABILITY_IDS)[number];
 /** Чем нанесён урон: способностью или горением. */
 export type DamageSource = AbilityId | "burning";
@@ -33,11 +39,30 @@ export interface Statuses {
   rootUntil: number;
   /** «В воздухе»: подброшен способностью, держится до приземления. */
   airborne: boolean; noControlUntil: number;
-  /** Иммунитет к жёсткому контролю (подброс, обездвиживание); отбрасывание в это время ×0,5. */
+  /** Иммунитет к жёсткому контролю (подброс, обездвиживание); подброс в это время ×0,5, вбок — полностью (K2). */
   immuneUntil: number;
   /** «Защита после появления»: урона нет, пока now < shieldUntil; свой принятый каст снимает. */
   shieldUntil: number;
+  /** «Мокрый» (GDD 4.1): гасит и не пускает Горение, пока now < wetUntil. */
+  wetUntil: number;
+  /** Пар с этой цели — не раньше этого тика (раз в 3 с). */
+  steamReadyAt: number;
+  /** K1: своё ускорение ×0,3, пока now < staggerUntil. Не контроль. */
+  staggerUntil: number;
+  /** «Якорь» диска Отражения: толчок, подброс, буксир и тяга не действуют, пока now < anchoredUntil. */
+  anchoredUntil: number;
 }
+
+/** Буксир Хвата: тащит по XZ к (x, z) со скоростью speed, м/с, до endTick; без гравитации. */
+export interface Tow { x: number; z: number; speed: number; endTick: number; by: UnitId }
+/** Удар о стену, который ждёт в канале толчка (Порыв): кто, чем, сколько урона. */
+export interface Slam { by: UnitId; ability: AbilityId; damage: number }
+/** Рывок (Реактивный рывок, Взмах): направление, начало и конец, зона следа (NOBODY — без следа). */
+export interface DashState { ability: AbilityId; dirX: number; dirZ: number; startTick: number; endTick: number; trailZone: number }
+/** «Лёгкость» Воздуха: второй прыжок потрачен, тиков парения с прыжка, парит ли на этом тике. */
+export interface FlightState { doubleJumped: boolean; glideTicks: number; gliding: boolean }
+/** Диск Отражения: до какого тика стоит и сколько урона впитал. */
+export interface WardState { endTick: number; absorbed: number }
 
 export interface MageState {
   element: Element;
@@ -54,8 +79,15 @@ export interface MageState {
   windup: { ability: AbilityId; slot: Slot; releaseTick: number } | null;
   /** Жар Огня 0…100; у Земли всегда 0. */
   heat: number; overheatUntil: number; lastShotTick: number;
-  /** Реактивный рывок: направление по XZ, тик окончания, id зоны следа. */
-  dash: { dirX: number; dirZ: number; endTick: number; trailZone: number } | null;
+  /** Рывок (Реактивный рывок, Взмах): ведёт кит через dash.ts; moveUnits мага в рывке пропускает. */
+  dash: DashState | null;
+  /** Заряды слота (Взмах): сколько есть и тик следующего (NEVER — все на месте). У прочих слотов 0 и NEVER. */
+  charges: Record<Slot, number>;
+  chargeAt: Record<Slot, number>;
+  /** «Лёгкость» Воздуха; у прочих стихий не меняется. */
+  flight: FlightState;
+  /** Диск Отражения Воды; null — не стоит. */
+  ward: WardState | null;
   /** Где маг появился последним: в PvP — точка pickSpawn, на полигоне — своя. */
   spawn: Spawn;
   /** deaths — смерти от урона и падения, в том числе свои. */
@@ -81,12 +113,19 @@ export interface Unit {
   alive: boolean; respawnTick: number;
   mage: MageState | null;
   dummy: DummyState | null;
+  /** Буксир Хвата: пока не null, юнита тащит stepTow, а не шаги. */
+  tow: Tow | null;
+  /** Удар о стену, который ждёт в канале толчка. */
+  slam: Slam | null;
 }
 
-/** После шага тика endTick − 1 снаряд исчезает (огненный шар — взрывается). */
-export interface Projectile { id: number; owner: UnitId; ability: "fireFists" | "fireball" | "stoneShot"; pos: Vec3; vel: Vec3; bornTick: number; endTick: number }
+/** Виды снарядов. Ответ Отражения — свой вид, засчитывается способности waterWard (PROJECTILE_SOURCE). */
+export const PROJECTILE_KINDS = ["fireFists", "fireball", "stoneShot", "airSickle", "waterGrab", "waterAnswer"] as const;
+export type ProjectileKind = (typeof PROJECTILE_KINDS)[number];
+/** После шага тика endTick − 1 снаряд исчезает (огненный шар — взрывается). power — урон попадания: по таблице вида, у Ответа — впитанное. */
+export interface Projectile { id: number; owner: UnitId; ability: ProjectileKind; pos: Vec3; vel: Vec3; bornTick: number; endTick: number; power: number }
 
-export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake";
+export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake" | "tornado" | "fireTornado" | "spring" | "steam";
 export type ZoneShape =
   | { type: "box"; box: AABB }
   | { type: "segment"; a: Vec3; b: Vec3; halfW: number }
@@ -110,13 +149,13 @@ export interface Terrain {
 /** tick — сколько тиков посчитано (следующий шаг считает тик с этим номером); units по возрастанию id. */
 export interface MatchState { tick: number; units: Unit[]; projectiles: Projectile[]; zones: Zone[]; terrain: Terrain[]; nextId: number }
 
-export type StatusKind = "burning" | "slow" | "root" | "airborne";
+export type StatusKind = "burning" | "slow" | "root" | "airborne" | "wet";
 export type RejectReason = "cooldown" | "busy" | "notGrounded" | "noTarget" | "rooted";
 
 export type MatchEvent =
   /** Нажатие принято: замах или мгновенный каст. pos — глаза, dir — прицел. */
   | { type: "cast"; unit: UnitId; ability: AbilityId; slot: Slot; pos: Vec3; dir: Vec3 }
-  /** Снаряд выпущен (конец замаха или выстрел ЛКМ). */
+  /** Снаряд выпущен (конец замаха или выстрел ЛКМ). Способность без снаряда (Порыв) — projectile −1; у Ответа ability — waterWard. */
   | { type: "release"; unit: UnitId; ability: AbilityId; projectile: number; pos: Vec3; dir: Vec3 }
   | { type: "reject"; unit: UnitId; slot: Slot; reason: RejectReason }
   /** Первая фаза попадания: снаряд во что-то врезался. Нет цели — target NOBODY, terrain −1. */
@@ -127,12 +166,30 @@ export type MatchEvent =
   | { type: "status"; target: UnitId; status: StatusKind; ticks: number; source: UnitId }
   | { type: "zone"; zone: number; kind: ZoneKind; owner: UnitId; phase: "telegraph" | "arm" | "end" }
   | { type: "terrain"; terrain: number; kind: TerrainKind; owner: UnitId; phase: "rise" | "solid" | "hit" | "break" | "expire"; pos: Vec3; amount: number }
-  | { type: "dash"; unit: UnitId; phase: "start" | "end"; pos: Vec3; dir: Vec3 }
+  | { type: "dash"; unit: UnitId; ability: AbilityId; phase: "start" | "end"; pos: Vec3; dir: Vec3 }
   | { type: "overheat"; unit: UnitId; on: boolean }
   | { type: "courage"; unit: UnitId }
   | { type: "death"; target: UnitId; killer: UnitId; ability: DamageSource; pos: Vec3 }
   | { type: "fall"; target: UnitId; credit: UnitId; pos: Vec3 }
-  | { type: "respawn"; target: UnitId; pos: Vec3; yaw: number };
+  | { type: "respawn"; target: UnitId; pos: Vec3; yaw: number }
+  /** Мгновенный удар лучом (Порыв): от глаз до цели; target — NOBODY, если никого. */
+  | { type: "beam"; unit: UnitId; ability: AbilityId; from: Vec3; to: Vec3; target: UnitId }
+  /** Чужой снаряд сдут (Порыв). */
+  | { type: "blown"; unit: UnitId; projectile: number; kind: ProjectileKind; owner: UnitId; pos: Vec3 }
+  /** Удар о стену: канал толчка упёрся в стену на скорости. */
+  | { type: "slam"; target: UnitId; source: UnitId; pos: Vec3 }
+  | { type: "airJump"; unit: UnitId; pos: Vec3 }
+  | { type: "glide"; unit: UnitId; on: boolean; pos: Vec3 }
+  /** Заряд слота вернулся; charges — сколько их теперь. */
+  | { type: "charge"; unit: UnitId; slot: Slot; charges: number }
+  /** Диск Отражения впитал снаряд: amount — его power, total — всего впитано. */
+  | { type: "absorb"; unit: UnitId; projectile: number; kind: ProjectileKind; owner: UnitId; amount: number; total: number; pos: Vec3 }
+  | { type: "ward"; unit: UnitId; phase: "up" | "down"; absorbed: number }
+  | { type: "tow"; target: UnitId; source: UnitId; phase: "start" | "end"; pos: Vec3; to: Vec3 }
+  /** Лечение: amount — фактически прибавленное. */
+  | { type: "heal"; target: UnitId; source: UnitId; amount: number; pos: Vec3 }
+  /** Реакция стихий: облако пара или огненный смерч; zone — её зона. */
+  | { type: "reaction"; kind: "steam" | "fireTornado"; owner: UnitId; zone: number; pos: Vec3 };
 
 export interface MatchStep { state: MatchState; events: MatchEvent[] }
 
@@ -150,7 +207,7 @@ export interface MatchContext {
 
 /**
  * Что видит один тик: мир с рельефом на начало тика и куда писать события. Динамический коллайдер k
- * (номер colliders.length + k) — рельеф terrainIds[k], если k < terrainIds.length; дальше — стены огня.
+ * (номер colliders.length + k) — рельеф terrainIds[k], если k < terrainIds.length; дальше — стены огня и облака пара.
  * spawns, mageRespawnTicks и spawnShieldTicks stepMatch берёт из MatchContext (нет точек — null).
  */
 export interface TickCtx {

@@ -32,7 +32,7 @@ describe("ability tables follow GDD 4.3–4.4", () => {
       expect([k.distM <= KNOCKBACK.maxSideM, k.upM <= KNOCKBACK.maxUpM]).toEqual([true, true]);
     }
     expect(Math.max(FIRE.fireFists.knockback.distM, EARTH.stoneShot.knockback.distM)).toBeLessThanOrEqual(KNOCKBACK.juicePrimaryMaxM);
-    expect(Math.max(EARTH.earthquake.knockback.distM, EARTH.stonePillar.knockback.distM)).toBeLessThanOrEqual(KNOCKBACK.juiceAbilityMaxM);
+    expect(EARTH.earthquake.knockback.distM).toBeLessThanOrEqual(KNOCKBACK.juiceAbilityMaxM); // столб после K2 толкает на 2 м — уже не «сок»
   });
 
   it("maps every slot of both elements to its own ability", () => {
@@ -71,6 +71,6 @@ describe("match state", () => {
     const up = aimDir(0, 0.5);
     expect([up.y, Math.hypot(up.x, up.y, up.z)].map((v) => Number(v.toFixed(12)))).toEqual([Number(Math.sin(0.5).toFixed(12)), 1]);
     expect(rightXZ(0)).toEqual({ x: 1, z: 0 });
-    expect(statusFlags(dummy, 0)).toEqual({ burning: false, slowed: false, rooted: false, airborne: false, shielded: false });
+    expect(statusFlags(dummy, 0)).toEqual({ burning: false, slowed: false, rooted: false, airborne: false, shielded: false, wet: false });
   });
 });

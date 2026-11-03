@@ -80,7 +80,7 @@ describe("Fire kit", () => {
     expect(log.find(({ e }) => e.type === "dash" && e.phase === "end")!.t).toBe(11);
     const x = s.units[0]!.move.body.pos.x;
     const dmg = hitsOf(log, "jetDash").reduce((a, { e }) => a + e.amount, 0);
-    expect([x > 7.9, x < 8.6, dmg >= 12, dmg <= 15]).toEqual([true, true, true, true]);
+    expect([x > 8.6, x < 9.0, dmg >= 12, dmg <= 15]).toEqual([true, true, true, true]);
     // след — урон по времени: камеру не трясёт (правка контролёра)
     expect(hitsOf(log, "jetDash").every(({ e }) => e.dot)).toBe(true);
   });

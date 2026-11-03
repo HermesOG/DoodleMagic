@@ -5,6 +5,7 @@ import type { AABB, Body, Vec3 } from "../types";
 import { OVERLAP_EPS } from "../world";
 import { applyHit } from "./combat";
 import { EARTH, FIRE, LIMITS, STATUS, ticks } from "./defs";
+import { NO_HOOKS, type SimHooks } from "./hooks";
 import { horizontalDir } from "./kit";
 import { clonePlain, unitById } from "./state";
 import { spawnTerrain } from "./terrain";
@@ -38,23 +39,37 @@ function zoneEvent(t: TickCtx, z: Zone, phase: "telegraph" | "arm" | "end"): voi
   t.ev.push({ type: "zone", zone: z.id, kind: z.kind, owner: z.owner, phase });
 }
 
-function evict(s: MatchState, t: TickCtx, z: Zone): void {
-  s.zones.splice(s.zones.indexOf(z), 1);
+/** Снять зону раньше срока (вытеснение, реакция): событие zone/end. Зоны уже нет в списке — ничего. */
+export function endZone(s: MatchState, t: TickCtx, z: Zone): void {
+  const k = s.zones.indexOf(z);
+  if (k < 0) return;
+  s.zones.splice(k, 1);
   zoneEvent(t, z, "end");
 }
 
+/** Пар живёт вне лимитов зон: у него своё ограничение на арену (steam.ts). */
+const limited = (q: Zone): boolean => q.kind !== "steam";
+
 /**
- * Новая зона. Сначала пределы GDD 7.3–7.4: у владельца уже LIMITS.zonesPerMage — уходит его самая старая;
- * всего LIMITS.zonesTotal — самая старая вообще (обе — событием zone/end). Событие zone/telegraph. Возвращает id.
+ * Новая зона. Сначала пределы GDD 7.3–7.4 (пар в них не входит и их не трогает): у владельца уже LIMITS.zonesPerMage —
+ * уходит его самая старая; всего LIMITS.zonesTotal — самая старая вообще (обе — событием zone/end).
+ * Событие zone/telegraph. Возвращает id.
  */
 export function spawnZone(s: MatchState, t: TickCtx, z: NewZone): number {
-  let own = 0;
-  for (const q of s.zones) if (q.owner === z.owner) own++;
-  while (own >= LIMITS.zonesPerMage) {
-    evict(s, t, s.zones.find((q) => q.owner === z.owner)!);
-    own--;
+  if (z.kind !== "steam") {
+    let own = 0;
+    for (const q of s.zones) if (q.owner === z.owner && limited(q)) own++;
+    while (own >= LIMITS.zonesPerMage) {
+      endZone(s, t, s.zones.find((q) => q.owner === z.owner && limited(q))!);
+      own--;
+    }
+    let total = 0;
+    for (const q of s.zones) if (limited(q)) total++;
+    while (total >= LIMITS.zonesTotal) {
+      endZone(s, t, s.zones.find(limited)!);
+      total--;
+    }
   }
-  while (s.zones.length >= LIMITS.zonesTotal) evict(s, t, s.zones[0]!);
   const zone: Zone = {
     id: s.nextId++, owner: z.owner, kind: z.kind, ability: z.ability, shape: clonePlain(z.shape),
     bornTick: z.bornTick, armTick: z.armTick, endTick: z.endTick, rehit: [],
@@ -181,12 +196,15 @@ function quakeStrike(s: MatchState, t: TickCtx, z: Zone): void {
 }
 
 /**
- * Шаг зон на тике t.now (по копии списка): на endTick зона исчезает (zone/end); на armTick — zone/arm;
- * с armTick стена огня и след бьют касанием, а столб и землетрясение бьют один раз ровно на armTick.
+ * Шаг зон на тике t.now (по копии списка): зона, снятая раньше в этом шаге (вытеснили, поглотила реакция), пропускается;
+ * на endTick зона исчезает (zone/end); на armTick — zone/arm. С armTick зона вида, у которого есть хук стихии
+ * (hooks.zones), шагает им; иначе стена огня и след бьют касанием, а столб и землетрясение бьют один раз ровно
+ * на armTick. Пар без хука ничего не делает: он только закрывает обзор (buildTickWorld).
  */
-export function stepZones(s: MatchState, t: TickCtx): void {
+export function stepZones(s: MatchState, t: TickCtx, hooks: SimHooks = NO_HOOKS): void {
   const now = t.now;
   for (const z of [...s.zones]) {
+    if (!s.zones.includes(z)) continue;
     if (now >= z.endTick) {
       const k = s.zones.indexOf(z);
       if (k >= 0) s.zones.splice(k, 1);
@@ -195,8 +213,11 @@ export function stepZones(s: MatchState, t: TickCtx): void {
     }
     if (now === z.armTick) zoneEvent(t, z, "arm");
     if (now < z.armTick) continue;
-    if (z.kind === "fireWall") contact(s, t, z, FIRE.fireWall.contactDamage, FIRE_WALL_REHIT_TICKS, true, false);
+    const step = hooks.zones[z.kind];
+    if (step) step(s, t, z);
+    else if (z.kind === "fireWall") contact(s, t, z, FIRE.fireWall.contactDamage, FIRE_WALL_REHIT_TICKS, true, false);
     else if (z.kind === "fireTrail") contact(s, t, z, TRAIL_PULSE_DAMAGE, TRAIL_PULSE_TICKS, false, true);
-    else if (now === z.armTick) (z.kind === "pillar" ? pillarStrike : quakeStrike)(s, t, z);
+    else if (now === z.armTick && z.kind === "pillar") pillarStrike(s, t, z);
+    else if (now === z.armTick && z.kind === "quake") quakeStrike(s, t, z);
   }
 }

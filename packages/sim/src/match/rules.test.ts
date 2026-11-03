@@ -108,7 +108,7 @@ const live = (...els: Element[]): GameState => play(startCountdown(gameWith(...e
 function litter(g: GameState, owner: UnitId): void {
   const s = g.match;
   const id = () => s.nextId++;
-  s.projectiles.push({ id: id(), owner, ability: "fireball", pos: { x: 0, y: 1, z: owner }, vel: { x: 0, y: 0, z: 0 }, bornTick: 0, endTick: 1e6 });
+  s.projectiles.push({ id: id(), owner, ability: "fireball", pos: { x: 0, y: 1, z: owner }, vel: { x: 0, y: 0, z: 0 }, bornTick: 0, endTick: 1e6, power: 50 });
   s.zones.push({ id: id(), owner, kind: "fireWall", ability: "fireWall", shape: { type: "box", box: aabb(-5, 0, owner, 5, 2.5, owner + 0.6) }, bornTick: 0, armTick: 0, endTick: 1e6, rehit: [] });
   s.terrain.push({ id: id(), owner, kind: "wall", box: aabb(-35, 0, 10 * owner, -31, 2.5, 10 * owner + 0.6), bornTick: 0, solidTick: 0, endTick: 1e6, growTicks: 18, solid: true, hp: 250, maxHp: 250 });
 }

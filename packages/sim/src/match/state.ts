@@ -1,15 +1,21 @@
 import { createPlayer, forwardXZ } from "../player";
 import { EYE_HEIGHT, type Spawn, type Vec3 } from "../types";
-import { DUMMY, ELEMENT_INFO } from "./defs";
+import { DUMMY, ELEMENT_INFO, SLOT_CHARGES } from "./defs";
 import { NEVER, NOBODY, type DummySpot, type Element, type MatchInput, type MatchState, type Statuses, type Unit, type UnitId } from "./types";
 
 export const NO_MATCH_INPUT: Readonly<MatchInput> = Object.freeze({ moveX: 0, moveZ: 0, jump: false, yaw: 0, pitch: 0, primary: false, q: false, e: false, c: false });
 /** Ввод мага, от которого на этом тике ничего не пришло: стоит, кнопки отпущены, смотрит, куда смотрел. */
 export const idleInput = (u: Readonly<Unit>): MatchInput => ({ ...NO_MATCH_INPUT, yaw: u.move.yaw, pitch: u.move.pitch });
-export const freshStatuses = (): Statuses => ({ burnPulses: 0, burnNext: 0, burnBy: NOBODY, slowUntil: 0, slowMul: 1, rootUntil: 0, airborne: false, noControlUntil: 0, immuneUntil: 0, shieldUntil: 0 });
+export const freshStatuses = (): Statuses => ({
+  burnPulses: 0, burnNext: 0, burnBy: NOBODY, slowUntil: 0, slowMul: 1, rootUntil: 0, airborne: false, noControlUntil: 0, immuneUntil: 0, shieldUntil: 0,
+  wetUntil: 0, steamReadyAt: 0, staggerUntil: 0, anchoredUntil: 0,
+});
 
 function baseUnit(id: UnitId, kind: Unit["kind"], pos: Vec3, yaw: number, hp: number): Unit {
-  return { id, kind, move: createPlayer(pos, yaw), hp, maxHp: hp, kb: { x: 0, z: 0 }, status: freshStatuses(), lastHitTick: NEVER, lastHitBy: NOBODY, alive: true, respawnTick: 0, mage: null, dummy: null };
+  return {
+    id, kind, move: createPlayer(pos, yaw), hp, maxHp: hp, kb: { x: 0, z: 0 }, status: freshStatuses(), lastHitTick: NEVER, lastHitBy: NOBODY, alive: true, respawnTick: 0,
+    mage: null, dummy: null, tow: null, slam: null,
+  };
 }
 export function createMageUnit(id: UnitId, element: Element, spawn: Spawn): Unit {
   const u = baseUnit(id, "mage", spawn.pos, spawn.yaw, ELEMENT_INFO[element].hp);
@@ -17,6 +23,8 @@ export function createMageUnit(id: UnitId, element: Element, spawn: Spawn): Unit
     element, ready: { primary: 0, q: 0, e: 0, c: 0 }, held: { primary: false, q: false, e: false, c: false },
     pending: { primary: NEVER, q: NEVER, e: NEVER, c: NEVER }, windup: null,
     heat: 0, overheatUntil: 0, lastShotTick: NEVER, dash: null, spawn: { pos: { ...spawn.pos }, yaw: spawn.yaw }, stats: { damage: 0, kills: 0, falls: 0, deaths: 0 },
+    charges: { ...SLOT_CHARGES[element] }, chargeAt: { primary: NEVER, q: NEVER, e: NEVER, c: NEVER },
+    flight: { doubleJumped: false, glideTicks: 0, gliding: false }, ward: null,
   };
   return u;
 }
@@ -50,7 +58,7 @@ export function rightXZ(yaw: number): { x: number; z: number } {
   return { x: -f.z + 0, z: f.x + 0 };
 }
 export const eyeOf = (u: Unit): Vec3 => ({ x: u.move.body.pos.x, y: u.move.body.pos.y + EYE_HEIGHT, z: u.move.body.pos.z });
-export function statusFlags(u: Unit, now: number): { burning: boolean; slowed: boolean; rooted: boolean; airborne: boolean; shielded: boolean } {
+export function statusFlags(u: Unit, now: number): { burning: boolean; slowed: boolean; rooted: boolean; airborne: boolean; shielded: boolean; wet: boolean } {
   const s = u.status;
-  return { burning: s.burnPulses > 0, slowed: now < s.slowUntil, rooted: now < s.rootUntil, airborne: s.airborne, shielded: now < s.shieldUntil };
+  return { burning: s.burnPulses > 0, slowed: now < s.slowUntil, rooted: now < s.rootUntil, airborne: s.airborne, shielded: now < s.shieldUntil, wet: now < s.wetUntil };
 }

@@ -4,9 +4,7 @@ import { createWorld } from "../world";
 import { stepStatuses } from "./combat";
 import { MATCH, ticks } from "./defs";
 import { buildTickWorld } from "./dynamic";
-import { EARTH_KIT } from "./earth";
-import { FIRE_KIT } from "./fire";
-import type { Kit } from "./kit";
+import { ELEMENT_SIM, SIM_HOOKS } from "./elements";
 import { stepProjectiles } from "./projectiles";
 import { clonePlain, createDummyUnit, createMageUnit, createMatchState, idleInput } from "./state";
 import { stepTerrain } from "./terrain";
@@ -18,8 +16,6 @@ import { stepZones } from "./zones";
  * Шаг матча 60 Гц — чистая функция (состояние, ввод, контекст) → (состояние, события). Её же крутит хост сети.
  * Аргументы не меняются; одинаковые аргументы дают одинаковые до байта JSON состояния и событий.
  */
-
-const KITS: Readonly<Record<Element, Kit>> = Object.freeze({ fire: FIRE_KIT, earth: EARTH_KIT });
 
 /** Статика матча по арене: её мир и высота сброса (низ арены). */
 export function matchContext(arena: ArenaData): MatchContext {
@@ -61,12 +57,12 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
     const pressed: Buttons = { primary: inp.primary && !m.held.primary, q: inp.q && !m.held.q, e: inp.e && !m.held.e, c: inp.c && !m.held.c };
     clean[u.id] = inp;
     m.held = { primary: inp.primary, q: inp.q, e: inp.e, c: inp.c };
-    if (u.alive) KITS[m.element].input(s, t, u, inp, pressed);
+    if (u.alive) ELEMENT_SIM[m.element].kit.input(s, t, u, inp, pressed);
   }
-  for (const u of s.units) if (u.mage && u.alive) KITS[u.mage.element].tick(s, t, u, clean[u.id]!);
-  moveUnits(s, t, clean);
-  stepProjectiles(s, t);
-  stepZones(s, t);
+  for (const u of s.units) if (u.mage && u.alive) ELEMENT_SIM[u.mage.element].kit.tick(s, t, u, clean[u.id]!);
+  moveUnits(s, t, clean, SIM_HOOKS);
+  stepProjectiles(s, t, SIM_HOOKS);
+  stepZones(s, t, SIM_HOOKS);
   stepTerrain(s, t);
   stepStatuses(s, t);
   stepLife(s, t);

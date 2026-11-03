@@ -86,7 +86,7 @@ describe("projectiles", () => {
     expect(hits.get(2)?.amount).toBeCloseTo(FIRE.fireball.damageCenter, 9);
     expect(hits.get(2)?.knock.distM).toBeCloseTo(FIRE.fireball.knockback.distM, 9);
     expect(hits.get(3)?.amount).toBeCloseTo(22, 6);
-    expect(hits.get(3)?.knock.distM).toBeCloseTo(3 * 0.44, 6);
+    expect(hits.get(3)?.knock.distM).toBeCloseTo(FIRE.fireball.knockback.distM * 0.44, 6);
     expect([hits.has(4), byId(s, 2).status.burnPulses > 0]).toEqual([false, true]);
     expect(ev).toContainEqual(expect.objectContaining({ type: "explosion", ability: "fireball", radius: FIRE.fireball.radiusM }));
   });

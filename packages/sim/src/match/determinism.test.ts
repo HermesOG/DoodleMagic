@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { ELEMENT_SIM } from "./elements";
 import { deepFreeze, testContext } from "./fixtures";
+import { NO_KIT } from "./kit";
 import { createMatch, stepMatch } from "./match";
 import { NO_MATCH_INPUT } from "./state";
 import { ELEMENTS, type Element, type MatchEvent, type MatchInput, type MatchState } from "./types";
@@ -26,7 +28,8 @@ describe.each(ELEMENTS)("stepMatch determinism (%s)", (el) => {
   it("gives byte-identical states and events for the same inputs, without mutating them", () => {
     const [a, b] = [runScript(el, 900), runScript(el, 900)];
     expect([JSON.stringify(a.s) === JSON.stringify(b.s), JSON.stringify(a.events) === JSON.stringify(b.events)]).toEqual([true, true]);
-    expect([a.events.filter((e) => e.type === "cast").length > 10, a.events.some((e) => e.type === "hit")]).toEqual([true, true]);
+    // Заглушка стихии (NO_KIT до задач 3–4 фазы 4) не кастует: для неё проверяем только детерминизм движения.
+    if (ELEMENT_SIM[el].kit !== NO_KIT) expect([a.events.filter((e) => e.type === "cast").length > 10, a.events.some((e) => e.type === "hit")]).toEqual([true, true]);
   });
 
   it("continues identically from a JSON copy of the state", () => {

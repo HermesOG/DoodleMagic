@@ -66,6 +66,30 @@ export function emitCast(t: TickCtx, u: Unit, ability: AbilityId, slot: Slot, ai
   t.ev.push({ type: "cast", unit: u.id, ability, slot, pos: { x: aim.eye.x, y: aim.eye.y, z: aim.eye.z }, dir: { x: aim.dir.x, y: aim.dir.y, z: aim.dir.z } });
 }
 
+/**
+ * Тик кита: копит заряды слота по очереди (событие charge на каждый вернувшийся): следующий заряд идёт chargeTicks
+ * после прежнего, все на месте — chargeAt = NEVER. ready[slot] — now, если заряд есть, иначе chargeAt.
+ */
+export function refillCharges(t: TickCtx, u: Unit, slot: Slot, max: number, chargeTicks: number): void {
+  const m = u.mage!;
+  while (m.charges[slot] < max && m.chargeAt[slot] !== NEVER && t.now >= m.chargeAt[slot]) {
+    m.charges[slot] += 1;
+    m.chargeAt[slot] = m.charges[slot] < max ? m.chargeAt[slot] + chargeTicks : NEVER;
+    t.ev.push({ type: "charge", unit: u.id, slot, charges: m.charges[slot] });
+  }
+  m.ready[slot] = m.charges[slot] > 0 ? t.now : m.chargeAt[slot];
+}
+
+/** Потратить заряд: false — нет. Первый потраченный из полных ставит chargeAt = now + chargeTicks. ready следует. */
+export function spendCharge(t: TickCtx, u: Unit, slot: Slot, chargeTicks: number): boolean {
+  const m = u.mage!;
+  if (m.charges[slot] <= 0) return false;
+  m.charges[slot] -= 1;
+  if (m.chargeAt[slot] === NEVER) m.chargeAt[slot] = t.now + chargeTicks;
+  m.ready[slot] = m.charges[slot] > 0 ? t.now : m.chargeAt[slot];
+  return true;
+}
+
 /** Событие reject: нажатие отклонено. */
 export function rejectCast(t: TickCtx, u: Unit, slot: Slot, reason: RejectReason): void {
   t.ev.push({ type: "reject", unit: u.id, slot, reason });

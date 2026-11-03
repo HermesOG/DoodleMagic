@@ -3,8 +3,9 @@ import { DEFAULT_MOVE, NO_INPUT, stepPlayer } from "../player";
 import { groundBelow } from "../raycast";
 import { TICK_DT, type MoveParams, type PlayerInput, type Spawn } from "../types";
 import { volumeAt, type World } from "../world";
-import { courage, respawnAt } from "./combat";
+import { applyHit, courage, endTow, respawnAt } from "./combat";
 import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ticks } from "./defs";
+import { NO_HOOKS, type SimHooks } from "./hooks";
 import { createDummyUnit, createMageUnit, idleInput, rightXZ, unitById } from "./state";
 import { NOBODY, type Element, type MatchInput, type MatchState, type TickCtx, type Unit, type UnitId } from "./types";
 
@@ -25,20 +26,66 @@ const decay = (lambda: number) => Object.freeze({ e: Math.exp(-lambda * TICK_DT)
 const GROUND = decay(KNOCKBACK.groundDecayPerS);
 const AIR = decay(KNOCKBACK.airDecayPerS);
 const FALL_CREDIT_TICKS = ticks(MATCH.fallCreditS); // 300
+/** Буксир упёрся, если за тик продвинулся меньше этой доли шага; дошёл — если до точки осталось не больше этого, м. */
+const TOW_STALL_FRAC = 0.5;
+const TOW_ARRIVE_M = 1e-6;
 
-/** Второй вызов moveBody — по каналу отбрасывания, со своими стенами и ступенькой; заблокированная ось гасит канал. */
-export function moveKnock(world: World, u: Unit): void {
+/**
+ * Второй вызов moveBody — по каналу отбрасывания, со своими стенами и ступенькой; заблокированная ось гасит канал.
+ * Канал гаснет как на полу, если юнит на полу или парит (Р1 фазы 4), иначе как в воздухе.
+ * Удар о стену (Порыв): ось заблокирована на скорости канала до шага ≥ KNOCKBACK.slamMinSpeed и ждёт u.slam — событие
+ * slam и удар его урона (один раз). Скорость ниже порога или канал погас — удар о стену больше не ждёт.
+ */
+export function moveKnock(s: MatchState, t: TickCtx, u: Unit): void {
   const kb = u.kb;
-  if (Math.sqrt(kb.x * kb.x + kb.z * kb.z) < KNOCKBACK.stopSpeed) return void Object.assign(kb, { x: 0, z: 0 });
-  const k = u.move.onGround ? GROUND : AIR;
+  const sp = Math.sqrt(kb.x * kb.x + kb.z * kb.z);
+  if (sp < KNOCKBACK.stopSpeed) {
+    Object.assign(kb, { x: 0, z: 0 });
+    u.slam = null;
+    return;
+  }
+  const k = u.move.onGround || u.mage?.flight.gliding === true ? GROUND : AIR;
   const b = u.move.body;
   const own = b.vel;
   b.vel = { x: kb.x * k.mean, y: 0, z: kb.z * k.mean };
-  const r = moveBody(world, b, TICK_DT, u.move.onGround);
+  const r = moveBody(t.world, b, TICK_DT, u.move.onGround);
+  const blocked = (kb.x !== 0 && b.vel.x === 0) || (kb.z !== 0 && b.vel.z === 0);
   kb.x = b.vel.x === 0 ? 0 : kb.x * k.e;
   kb.z = b.vel.z === 0 ? 0 : kb.z * k.e;
   b.vel = own;
   if (!r.onGround) u.move.onGround = false; // столкнули с края — следующий stepPlayer уже в воздухе
+  const slam = u.slam;
+  if (!slam) return;
+  if (blocked && sp >= KNOCKBACK.slamMinSpeed) {
+    u.slam = null;
+    t.ev.push({ type: "slam", target: u.id, source: slam.by, pos: { x: b.pos.x, y: b.pos.y, z: b.pos.z } });
+    applyHit(s, t, { source: slam.by, target: u.id, ability: slam.ability, damage: slam.damage, pos: { x: b.pos.x, y: b.pos.y + b.height / 2, z: b.pos.z }, dir: { x: 0, z: 0 } });
+  } else if (sp < KNOCKBACK.slamMinSpeed || (kb.x === 0 && kb.z === 0)) u.slam = null;
+}
+
+/**
+ * Шаг буксира (Р5): тянет по XZ к точке буксира со своей скоростью через moveBody, без гравитации (vel.y = 0);
+ * ввод движения и прыжок не действуют, взгляд и jumpHeld — из ввода. Дошёл, упёрся (за тик продвинулся меньше
+ * половины шага) или последний тик (now + 1 ≥ endTick) — endTow.
+ */
+function stepTow(t: TickCtx, u: Unit, inp: PlayerInput): void {
+  const tow = u.tow!;
+  const b = u.move.body;
+  const dx = tow.x - b.pos.x;
+  const dz = tow.z - b.pos.z;
+  const d = Math.sqrt(dx * dx + dz * dz);
+  const step = Math.min(d, tow.speed * TICK_DT);
+  const ux = d > 1e-9 ? dx / d : 0;
+  const uz = d > 1e-9 ? dz / d : 0;
+  const x0 = b.pos.x;
+  const z0 = b.pos.z;
+  b.vel = { x: (ux * step) / TICK_DT, y: 0, z: (uz * step) / TICK_DT };
+  const r = moveBody(t.world, b, TICK_DT, u.move.onGround);
+  b.vel.y = 0;
+  Object.assign(u.move, { onGround: r.onGround, landVel: r.landVel, yaw: inp.yaw, pitch: inp.pitch, jumpHeld: inp.jump });
+  const progress = (b.pos.x - x0) * ux + (b.pos.z - z0) * uz;
+  const arrived = d - progress <= TOW_ARRIVE_M;
+  if (arrived || progress < TOW_STALL_FRAC * step || t.now + 1 >= tow.endTick) endTow(t, u);
 }
 
 /** Насколько дальше передней грани тела манекен смотрит, есть ли впереди опора, м. */
@@ -84,24 +131,35 @@ function dummyInput(world: World, u: Unit): PlayerInput {
 }
 
 /**
- * Шаг движения живых юнитов; маги в рывке пропускаются (их ведёт кит). Обездвиживание и «В воздухе» отнимают шаги и
- * прыжок, но не взгляд. Маг без ввода на этом тике стоит и смотрит, куда смотрел.
+ * Шаг движения живых юнитов; маги в рывке пропускаются (их ведёт кит), юнит на буксире идёт stepTow. Обездвиживание и
+ * «В воздухе» отнимают шаги и прыжок, но не взгляд. Маг без ввода на этом тике стоит и смотрит, куда смотрел.
+ * Порядок у мага: хуки стихии before → params → stepPlayer → after → канал толчка (moveKnock).
  * Манекен, который шагает, но второй тик подряд стоит на месте (до шага и после него скорость по XZ ≈ 0), упёрся в
  * стену или рельеф: он разворачивается. На обычном развороте патруля скорость проходит через 0 только на одном тике.
  */
-export function moveUnits(s: MatchState, t: TickCtx, inputs: Readonly<Partial<Record<UnitId, MatchInput>>>): void {
+export function moveUnits(s: MatchState, t: TickCtx, inputs: Readonly<Partial<Record<UnitId, MatchInput>>>, hooks: SimHooks = NO_HOOKS): void {
   for (const u of s.units) {
     if (!u.alive || (u.mage !== null && u.mage.dash !== null)) continue;
     const st = u.status;
+    if (u.tow) {
+      stepTow(t, u, u.mage ? (inputs[u.id] ?? idleInput(u)) : { ...NO_INPUT, yaw: u.move.yaw, pitch: u.move.pitch });
+      continue;
+    }
     let inp: PlayerInput = u.mage ? (inputs[u.id] ?? idleInput(u)) : dummyInput(t.world, u);
     let p: MoveParams = u.mage ? mageMoveParams(u.mage.element) : DUMMY_MOVE;
     if (t.now < st.rootUntil || t.now < st.noControlUntil) inp = { ...inp, moveX: 0, moveZ: 0, jump: false }; // взгляд не отнимаем (GDD 2.2)
     if (t.now < st.slowUntil) p = { ...p, runSpeed: p.runSpeed * st.slowMul };
+    // K1: после толчка ≥ 1 м своё ускорение ×0,3 (и в воздухе: там оно — доля наземного); торможение без ввода прежнее
+    if (t.now < st.staggerUntil) p = { ...p, groundAccel: p.groundAccel * KNOCKBACK.staggerAccelMul };
+    const h = u.mage ? hooks.move[u.mage.element] : undefined;
+    h?.before?.(u, t, inp);
+    if (h?.params) p = h.params(u, t, inp, p);
     const stillBefore = horizSpeed(u) < STUCK_SPEED;
     u.move = stepPlayer(u.move, inp, TICK_DT, t.world, p);
     if (u.dummy && inp.moveX !== 0 && stillBefore && horizSpeed(u) < STUCK_SPEED) u.dummy.dir = -u.dummy.dir;
     if (t.now < st.rootUntil) Object.assign(u.move.body.vel, { x: 0, z: 0 });
-    moveKnock(t.world, u);
+    h?.after?.(u, t, inp);
+    moveKnock(s, t, u);
   }
 }
 
@@ -141,6 +199,8 @@ function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
   const fresh = createMageUnit(u.id, u.mage.element, at);
   fresh.mage!.stats = { ...u.mage.stats };
   fresh.mage!.ready = { ...u.mage.ready };
+  fresh.mage!.charges = { ...u.mage.charges };
+  fresh.mage!.chargeAt = { ...u.mage.chargeAt };
   // маг встаёт в конце тика now: защита на полные spawnShieldTicks тиков, как у addMage и старта боя
   if (t.spawnShieldTicks > 0) fresh.status.shieldUntil = t.now + 1 + t.spawnShieldTicks;
   return fresh;

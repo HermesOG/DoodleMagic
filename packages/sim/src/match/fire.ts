@@ -1,12 +1,11 @@
-import { moveBody } from "../body";
 import { sanitizeInput } from "../player";
 import { TICK_DT, type Vec3 } from "../types";
 import { aimGround } from "./aim";
+import { dashStarted, endDash, startDash, stepDash, type DashSpec } from "./dash";
 import { FIRE, slotCooldownTicks, ticks } from "./defs";
-import { castAim, castSlots, emitCast, moveDirXZ, snappedWallBox, type Kit, type TryCast } from "./kit";
+import { castAim, castSlots, emitCast, snappedWallBox, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
-import { mageMoveParams } from "./units";
 import { spawnZone } from "./zones";
 
 /**
@@ -28,21 +27,15 @@ const COOL_DELAY_TICKS = ticks(H.coolDelayS); // 18
 const FIREBALL_WINDUP_TICKS = ticks(FIRE.fireball.windupS); // 15
 const FIREBALL_CD = slotCooldownTicks("fire", "q"); // 480
 const DASH_CD = slotCooldownTicks("fire", "e"); // 480
-const DASH_TICKS = ticks(JD.durationS); // 12
-const DASH_SPEED = JD.distM / JD.durationS; // 40 м/с
-const DASH_STEP_M = DASH_SPEED * TICK_DT; // 0,667 м за тик
-/**
- * Упор (правка контролёра после ревью китов): рывок кончается о стену, только если за тик продвинулся вдоль себя
- * меньше этой доли шага (≈ 0,3 м из 0,667). Скольжение вдоль стены под 45° даёт ровно половину шага и идёт дальше;
- * в лоб — около нуля, рывок встаёт у грани.
- */
-const DASH_STALL_FRAC = 0.45;
 const TRAIL_TICKS = ticks(JD.trailS); // 120
 const WALL_CD = slotCooldownTicks("fire", "c"); // 720
 const WALL_TELEGRAPH_TICKS = ticks(FW.telegraphS); // 24
 const WALL_LIFE_TICKS = ticks(FW.lifeS); // 300
-/** На выходе из рывка — скорость бега по его направлению (Р15). */
-const RUN_SPEED = mageMoveParams("fire").runSpeed;
+/** Реактивный рывок (A6 фазы 4): 8 м за 0,2 с, ≈ 62 → 18 м/с по тикам, на выходе 9 м/с, след 2 с. */
+export const FIRE_DASH: Readonly<DashSpec> = Object.freeze({
+  ability: "jetDash", distM: JD.distM, durationS: JD.durationS, profile: JD.profile, exitSpeed: JD.exitSpeed,
+  trail: Object.freeze({ halfWidthM: JD.trailHalfWidthM, lifeS: JD.trailS }),
+});
 
 const copy = (v: Vec3): Vec3 => ({ x: v.x, y: v.y, z: v.z });
 
@@ -90,21 +83,10 @@ function fireball(_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectR
   return null;
 }
 
-/** Конец рывка: скорость бега по направлению, след догорает до trailEnd, событие dash/end. */
-function endDash(s: MatchState, t: TickCtx, u: Unit, trailEnd: number): void {
-  const m = u.mage!;
-  const d = m.dash!;
-  const b = u.move.body;
-  b.vel = { x: d.dirX * RUN_SPEED, y: 0, z: d.dirZ * RUN_SPEED };
-  const trail = s.zones.find((z) => z.id === d.trailZone);
-  if (trail) trail.endTick = trailEnd;
-  t.ev.push({ type: "dash", unit: u.id, phase: "end", pos: copy(b.pos), dir: { x: d.dirX, y: 0, z: d.dirZ } });
-  m.dash = null;
-}
-
 /**
- * E: 8 м за 0,2 с по вводу движения (без ввода — вперёд), и в воздухе. Замах не мешает (Р14), обездвиживание и
- * «В воздухе» — мешают. Гасит своё отбрасывание (Р15). След — отрезок от старта, его конец тянется за магом.
+ * E: 8 м за 0,2 с по вводу движения (без ввода — вперёд), и в воздухе (dash.ts, профиль A6). Замах не мешает (Р14),
+ * обездвиживание и «В воздухе» — мешают. Гасит своё отбрасывание (Р15) и обрывает буксир (Р22 фазы 4).
+ * След — отрезок от старта, его конец тянется за магом.
  */
 function jetDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const m = u.mage!;
@@ -112,19 +94,11 @@ function jetDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRea
   if (now < u.status.rootUntil || now < u.status.noControlUntil) return "rooted";
   if (now < m.ready.e) return "cooldown";
   // «Кураж» перезарядил E посреди рывка: прежний рывок кончается здесь, его след догорает 2 с
-  if (m.dash) endDash(s, t, u, now + TRAIL_TICKS);
-  const dir = moveDirXZ(inp);
+  if (m.dash) endDash(s, t, u, FIRE_DASH, now + TRAIL_TICKS);
   m.ready.e = now + DASH_CD;
-  u.kb.x = 0;
-  u.kb.z = 0;
-  const p = u.move.body.pos;
-  const trailZone = spawnZone(s, t, {
-    owner: u.id, kind: "fireTrail", ability: "jetDash", shape: { type: "segment", a: copy(p), b: copy(p), halfW: JD.trailHalfWidthM },
-    bornTick: now, armTick: now, endTick: now + DASH_TICKS + TRAIL_TICKS,
-  });
-  m.dash = { dirX: dir.x, dirZ: dir.z, endTick: now + DASH_TICKS, trailZone };
+  startDash(s, t, u, inp, FIRE_DASH);
   emitCast(t, u, "jetDash", "e", castAim(u, inp));
-  t.ev.push({ type: "dash", unit: u.id, phase: "start", pos: copy(p), dir: { x: dir.x, y: 0, z: dir.z } });
+  dashStarted(t, u);
   return null;
 }
 
@@ -145,26 +119,6 @@ function fireWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRe
   m.ready.c = now + WALL_CD;
   emitCast(t, u, "fireWall", "c", castAim(u, inp));
   return null;
-}
-
-/**
- * Шаг рывка: горизонтально, без гравитации, через moveBody со стенами (moveUnits мага в рывке пропускает).
- * Взгляд не отнимаем: stepPlayer в эти тики не идёт, поэтому yaw и pitch тела берём из ввода.
- * Скорость рывка ставится заново каждый тик: задетая вскользь стена гасит только свою составляющую, и маг скользит
- * вдоль неё. Конец рывка — последний тик или упор: за тик продвинулся вдоль рывка меньше DASH_STALL_FRAC шага.
- */
-function stepDash(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
-  const d = u.mage!.dash!;
-  const b = u.move.body;
-  const x0 = b.pos.x;
-  const z0 = b.pos.z;
-  b.vel = { x: d.dirX * DASH_SPEED, y: 0, z: d.dirZ * DASH_SPEED };
-  const r = moveBody(t.world, b, TICK_DT, u.move.onGround);
-  Object.assign(u.move, { onGround: r.onGround, landVel: r.landVel, yaw: inp.yaw, pitch: inp.pitch });
-  const trail = s.zones.find((z) => z.id === d.trailZone);
-  if (trail && trail.shape.type === "segment") trail.shape.b = copy(b.pos);
-  const progress = (b.pos.x - x0) * d.dirX + (b.pos.z - z0) * d.dirZ;
-  if (progress < DASH_STALL_FRAC * DASH_STEP_M || t.now + 1 >= d.endTick) endDash(s, t, u, t.now + 1 + TRAIL_TICKS);
 }
 
 /** Слоты Огня для castSlots: он же держит буфер нажатий и пишет отказы. */
@@ -193,6 +147,6 @@ export const FIRE_KIT: Kit = Object.freeze({
     // Жар (Р5): в перегреве — линейно от 100 до 0 по оставшемуся времени; иначе остывает 35/с через 0,3 с без выстрела.
     if (now < m.overheatUntil) m.heat = (H.max * (m.overheatUntil - now)) / OVERHEAT_TICKS;
     else if (now - m.lastShotTick > COOL_DELAY_TICKS) m.heat = Math.max(0, m.heat - H.coolPerS * TICK_DT);
-    if (m.dash) stepDash(s, t, u, inp);
+    if (m.dash) stepDash(s, t, u, inp, FIRE_DASH);
   },
 });
