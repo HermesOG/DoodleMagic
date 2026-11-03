@@ -21,6 +21,8 @@ const V = (x = 0, y = 0, z = 0) => ({ x, y, z });
 const ME = 1;
 const view = { localId: ME, state: createMatchState([createMageUnit(ME, "air", { pos: V(), yaw: 0 }), createMageUnit(2, "water", { pos: V(6, 0, -8), yaw: 0 })]) };
 const cast: MatchEvent = { type: "cast", unit: ME, ability: "gust", slot: "q", pos: V(0, 1.6, 0), dir: V(0, 0, -1) };
+/** Каст не Воздуха и не Воды: файлы стихий его не берут. */
+const fireCast: MatchEvent = { type: "cast", unit: ME, ability: "fireball", slot: "q", pos: V(0, 1.6, 0), dir: V(0, 0, -1) };
 let seed = 1;
 const rng = (): number => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
 
@@ -58,7 +60,8 @@ describe("element registries: every id of the four elements has its entry", () =
       const done = stepGestures(startGesture(createGestures(), a), 1.5);
       expect([...Object.values(done.pose.right), ...Object.values(done.pose.left)].every((v) => Math.abs(v) < 1e-6), a).toBe(true);
     }
-    expect(ABILITY_IDS.filter(isFistGesture)).toEqual(["fireFists"]);
+    // по очереди руками бьют кулаки Огня и серп Воздуха (задача 5)
+    expect(ABILITY_IDS.filter(isFistGesture)).toEqual(["fireFists", "airSickle"]);
   });
 
   it("every projectile kind has a look and a trail", () => {
@@ -91,9 +94,10 @@ describe("element registries: every id of the four elements has its entry", () =
 });
 
 describe("elementEffects", () => {
-  it("the stubs take nothing: the shared map answers, and the frame hook is silent", () => {
-    expect(elementEffects(cast, view, view.state.units[0])).toBeNull();
+  it("a neutral event goes to the shared map, Air's own to the Air file; the frame hook is silent on a quiet state", () => {
+    expect(elementEffects(fireCast, view, view.state.units[0])).toBeNull();
     expect(effectsFor(cast, view)[0]).toEqual({ kind: "gesture", ability: "gust" });
+    expect(elementEffects(cast, view, view.state.units[0])).not.toBeNull();
     expect(elementFrameEffects({ prev: view.state, cur: view.state, alpha: 0.5, localId: ME, nowS: 1, dtS: 1 / 60 })).toEqual([]);
   });
 
@@ -101,10 +105,10 @@ describe("elementEffects", () => {
     const air: Effect[] = [{ kind: "toast", text: "Воздух" }];
     const water: Effect[] = [{ kind: "toast", text: "Вода" }];
     const w = vi.spyOn(waterFx, "waterEffects").mockReturnValue(water);
-    expect(effectsFor(cast, view)).toBe(water);
+    expect(effectsFor(fireCast, view)).toBe(water);
     const a = vi.spyOn(airFx, "airEffects").mockReturnValue(air);
-    expect(effectsFor(cast, view)).toBe(air);
-    expect(a).toHaveBeenCalledWith(cast, view, view.state.units[0]);
+    expect(effectsFor(fireCast, view)).toBe(air);
+    expect(a).toHaveBeenCalledWith(fireCast, view, view.state.units[0]);
     expect(w).toHaveBeenCalledTimes(1);
   });
 
@@ -117,12 +121,16 @@ describe("elementEffects", () => {
   });
 
   it("the shared map: Swoop's dash is Air's, phase-4 events have no shared response, death bursts by the killer's element", () => {
-    expect(effectsFor({ type: "dash", unit: ME, ability: "swoop", phase: "start", pos: V(), dir: V(1, 0, 0) }, view)).toEqual([]);
-    const quiet: MatchEvent[] = [
-      { type: "beam", unit: ME, ability: "gust", from: V(), to: V(0, 0, -7), target: 2 },
+    // Взмах, второй прыжок, парение и заряд — события Воздуха: отвечает его файл (задача 5)
+    expect(effectsFor({ type: "dash", unit: ME, ability: "swoop", phase: "start", pos: V(), dir: V(1, 0, 0) }, view)[0]).toEqual({ kind: "fov", deg: 8 });
+    for (const ev of [
       { type: "airJump", unit: ME, pos: V() },
       { type: "glide", unit: ME, on: true, pos: V() },
       { type: "charge", unit: ME, slot: "e", charges: 2 },
+    ] as MatchEvent[])
+      expect(elementEffects(ev, view, view.state.units[0]), ev.type).not.toBeNull();
+    const quiet: MatchEvent[] = [
+      { type: "beam", unit: ME, ability: "gust", from: V(), to: V(0, 0, -7), target: 2 },
       { type: "ward", unit: 2, phase: "up", absorbed: 0 },
       { type: "heal", target: 2, source: 2, amount: 3, pos: V() },
       { type: "reaction", kind: "steam", owner: 2, zone: 5, pos: V() },

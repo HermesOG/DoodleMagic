@@ -3,31 +3,63 @@ import type { AIR_BURST_PRESETS } from "../feel/airIds";
 import { FX_COLOR, L, UP, spawn, type Layer, type PalmLayers, type ProjectileLook, type TrailFn } from "./particleKit";
 
 /*
- * Частицы Воздуха. Заглушка до задачи 5: всплески — облачко ветра, ладонь — штрихи ветра, след серпа — ветер.
- * Задача 5 правит только этот файл.
+ * Частицы Воздуха (02-air, «Читается»): бледно-лавандовые штрихи ветра без тяжести, пыль цвета бумаги у пола.
+ * Воздух не светит на мир — свет только у огненного смерча (пламя в столбе).
  */
 
-const puff = (n: number): readonly Layer[] => [L("wind", n, "sphere", [1, 3], [0.3, 0.5], [0.15, 0.25], [0.4, 0.6])];
-
 export const AIR_BURSTS: Readonly<Record<(typeof AIR_BURST_PRESETS)[number], readonly Layer[]>> = {
-  sicklePuff: puff(10),
-  gustBlast: puff(16),
-  airBlown: puff(10),
-  airSlam: puff(16),
-  swoopWake: puff(12),
-  airJumpRing: puff(10),
-  tornadoDust: puff(16),
-  fireTornadoFlare: puff(16),
-  deathAir: puff(30),
+  // серп попал: облачко штрихов от точки
+  sicklePuff: [L("wind", 12, "hemi", [1.5, 3.5], [0.2, 0.35], [0.08, 0.12], [0.25, 0.4])],
+  // последние 0,2 с замаха Порыва: веер штрихов по полу в сторону взгляда (конус ±30°) и пыль
+  gustFan: [
+    L("wind", 30, "cone", [6, 10], [0.2, 0.35], [0.05, 0.08], [0.25, 0.4], { cone: 0.5, gravity: 0 }),
+    L("dust", 10, "cone", [2, 4], [0.3, 0.5], [0.08, 0.14], [0.3, 0.5], { cone: 0.5, r0: 0.3 }),
+  ],
+  // выпуск Порыва: удар ветра конусом на 7 м и пыль
+  gustBlast: [
+    L("wind", 46, "cone", [10, 16], [0.3, 0.45], [0.08, 0.14], [0.45, 0.8], { cone: 0.5 }),
+    L("dust", 12, "cone", [3, 6], [0.4, 0.7], [0.1, 0.2], [0.45, 0.8], { cone: 0.6 }),
+  ],
+  // снаряд сдуло: клочья ветра в точке снаряда
+  airBlown: [L("wind", 16, "sphere", [2, 4], [0.2, 0.35], [0.08, 0.12], [0.3, 0.5])],
+  // удар о стену: хлопок ветра и пыль
+  airSlam: [
+    L("wind", 22, "hemi", [3, 6], [0.25, 0.4], [0.1, 0.15], [0.4, 0.7]),
+    L("dust", 18, "hemi", [1.5, 3], [0.5, 0.8], [0.15, 0.25], [0.5, 0.9]),
+  ],
+  // Взмах: полоса ветра за спиной рывка
+  swoopWake: [L("wind", 24, "cone", [2, 5], [0.3, 0.5], [0.08, 0.14], [0.4, 0.6], { cone: 0.4, r0: 0.3 })],
+  // второй прыжок: хлопок-кольцо воздуха под ногами
+  airJumpRing: [
+    L("wind", 26, "ring", [3, 5], [0.2, 0.35], [0.06, 0.1], [0.25, 0.4], { r0: 0.2, r1: 0.4 }),
+    L("dust", 8, "ring", [1.5, 2.5], [0.3, 0.5], [0.08, 0.14], [0.3, 0.45], { r0: 0.2, r1: 0.4 }),
+  ],
+  // Смерч рождается: кольцо пыли и штрихов на весь диск (5 м)
+  tornadoDust: [
+    L("dust", 40, "ring", [0.5, 1.5], [0.6, 1], [0.2, 0.35], [0.6, 1], { r0: 1.5, r1: 5, up: 0.8 }),
+    L("wind", 30, "ring", [1, 2.5], [0.4, 0.7], [0.08, 0.14], [0.4, 0.7], { r0: 1, r1: 5, up: 1.5 }),
+  ],
+  // огненный смерч загорелся: пламя столбом, искры
+  fireTornadoFlare: [
+    L("flame", 40, "up", [3, 6], [0.4, 0.7], [0.25, 0.4], [0.5, 0.9], { r0: 1.4, cone: 0.25 }),
+    L("glow", 20, "up", [4, 8], [0.3, 0.5], [0.1, 0.18], [0.2, 0.35], { r0: 1.2, cone: 0.3 }),
+    L("ember", 20, "up", [5, 9], [0.5, 0.9], [0.03, 0.05], [0.02, 0.03], { r0: 1.2, cone: 0.5 }),
+  ],
+  // смерть от Воздуха: тело разносит штрихами ветра
+  deathAir: [
+    L("wind", 50, "sphere", [2, 5], [0.4, 0.7], [0.1, 0.16], [0.4, 0.7], { r0: 0.4, up: 1 }),
+    L("dust", 12, "sphere", [1, 2], [0.5, 0.8], [0.15, 0.25], [0.5, 0.8], { r0: 0.4 }),
+  ],
 };
 
 export const AIR_PALM: PalmLayers = {
   flash: [L("wind", 8, "cone", [0.3, 0.8], [0.15, 0.25], [0.02, 0.03], [0.05, 0.07], { cone: 0.7 })],
-  charge: [L("wind", 10, "converge", [0, 0], [0.18, 0.24], [0.02, 0.03], [0.012, 0.018], { r0: 0.12 })],
+  // замах Порыва: у ладоней 0,4 с сходится кольцо штрихов
+  charge: [L("wind", 16, "converge", [0, 0], [0.32, 0.4], [0.015, 0.025], [0.01, 0.015], { r0: 0.16 })],
   fizzle: [L("wind", 5, "up", [0.08, 0.2], [0.3, 0.45], [0.02, 0.03], [0.05, 0.07], { r0: 0.02 })],
 };
 
-const SICKLE_WIND = L("wind", 1, "sphere", [0.05, 0.3], [0.2, 0.35], [0.08, 0.12], [0.2, 0.3]);
+const SICKLE_WIND = L("wind", 1, "sphere", [0.05, 0.3], [0.2, 0.35], [0.06, 0.1], [0.18, 0.28]);
 
 export const AIR_TRAILS: Readonly<Partial<Record<ProjectileKind, TrailFn>>> = {
   airSickle: (a, b, n, rng) => {
@@ -40,6 +72,7 @@ export const AIR_TRAILS: Readonly<Partial<Record<ProjectileKind, TrailFn>>> = {
   },
 };
 
+/** Серп — свечение без ядра (бледно-лавандовый штрих), на мир не светит. */
 export const AIR_PROJECTILE_LOOK: Readonly<Partial<Record<ProjectileKind, ProjectileLook>>> = {
-  airSickle: { mesh: "sphere", core: 0.14, halo: 0.5, color: FX_COLOR.air, light: 0, intensity: 0.8, whiteCore: 0.3, trailEveryM: 0.3 },
+  airSickle: { mesh: "none", core: 0.14, halo: 0.55, color: FX_COLOR.air, light: 0, intensity: 0.9, whiteCore: 0.35, trailEveryM: 0.25 },
 };
