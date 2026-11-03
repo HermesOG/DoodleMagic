@@ -225,7 +225,7 @@ function closestOnBox(p: Vec3, box: AABB): Vec3 {
 function rampart(s: MatchState, t: TickCtx, u: Unit, f: { x: number; z: number }, eye: Vec3): void {
   for (const q of [...s.zones]) {
     if (q.kind !== "fireWall" || q.shape.type !== "box" || t.now < q.armTick || !s.zones.includes(q)) continue;
-    if (q.owner === u.id && q.drift) continue;
+    if (q.owner === u.id && q.drift && t.now < q.drift.untilTick) continue;
     const box = q.shape.box;
     if (!gustTouchesBox(u.move.body.pos, f, box) || !clearShot(t, eye, closestOnBox(eye, box))) continue;
     adoptZone(s, t, q, u.id);

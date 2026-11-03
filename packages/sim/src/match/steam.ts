@@ -56,7 +56,10 @@ export function boilOffByBlast(s: MatchState, t: TickCtx, owner: UnitId, ability
   for (const z of armedSprings(s, t.now)) {
     if (z.shape.type !== "disc") continue;
     const c = z.shape.center;
-    const dh = Math.max(0, Math.hypot(pos.x - c.x, pos.z - c.z) - z.shape.radius);
+    // Math.hypot в sim не используем: его результат разный в разных JS-движках (см. vec.ts)
+    const ex = pos.x - c.x;
+    const ez = pos.z - c.z;
+    const dh = Math.max(0, Math.sqrt(ex * ex + ez * ez) - z.shape.radius);
     const dy = pos.y - c.y;
     if (dh * dh + dy * dy <= r * r) boilOff(s, t, z, owner, ability);
   }
@@ -76,6 +79,8 @@ export function boilOffByWall(s: MatchState, t: TickCtx, wall: Zone): void {
     if (c.y < b.min.y - SP.heightM || c.y > b.max.y) continue;
     const nx = Math.max(b.min.x, Math.min(b.max.x, c.x));
     const nz = Math.max(b.min.z, Math.min(b.max.z, c.z));
-    if (Math.hypot(nx - c.x, nz - c.z) <= z.shape.radius) boilOff(s, t, z, wall.owner, wall.ability);
+    const wx = nx - c.x;
+    const wz = nz - c.z;
+    if (Math.sqrt(wx * wx + wz * wz) <= z.shape.radius) boilOff(s, t, z, wall.owner, wall.ability);
   }
 }
