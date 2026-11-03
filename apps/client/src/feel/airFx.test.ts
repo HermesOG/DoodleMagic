@@ -4,7 +4,7 @@ import { AIR_RECIPES, AIR_SOUND_LABELS } from "../audio/airRecipes";
 import { RECIPES, bandOf, recipeLength } from "../audio/recipes";
 import { MAX_BURST, burstParticles } from "../fx/presets";
 import { createGestures, startGesture, stepGestures } from "../hands/gestures";
-import { FAN_TICKS, airEffects, createAirFrame } from "./airFx";
+import { FAN_SLACK_TICKS, FAN_TICKS, airEffects, createAirFrame } from "./airFx";
 import { AIR_BURST_PRESETS, AIR_SOUND_IDS } from "./airIds";
 import type { Effect, EffectKind } from "./effects";
 import type { FrameView } from "./elementFx";
@@ -210,6 +210,20 @@ describe("airFrame", () => {
     expect(bursts(fan)).toEqual(["gustFan"]);
     expect(step(frame(windup(101, 100 + FAN_TICKS), 0.04))).toEqual([]);
     expect(bursts(step(frame(windup(200, 210), 0.1)))).toEqual(["gustFan"]);
+  });
+
+  it("a PvP rebase shifting the release by up to 2 ticks inside the fan window does not fire a second fan", () => {
+    const step = createAirFrame();
+    const windup = (tick: number, release: number): MatchState => {
+      const s = { ...base(), tick };
+      s.units.find((q) => q.id === OTHER)!.mage!.windup = { ability: "gust", slot: "q", releaseTick: release };
+      return s;
+    };
+    expect(bursts(step(frame(windup(100, 110), 0)))).toEqual(["gustFan"]);
+    expect(step(frame(windup(101, 110 + FAN_SLACK_TICKS), 0.02))).toEqual([]);
+    expect(step(frame(windup(102, 110), 0.04))).toEqual([]);
+    expect(step(frame(windup(103, 111), 0.06))).toEqual([]);
+    expect(step(frame(windup(104, 113), 0.08))).toEqual([]);
   });
 });
 

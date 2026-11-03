@@ -21,6 +21,8 @@ export const GLIDE_GRAIN_S = 0.35;
 export const HUM_GRAIN_S = 0.5;
 /** Веер штрихов по полу — последние 0,2 с замаха Порыва (12 тиков). */
 export const FAN_TICKS = 12;
+/** Перебазирование PvP сдвигает releaseTick замаха на тик-другой: это всё тот же замах, второго веера нет. */
+export const FAN_SLACK_TICKS = 2;
 
 const sound = (id: SoundId, pos: Vec3 | null = null, gain = 1): Effect => ({ kind: "sound", id, pos, gain });
 const ownSound = (id: SoundId, pos: Vec3, own: boolean): Effect => (own ? { kind: "sound", id, pos, gain: 1, floor: OWN_FLOOR } : sound(id, pos));
@@ -149,7 +151,8 @@ export function airEffects(ev: MatchEvent, view: EventView, me: Unit | undefined
 
 /**
  * Покадровые эффекты Воздуха со своей памятью: зёрна парения (раз в 0,35 с на мага, и после мигания парения тоже),
- * гул Смерча (раз в 0,5 с на вихрь, позиционно), веер Порыва (раз на замах, за ≤ 12 тиков до выпуска).
+ * гул Смерча (раз в 0,5 с на вихрь, позиционно), веер Порыва (раз на замах, за ≤ 12 тиков до выпуска; выпуск,
+ * сдвинутый перебазированием не дальше ±2 тиков, — тот же замах).
  */
 export function createAirFrame(): (f: FrameView) => Effect[] {
   const glideAt = new Map<UnitId, number>();
@@ -175,8 +178,10 @@ export function createAirFrame(): (f: FrameView) => Effect[] {
         }
       }
       const w = m.windup;
-      if (w && w.ability === "gust" && w.releaseTick - s.tick <= FAN_TICKS && fanFor.get(u.id) !== w.releaseTick) {
-        fanFor.set(u.id, w.releaseTick);
+      if (w && w.ability === "gust" && w.releaseTick - s.tick <= FAN_TICKS) {
+        const fanned = fanFor.get(u.id);
+        fanFor.set(u.id, w.releaseTick); // следим за сдвигом: два перебазирования подряд — всё ещё тот же замах
+        if (fanned !== undefined && Math.abs(w.releaseTick - fanned) <= FAN_SLACK_TICKS) continue;
         const fw = forwardXZ(u.move.yaw);
         const p = u.move.body.pos;
         out.push(burst("gustFan", { x: p.x + fw.x * 0.6, y: p.y + 0.05, z: p.z + fw.z * 0.6 }, { x: fw.x, y: 0.04, z: fw.z }));
