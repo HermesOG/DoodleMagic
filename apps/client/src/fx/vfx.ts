@@ -1,6 +1,7 @@
 import { Group, Scene, Vector3, type PerspectiveCamera } from "three";
 import { ELEMENT_INFO, TICK_HZ, statusFlags, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
-import type { BurstPreset, Effect } from "../feel/effects";
+import type { BurstPreset, Effect, FeelTier } from "../feel/effects";
+import { TIERS } from "../feel/eventMap";
 import { stepSpring, type Spring } from "../hands/spring";
 import type { PresetId } from "../render/quality";
 import { HANDS_FOV, WORLD_FOV, type FxLayers, type StyleRenderer } from "../render/styleRenderer";
@@ -65,7 +66,20 @@ const LEAN_MAX = 20 * DEG;
 const LEAN_OMEGA = 11;
 /** Вздрагивание от удара: пик 10–15° (пружина stepSpring, толчок скорости). */
 const FLINCH_OMEGA = 13;
-const FLASH_S = 0.06;
+/** Вспышка цели по ступени удара, с (round3/01, H2): малая 60 мс, средняя 100, крупная 130. */
+export const FLASH_S: Readonly<Record<FeelTier, number>> = { none: 0.06, small: 0.06, medium: 0.1, large: 0.13 };
+/** После паузы цель догоняет настоящее положение за столько секунд. */
+const CATCH_UP_S = 0.06;
+
+/**
+ * Пауза рендера цели и длина вспышки по попаданию (H2). Ступень — по силе вздрагивания из карты событий (0,1 —
+ * основная атака, больше — способность), у кулака Огня паузы нет (темп). Пауза — та же, что hitstop ступени.
+ */
+export function hitFreeze(flinchAmount: number, shooter: Element | null): { tier: FeelTier; freezeS: number; flashS: number } {
+  const tier: FeelTier = flinchAmount <= 0.15 ? "small" : flinchAmount < 0.7 ? "medium" : "large";
+  const ms = tier === "small" && shooter === "fire" ? 0 : TIERS[tier].hitstopMs;
+  return { tier, freezeS: ms / 1000, flashS: FLASH_S[tier] };
+}
 /** Чужих магов на экране — не больше (комната до 6 магов, свой не рисуется). */
 const MAX_MAGES = 6;
 /** Фаза шага на метр пути: полный цикл (два шага) — на 2,2 м, на беге ≈ 3 шага в секунду. */
@@ -119,6 +133,11 @@ interface DummyAnim {
   speed: number;
   airS: number;
   last: Vec3 | null;
+  /** Пауза рендера (H2): до freezeUntil поза и место стоят в frozen, потом догоняют за CATCH_UP_S. */
+  flashAt: number;
+  freezeUntil: number;
+  frozenSet: boolean;
+  frozen: { x: number; y: number; z: number; yaw: number; pitch: number };
 }
 
 interface Flash {
@@ -219,6 +238,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const flashes: Flash[] = [];
   const palms = { right: new Vector3(REST_PALM.x, REST_PALM.y, REST_PALM.z), left: new Vector3(-REST_PALM.x, REST_PALM.y, REST_PALM.z) };
   let lastPalmHand: "left" | "right" = "right";
+  /** Стихия своего мага (из прошлого кадра) — у кулака Огня нет паузы цели. */
+  let localElement: Element | null = null;
   let lastNowS: number | null = null;
   const tmp = new Vector3();
   const eye = new Vector3();
@@ -232,6 +253,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       a = {
         sx: { x: 0, v: 0 }, sz: { x: 0, v: 0 }, kick: { x: 0, v: 0 }, squash: { x: 0, v: 0 },
         flashUntil: -1, lastBurnS: -1, landTick: -1, seen: true, stride: 0, speed: 0, airS: 0, last: null,
+        flashAt: -1, freezeUntil: -1, frozenSet: false, frozen: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 },
       };
       anims.set(id, a);
     }
@@ -262,11 +284,20 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           lastPalmHand = hands[hands.length - 1]!;
           break;
         }
-        case "flash":
-          anim(e.target).flashUntil = nowS + FLASH_S;
+        case "flash": {
+          const a = anim(e.target);
+          a.flashAt = nowS;
+          a.flashUntil = Math.max(a.flashUntil, nowS + FLASH_S.small);
           break;
+        }
         case "flinch": {
           const a = anim(e.target);
+          // вздрагивание того же кадра, что вспышка, — попадание: ступень задаёт паузу цели и длину вспышки
+          if (a.flashAt === nowS) {
+            const h = hitFreeze(e.amount, localElement);
+            a.flashUntil = Math.max(a.flashUntil, nowS + h.flashS);
+            if (h.freezeS > 0) a.freezeUntil = Math.max(a.freezeUntil, nowS + h.freezeS);
+          }
           const l = Math.hypot(e.dir.x, e.dir.z);
           const dx = l > 1e-6 ? e.dir.x / l : 0;
           const dz = l > 1e-6 ? e.dir.z / l : -1;
@@ -324,29 +355,57 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         const flags = statusFlags(u, v.cur.tick);
         if (flags.rooted) roots.push({ center: { x: it.pos.x, y: it.pos.y, z: it.pos.z }, radius: 0.65 });
         const mage = u.kind === "mage";
+        if (u.id === v.localId) localElement = u.mage?.element ?? null;
         // свой маг — руки от первого лица, его фигуры нет
         if (mage && (u.id === v.localId || mageViews.length >= MAX_MAGES)) continue;
         const a = anim(u.id);
         a.seen = true;
+        // пауза цели (H2): поза и место стоят, пружины не идут; потом цель «выстреливает» и догоняет
+        const frozen = v.nowS < a.freezeUntil;
+        const da = frozen ? 0 : dt;
         // наклон по отбрасыванию и толчок удара — у манекенов и магов одинаково
         const kb = Math.hypot(u.kb.x, u.kb.z);
         const lean = Math.min(LEAN_MAX, kb * LEAN_PER_MPS);
         const tx = kb > 1e-4 ? (lean * u.kb.z) / kb : 0;
         const tz = kb > 1e-4 ? (-lean * u.kb.x) / kb : 0;
-        a.sx = stepSpring(a.sx, tx, LEAN_OMEGA, dt);
-        a.sz = stepSpring(a.sz, tz, LEAN_OMEGA, dt);
-        a.kick = stepSpring(a.kick, 0, FLINCH_OMEGA, dt);
+        a.sx = stepSpring(a.sx, tx, LEAN_OMEGA, da);
+        a.sz = stepSpring(a.sz, tz, LEAN_OMEGA, da);
+        a.kick = stepSpring(a.kick, 0, FLINCH_OMEGA, da);
         const leanX = Math.max(-LEAN_MAX * 1.6, Math.min(LEAN_MAX * 1.6, a.sx.x));
         const leanZ = Math.max(-LEAN_MAX * 1.6, Math.min(LEAN_MAX * 1.6, a.sz.x));
         const pos = { x: it.pos.x, y: it.pos.y, z: it.pos.z };
+        const fz = a.frozen;
+        if (frozen && !a.frozenSet) {
+          a.frozenSet = true;
+          fz.x = pos.x;
+          fz.y = pos.y;
+          fz.z = pos.z;
+          fz.yaw = u.move.yaw;
+          fz.pitch = u.move.pitch;
+        }
+        // 0 — стоит в паузе, 1 — живое положение
+        let live = 1;
+        if (a.frozenSet) {
+          live = frozen ? 0 : Math.min(1, (v.nowS - a.freezeUntil) / CATCH_UP_S);
+          if (live >= 1) a.frozenSet = false;
+          else {
+            const k = live * live * (3 - 2 * live);
+            pos.x = fz.x + (pos.x - fz.x) * k;
+            pos.y = fz.y + (pos.y - fz.y) * k;
+            pos.z = fz.z + (pos.z - fz.z) * k;
+            live = k;
+          }
+        }
         if (mage) {
           // взгляд — между тиками по короткой дуге; новый или прыгнувший (возрождение) — сразу как в cur
           const pu = prevUnits.get(u.id);
           const pp = pu?.move.body.pos;
           const cp = u.move.body.pos;
           const fresh = !pu || !pp || Math.hypot(cp.x - pp.x, cp.y - pp.y, cp.z - pp.z) > SNAP_M;
-          const yaw = fresh ? u.move.yaw : lerpAngle(pu.move.yaw, u.move.yaw, v.alpha);
-          const pitch = fresh ? u.move.pitch : pu.move.pitch + (u.move.pitch - pu.move.pitch) * v.alpha;
+          const yawNow = fresh ? u.move.yaw : lerpAngle(pu.move.yaw, u.move.yaw, v.alpha);
+          const pitchNow = fresh ? u.move.pitch : pu.move.pitch + (u.move.pitch - pu.move.pitch) * v.alpha;
+          const yaw = live < 1 ? lerpAngle(fz.yaw, yawNow, live) : yawNow;
+          const pitch = live < 1 ? fz.pitch + (pitchNow - fz.pitch) * live : pitchNow;
           // фаза шага копится по пройденному пути; скачок дальше SNAP_M — не шаг
           if (a.last) {
             const d = Math.hypot(pos.x - a.last.x, pos.z - a.last.z);
@@ -355,8 +414,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           a.last = pos;
           // размах ног — от своей скорости бега; отбрасывание несёт мага, ногами он не бежит
           const run = u.kb.x === 0 && u.kb.z === 0 ? Math.hypot(u.move.body.vel.x, u.move.body.vel.z) : 0;
-          a.speed += (run - a.speed) * (1 - Math.exp(-dt / SPEED_TAU_S));
-          a.airS = u.move.onGround ? 0 : a.airS + dt;
+          a.speed += (run - a.speed) * (1 - Math.exp(-da / SPEED_TAU_S));
+          a.airS = u.move.onGround ? 0 : a.airS + da;
           const element: Element = u.mage?.element ?? "fire";
           const pose: MagePose = {
             pos,
@@ -389,11 +448,11 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             a.landTick = v.cur.tick;
             a.squash = { x: a.squash.x, v: a.squash.v - Math.min(4, -u.move.landVel * 0.35) };
           }
-          a.squash = stepSpring(a.squash, 0, 18, dt);
+          a.squash = stepSpring(a.squash, 0, 18, da);
           views.push({
             pose: {
               pos,
-              yaw: u.move.yaw,
+              yaw: live < 1 ? lerpAngle(fz.yaw, u.move.yaw, live) : u.move.yaw,
               leanX,
               leanZ,
               flinch: a.kick.x,
