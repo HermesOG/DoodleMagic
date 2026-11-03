@@ -15,7 +15,10 @@ import { createGlowMeshes, cullGlows, type Glow } from "./glows";
 import { SNAP_M, handToWorldView, lerpById, muzzleBlend, renderTick } from "./interp";
 import { createMageMeshes, mageHands, mageLineScale, type MagePose } from "./mageMeshes";
 import { createParticlePool } from "./particles";
-import { BURST_SHARE, FX_COLOR, MAGIC_LIGHTS, burstParticles, lineFlames, palmParticles, poolCaps, thinParticles, trailParticles, type ParticleSpec } from "./presets";
+import {
+  BURST_SHARE, FX_COLOR, IDLE_PALM_RATE, KNOCK_DUST_RATE, MAGIC_LIGHTS, PEBBLE_RATE, burstParticles, idlePalmParticle, knockDust, lineFlames, palmParticles,
+  pebbleParticle, poolCaps, thinParticles, trailParticles, type ParticleSpec,
+} from "./presets";
 import { PROJECTILE_LOOK, createProjectileMeshes, type ProjectileDraw } from "./projectileMeshes";
 import { createTerrainMeshes, createVeinMeshes, terrainVisualBox, veinFaces, type VeinFace } from "./terrainMeshes";
 
@@ -102,6 +105,10 @@ const HAND_GLOW: Readonly<Record<Element, { color: readonly [number, number, num
   air: { color: FX_COLOR.air, intensity: 0.75, light: 0 },
   water: { color: FX_COLOR.water, intensity: 0.85, light: 1.6 },
 };
+/** Пыль из-под ног — пока толчок по полу не слабее этого, м/с (K3). */
+const KNOCK_DUST_MPS = 2;
+/** «Корни» Земли: толчок начался (канал kb вырос с почти нуля) — кольцо пыли у ног на столько секунд. */
+const ROOTS_FLASH_S = 0.45;
 /** Свечение рук уступает свет мира снарядам, стенам и вспышкам, но не горению (prio 1). */
 const HAND_PRIO = 0.6;
 const REST_PALM = { x: 0.26, y: -0.25, z: -0.62 } as const;
@@ -138,6 +145,10 @@ interface DummyAnim {
   freezeUntil: number;
   frozenSet: boolean;
   frozen: { x: number; y: number; z: number; yaw: number; pitch: number };
+  /** Толчок со стороны (K3): накопитель пыли, прошлая сила канала kb, когда «Корни» погасили толчок. */
+  dust: number;
+  kbPrev: number;
+  rootsAt: number;
 }
 
 /** След удара на полу (A3): подпалина шара, трещины землетрясения. Живёт в эффектнике, не в зоне. */
@@ -272,6 +283,10 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   let lastPalmHand: "left" | "right" = "right";
   /** Стихия своего мага (из прошлого кадра) — у кулака Огня нет паузы цели. */
   let localElement: Element | null = null;
+  /** Стихия у своих ладоней (A5): накопители частиц и камешков, замах своего мага. */
+  let localWindup = false;
+  let idleAcc = 0;
+  let pebbleAcc = 0;
   let lastNowS: number | null = null;
   const tmp = new Vector3();
   const eye = new Vector3();
@@ -286,6 +301,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         sx: { x: 0, v: 0 }, sz: { x: 0, v: 0 }, kick: { x: 0, v: 0 }, squash: { x: 0, v: 0 },
         flashUntil: -1, lastBurnS: -1, landTick: -1, seen: true, stride: 0, speed: 0, airS: 0, last: null,
         flashAt: -1, freezeUntil: -1, frozenSet: false, frozen: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 },
+        dust: 0, kbPrev: 0, rootsAt: -10,
       };
       anims.set(id, a);
     }
@@ -380,6 +396,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
 
       // юниты: манекены и чужие маги (поза, ореол, вспышка), горение и обездвиживание у всех
       for (const a of anims.values()) a.seen = false;
+      localElement = null;
+      localWindup = false;
       const unitsOf = (s: MatchState) => s.units.map((u) => ({ id: u.id, pos: u.move.body.pos, u }));
       const prevUnits = new Map<UnitId, Unit>();
       for (const u of v.prev.units) prevUnits.set(u.id, u);
@@ -394,7 +412,10 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         const flags = statusFlags(u, v.cur.tick);
         if (flags.rooted) roots.push({ center: { x: it.pos.x, y: it.pos.y, z: it.pos.z }, radius: 0.65 });
         const mage = u.kind === "mage";
-        if (u.id === v.localId) localElement = u.mage?.element ?? null;
+        if (u.id === v.localId) {
+          localElement = u.mage?.element ?? null;
+          localWindup = !!u.mage?.windup;
+        }
         // свой маг — руки от первого лица, его фигуры нет
         if (mage && (u.id === v.localId || mageViews.length >= MAX_MAGES)) continue;
         const a = anim(u.id);
@@ -502,6 +523,21 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             distM: Math.hypot(pos.x - eye.x, pos.y + 0.9 - eye.y, pos.z - eye.z),
           });
         }
+        // толчок со стороны (K3): пыль из-под ног, пока несёт по полу; у Земли «Корни» — кольцо у ног в начале толчка
+        if (u.move.onGround && kb >= KNOCK_DUST_MPS) {
+          a.dust += dt * Math.min(KNOCK_DUST_RATE, 4 + 2 * kb);
+          if (a.dust >= 1) {
+            a.dust -= 1;
+            emitWorld([knockDust(pos, Math.random)], nowT);
+          }
+        } else a.dust = 0;
+        if (mage && u.mage?.element === "earth" && kb >= 1 && a.kbPrev < 0.5) {
+          a.rootsAt = v.nowS;
+          emitWorld(burstParticles("landDust", pos, UP, 1.4, Math.random), nowT);
+        }
+        a.kbPrev = kb;
+        const rootsK = (v.nowS - a.rootsAt) / ROOTS_FLASH_S;
+        if (rootsK >= 0 && rootsK < 1) roots.push({ center: { x: pos.x, y: pos.y, z: pos.z }, radius: 0.5 + 0.35 * rootsK });
         if (flags.burning) {
           if (v.nowS - a.lastBurnS > 0.08) {
             a.lastBurnS = v.nowS;
@@ -513,6 +549,26 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         }
       }
       for (const [id, a] of anims) if (!a.seen && v.nowS > a.flashUntil + 1) anims.delete(id);
+      // стихия у своих ладоней в покое (A5); в замахе — вдвое чаще
+      if (localElement) {
+        const el = localElement;
+        idleAcc += dt * IDLE_PALM_RATE[el] * (localWindup ? 2 : 1);
+        while (idleAcc >= 1) {
+          idleAcc -= 1;
+          palmPool.emit([idlePalmParticle(el, palms.right, Math.random), idlePalmParticle(el, palms.left, Math.random)], nowT);
+        }
+        if (el === "earth") {
+          pebbleAcc += dt * PEBBLE_RATE;
+          if (pebbleAcc >= 1) {
+            pebbleAcc %= 1;
+            const ph = v.nowS * (localWindup ? 9 : 5);
+            palmPool.emit(
+              [pebbleParticle(palms.right, ph, Math.random), pebbleParticle(palms.right, ph + Math.PI, Math.random), pebbleParticle(palms.left, -ph, Math.random), pebbleParticle(palms.left, Math.PI - ph, Math.random)],
+              nowT,
+            );
+          }
+        }
+      } else idleAcc = pebbleAcc = 0;
       const vh = viewportH();
       dummies.update(views, vh, WORLD_FOV);
       mages.update(mageViews, mageLineScale(vh, WORLD_FOV), { x: eye.x, y: eye.y, z: eye.z });

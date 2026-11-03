@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Unit, Zone } from "@doodlemagic/sim";
 import { QUAKE_AFTER_S, SCORCH_S, markDecal, zoneDecal } from "./decals";
+import { IDLE_PALM_RATE, KNOCK_DUST_RATE, idlePalmParticle, knockDust, pebbleParticle } from "./presets";
 import { FLASH_S, hitFreeze, scorchFloor } from "./vfx";
 
 const O = { x: 0, y: 0, z: 0 };
@@ -27,6 +28,17 @@ describe("feel pass, part 2 (vfx)", () => {
     expect(scorchFloor({ x: 0.3, y: 1.1, z: 0 }, [unit(0, 0.5, true)])).toBe(0.5);
     expect(scorchFloor({ x: 0.3, y: 3.1, z: 0 }, [unit(0, 2.5, false)])).toBeNull();
     expect(scorchFloor({ x: 9, y: 0.2, z: 0 }, [unit(0, 0, true)])).toBe(0.2);
+  });
+
+  it("keeps the element at the palms: fire 6 embers/s a hand, earth pebbles orbit the palm; knock dust ≤ 15/s (A5, K3)", () => {
+    const r = () => 0.5;
+    expect(IDLE_PALM_RATE.fire).toBe(6);
+    expect(idlePalmParticle("fire", O, r).alpha).toBe(0);
+    const a = pebbleParticle(O, 0, r).pos;
+    const b = pebbleParticle(O, Math.PI, r).pos;
+    expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeCloseTo(0.1, 6);
+    expect(KNOCK_DUST_RATE).toBeLessThanOrEqual(15);
+    expect(knockDust(O, r).alpha).toBeGreaterThan(0);
   });
 
   it("gives the tornado and the spring their own floor marks, enemy ones flagged; steam has none", () => {

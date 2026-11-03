@@ -246,3 +246,37 @@ export function thinParticles(specs: readonly ParticleSpec[], share: number): Pa
   for (let i = 0; i < k; i++) out.push(specs[Math.floor(((i + 0.5) * specs.length) / k)]!);
   return out;
 }
+
+/**
+ * Стихия у ладоней в покое (round3/01, A5), в пространстве камеры рук: Огонь — угли, Земля — пыль и камешки
+ * на орбите, Воздух — завитки, Вода — капли. Частиц в секунду на руку — IDLE_PALM_RATE (в замахе вдвое).
+ */
+const IDLE_PALM: Readonly<Record<Element, Layer>> = {
+  fire: L("ember", 1, "up", [0.04, 0.12], [0.45, 0.7], [0.009, 0.013], [0.004, 0.006], { r0: 0.025, gravity: -0.25 }),
+  earth: L("dust", 1, "up", [0.01, 0.04], [0.5, 0.7], [0.012, 0.018], [0.03, 0.04], { r0: 0.03, gravity: 0 }),
+  air: L("wind", 1, "up", [0.03, 0.08], [0.4, 0.6], [0.01, 0.015], [0.025, 0.035], { r0: 0.03, gravity: 0 }),
+  water: L("water", 1, "sphere", [0.01, 0.03], [0.35, 0.5], [0.007, 0.01], [0.004, 0.006], { r0: 0.03, gravity: 0.6 }),
+};
+export const IDLE_PALM_RATE: Readonly<Record<Element, number>> = { fire: 6, earth: 2, air: 4, water: 4 };
+/** Камешек Земли на орбите: живёт чуть дольше шага порождения — по точкам рисуется кружащий камень. */
+const PEBBLE = L("chip", 1, "sphere", [0, 0], [0.1, 0.12], [0.009, 0.011], [0.009, 0.011], { gravity: 0 });
+export const PEBBLE_RATE = 15;
+const PEBBLE_R = 0.05;
+
+/** Одна частица стихии у ладони pos (пространство камеры рук). */
+export function idlePalmParticle(element: Element, pos: Vec3, rng: () => number): ParticleSpec {
+  return spawn(IDLE_PALM[element], pos, UP, rng);
+}
+
+/** Камешек на орбите вокруг ладони: phase — угол по орбите, рад. */
+export function pebbleParticle(pos: Vec3, phase: number, rng: () => number): ParticleSpec {
+  const at = { x: pos.x + Math.cos(phase) * PEBBLE_R, y: pos.y + 0.02 + Math.sin(phase * 2) * 0.008, z: pos.z + Math.sin(phase) * PEBBLE_R };
+  return spawn(PEBBLE, at, UP, rng);
+}
+
+/** Пыль из-под ног отброшенного по полу (K3): одна частица у подошвы. */
+const KNOCK_DUST = L("dust", 1, "hemi", [0.4, 1.1], [0.45, 0.7], [0.15, 0.22], [0.4, 0.6], { r0: 0.25, up: 0.3 });
+export const KNOCK_DUST_RATE = 15;
+export function knockDust(feet: Vec3, rng: () => number): ParticleSpec {
+  return spawn(KNOCK_DUST, { x: feet.x, y: feet.y + 0.05, z: feet.z }, UP, rng);
+}
