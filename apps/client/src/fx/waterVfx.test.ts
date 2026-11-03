@@ -161,4 +161,21 @@ describe("createWaterVfx: one light-pass mesh, particles through the shared pool
     expect((vfx.light as unknown as { count: number }).count).toBe(0);
     vfx.dispose();
   });
+
+  it("an enemy whipping point-blank (his eyes 0.5 m from my camera) draws from his body, not my palm; mine — from my palm", () => {
+    const start = (owner: number) => {
+      const vfx = createWaterVfx({ gbuffer, time: { value: 0 } });
+      const s = createMatchState([createMageUnit(ME, "water", { pos: V(), yaw: 0 }), createMageUnit(FOE, "water", { pos: V(0, 0, -0.5), yaw: 0 })]);
+      vfx.apply?.({ kind: "burst", preset: "whipArc", pos: V(0, 1.6, -12), dir: V(0, 0, 11.5), scale: 1, owner }, 2);
+      vfx.sync(frame(s, 2.01, []));
+      const a = (vfx.light as unknown as { geometry: { getAttribute(n: string): { getX(i: number): number; getY(i: number): number; getZ(i: number): number } } }).geometry.getAttribute("aA");
+      // атрибуты — float32: сравниваем до 1e-6
+      const from = [a.getX(0), a.getY(0), a.getZ(0)].map((v) => Number(v.toFixed(6)));
+      vfx.dispose();
+      return from;
+    };
+    // чужой без фигуры в кадре — от груди его тела (−0,5 м), а не от моей ладони
+    expect(start(FOE)).toEqual([0, 1.2, -0.5]);
+    expect(start(ME)).toEqual([0.3, 1.3, -0.4]);
+  });
 });

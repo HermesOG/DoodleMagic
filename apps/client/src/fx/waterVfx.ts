@@ -247,8 +247,8 @@ interface Arc {
   /** Глаза кастующего (to + dir эффекта). */
   eye: Vec3;
   bornS: number;
-  /** Чья рука: свой маг, чужой (id) или ничья (рисуем от глаз). */
-  owner: UnitId | "own" | null;
+  /** Кто бьёт (owner эффекта); null — неизвестно, рисуем от глаз. Своя дуга — из ладони: id сверяется с localId. */
+  owner: UnitId | null;
   sprayed: boolean;
 }
 
@@ -317,7 +317,7 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
     apply(e, nowS) {
       // дуга хлыста: конец — pos, глаза кастующего — pos + dir (см. waterFx, beam)
       if (e.kind !== "burst" || e.preset !== "whipArc") return;
-      arcs.push({ to: { ...e.pos }, eye: { x: e.pos.x + e.dir.x, y: e.pos.y + e.dir.y, z: e.pos.z + e.dir.z }, bornS: nowS, owner: null, sprayed: false });
+      arcs.push({ to: { ...e.pos }, eye: { x: e.pos.x + e.dir.x, y: e.pos.y + e.dir.y, z: e.pos.z + e.dir.z }, bornS: nowS, owner: e.owner ?? null, sprayed: false });
       if (arcs.length > 8) arcs.shift();
     },
     sync(f: ElementVfxFrame) {
@@ -368,19 +368,8 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
           arcs.splice(i, 1);
           continue;
         }
-        if (arc.owner === null) {
-          // чья рука: свой — глаза кастующего у камеры; иначе ближайший к его глазам чужой маг
-          if (dist(arc.eye, f.eye) < 1) arc.owner = "own";
-          else {
-            let best = 2;
-            for (const m of f.mages) {
-              const d = dist(arc.eye, { x: m.pose.pos.x, y: m.pose.pos.y + 1.6, z: m.pose.pos.z });
-              if (d < best) [best, arc.owner] = [d, m.id];
-            }
-          }
-        }
-        const from =
-          arc.owner === "own" ? f.palmWorld("right") : arc.owner !== null ? (hand(arc.owner) ?? arc.eye) : { x: arc.eye.x, y: arc.eye.y - 0.35, z: arc.eye.z };
+        // чья рука — по id кастующего, не по расстоянию до камеры: чужой хлыст в упор не выходит из моей ладони
+        const from = arc.owner !== null ? (hand(arc.owner) ?? arc.eye) : { x: arc.eye.x, y: arc.eye.y - 0.35, z: arc.eye.z };
         const k = 1 - age / ARC_S;
         const pts = arcPoints(from, arc.to, ARC_SEGMENTS);
         strip(pts, 0.05 * (0.6 + 0.4 * k), k, 3.1);

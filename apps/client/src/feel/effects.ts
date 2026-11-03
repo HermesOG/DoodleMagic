@@ -29,7 +29,8 @@ export type FeelTier = "none" | "small" | "medium" | "large";
 export type Hand = "left" | "right" | "both" | "auto";
 
 export type Effect =
-  | { kind: "burst"; preset: BurstPreset; pos: Vec3; dir: Vec3; scale: number }
+  // owner — чей всплеск, если эффектнику стихии это важно (дуга хлыста: своя — из ладони)
+  | { kind: "burst"; preset: BurstPreset; pos: Vec3; dir: Vec3; scale: number; owner?: UnitId }
   | { kind: "palm"; hand: Hand; element: Element; preset: "flash" | "charge" | "fizzle" }
   | { kind: "gesture"; ability: AbilityId }
   // pos null — у слушателя; floor — громкость не ниже этой после расстояния (своё попадание слышно и с 20 м)

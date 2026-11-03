@@ -84,9 +84,9 @@ export function waterEffects(ev: MatchEvent, view: EventView, _me: Unit | undefi
     case "beam": {
       if (ev.ability !== "waterWhip") return null;
       const own = mine(ev.unit);
-      // whipArc: pos — конец дуги, dir — вектор от конца к глазам кастующего (не единичный): по нему waterVfx
-      // находит руку, из которой рисовать дугу; общий пул нормирует dir и бросает капли к Воде
-      const out: Effect[] = [burst("whipArc", ev.to, sub(ev.from, ev.to)), at("whipCrack", ev.from, own)];
+      // whipArc: pos — конец дуги, dir — вектор от конца к глазам кастующего (не единичный), owner — кто бьёт: по нему
+      // waterVfx находит руку, из которой рисовать дугу; общий пул нормирует dir и бросает капли к Воде
+      const out: Effect[] = [{ ...burst("whipArc", ev.to, sub(ev.from, ev.to)), owner: ev.unit }, at("whipCrack", ev.from, own)];
       if (ev.target !== NOBODY) out.push(burst("whipSplash", ev.to, unitDir(sub(ev.from, ev.to))), hitSound("whipHit", ev.to, own));
       return out;
     }

@@ -105,7 +105,7 @@ describe("waterEffects: the whip's beam, the grab and the Answer landing", () =>
     const to = V(0, 1, -12);
     const e = fx({ type: "beam", unit: ME, ability: "waterWhip", from, to, target: FOE });
     expect(kinds(e)).toEqual(["burst:whipArc", "sound:whipCrack", "burst:whipSplash", "sound:whipHit"]);
-    expect(burstOf(e, "whipArc")).toMatchObject({ pos: to, dir: { x: 0, y: expect.closeTo(0.6, 6), z: 12 } });
+    expect(burstOf(e, "whipArc")).toMatchObject({ pos: to, dir: { x: 0, y: expect.closeTo(0.6, 6), z: 12 }, owner: ME });
     expect(soundOf(e, "whipCrack")?.pos).toBeNull();
     expect(soundOf(e, "whipHit")).toMatchObject({ pos: to, floor: 0.6 });
     expect(Math.hypot(burstOf(e, "whipSplash")!.dir.x, burstOf(e, "whipSplash")!.dir.y, burstOf(e, "whipSplash")!.dir.z)).toBeCloseTo(1);
@@ -114,6 +114,7 @@ describe("waterEffects: the whip's beam, the grab and the Answer landing", () =>
   it("a foreign whip that misses: arc and crack where he stands, no splash", () => {
     const e = fx({ type: "beam", unit: FOE, ability: "waterWhip", from: V(0, 1.6, -10), to: V(0, 1.6, 5), target: NOBODY });
     expect(kinds(e)).toEqual(["burst:whipArc", "sound:whipCrack"]);
+    expect(burstOf(e, "whipArc")?.owner).toBe(FOE);
     expect(soundOf(e, "whipCrack")?.pos).toEqual(V(0, 1.6, -10));
   });
 
