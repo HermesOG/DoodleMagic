@@ -19,6 +19,15 @@ describe("hand gestures", () => {
     }
   });
 
+  it("strikes with an ease-out and returns with a 10 % overshoot past rest (round3/01, A5)", () => {
+    // кулак: удар 0 → 0,05 с — к 30 мс рука уже на 94 % пути; возврат 0,05 → 0,2 с перелетает покой на ≈ 10 %
+    const at = (t: number) => stepGestures(startGesture(createGestures(), "fireFists"), t).pose.right.z;
+    expect(at(0.03) / -0.12).toBeGreaterThan(0.9);
+    let over = 0;
+    for (let t = 0.05; t < 0.2; t += 0.002) over = Math.max(over, at(t));
+    expect(over / 0.12).toBeCloseTo(0.1, 2);
+  });
+
   // ладони нужны частицам у рук каждый кадр: те же векторы, сдвинутые жестом, а без жеста — снова поза покоя
   it("moves the punching mitten forward and reports both palms in hands-camera space without allocating", () => {
     const m = createMittens();

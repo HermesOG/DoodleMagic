@@ -37,8 +37,8 @@ const both = (t: number, o: Off): Key => ({ t, r: o, l: o });
 const right = (t: number, o: Off): Key => ({ t, r: o, l: O });
 
 /**
- * Жесты способностей (round1/03 п. 5, round2/03 п. 4.2, GDD 4.3–4.4): ключевые позы из таблицы задачи, между ними
- * smoothstep. Наклон кисти — решение потока H (в таблице не задан): удар и толчок ведут верхом вперёд (< 0),
+ * Жесты способностей (round1/03 п. 5, round2/03 п. 4.2, GDD 4.3–4.4): ключевые позы из таблицы задачи, между ними —
+ * кривые sample (удар, возврат с перелётом, остальное smoothstep). Наклон кисти — решение потока H (в таблице не задан): удар и толчок ведут верхом вперёд (< 0),
  * замах и подъём откидывают кисть к себе (> 0). Последняя поза каждого жеста — покой.
  */
 const GESTURES: Readonly<Record<AbilityId, GestureDef>> = {
@@ -89,8 +89,18 @@ export function startGesture(g: GestureState, a: AbilityId): GestureState {
 }
 
 const smooth = (u: number): number => u * u * (3 - 2 * u);
+/** Удар — ease-out: рука приходит в позу удара почти сразу (≈ 40 мс), а не плывёт (round3/01, A5). */
+const strike = (u: number): number => 1 - (1 - u) ** 3;
+/** Возврат в покой — с перелётом 10 % и отскоком назад (easeOutBack, c = 1,70158 даёт ровно 10 %). */
+const BACK_C = 1.70158;
+const settle = (u: number): number => 1 + (BACK_C + 1) * (u - 1) ** 3 + BACK_C * (u - 1) ** 2;
+/** Сегмент в позу удара: короткий (≤ 0,12 с) и кисть ведёт верхом вперёд или вниз (наклон < 0). */
+const STRIKE_MAX_S = 0.12;
 
-/** Поза жеста в момент t: между соседними ключами — smoothstep. */
+/**
+ * Поза жеста в момент t (round3/01, A5): удар — ease-out, возврат в покой (последний сегмент) — с перелётом,
+ * остальное (замах, удержание) — smoothstep.
+ */
 function sample(keys: readonly Key[], t: number, side: "r" | "l"): Off {
   const last = keys[keys.length - 1]!;
   if (t >= last.t) return last[side];
@@ -98,7 +108,9 @@ function sample(keys: readonly Key[], t: number, side: "r" | "l"): Off {
     const b = keys[k]!;
     if (t > b.t) continue;
     const a = keys[k - 1]!;
-    const s = smooth(b.t > a.t ? Math.max(0, (t - a.t) / (b.t - a.t)) : 1);
+    const u = b.t > a.t ? Math.max(0, (t - a.t) / (b.t - a.t)) : 1;
+    const ease = k === keys.length - 1 ? settle : b.t - a.t <= STRIKE_MAX_S && b[side][3] < 0 ? strike : smooth;
+    const s = ease(u);
     const pa = a[side];
     const pb = b[side];
     return [pa[0] + (pb[0] - pa[0]) * s, pa[1] + (pb[1] - pa[1]) * s, pa[2] + (pb[2] - pa[2]) * s, pa[3] + (pb[3] - pa[3]) * s];
