@@ -3,8 +3,8 @@ import { bodyBox } from "../body";
 import { DEFAULT_MOVE } from "../player";
 import type { AABB, Body, Vec3 } from "../types";
 import { OVERLAP_EPS } from "../world";
-import { applyHit } from "./combat";
-import { EARTH, FIRE, LIMITS, STATUS, ticks } from "./defs";
+import { applyHit, applyStatus } from "./combat";
+import { BOG, EARTH, FIRE, LIMITS, STATUS, WATER, ticks } from "./defs";
 import { NO_HOOKS, type SimHooks } from "./hooks";
 import { horizontalDir } from "./kit";
 import { clonePlain, unitById } from "./state";
@@ -33,6 +33,7 @@ const TRAIL_PULSE_DAMAGE = FIRE.jetDash.trailDps * STATUS.burning.pulseS; // 3
 const P = EARTH.stonePillar;
 const Q = EARTH.earthquake;
 const SELF_LIFT_SPEED = Math.sqrt(2 * DEFAULT_MOVE.gravity * (P.selfLiftM + SELF_LIFT_CLEARANCE_M));
+const BOG_MIN_LIFE_TICKS = ticks(BOG.minLifeS); // 120
 const PILLAR_SPEC = Object.freeze({ growTicks: ticks(P.growS), solidTicks: ticks(P.solidS), lifeTicks: ticks(P.lifeS), hp: P.hp }); // 6, 12, 240, 200
 
 function zoneEvent(t: TickCtx, z: Zone, phase: "telegraph" | "arm" | "end"): void {
@@ -193,6 +194,43 @@ function quakeStrike(s: MatchState, t: TickCtx, z: Zone): void {
       slow: { mul: Q.slowMul, s: Q.slowS }, rootS: d <= Q.rootRadiusM ? Q.rootS : undefined, knock: { distM: Q.knockback.distM, upM: Q.knockback.upM },
     });
   }
+  makeBog(s, t, z);
+}
+
+/**
+ * «Топь» (GDD 4.6): удар землетрясения по взведённому Роднику — их диски пересекаются по XZ, центры по высоте
+ * не дальше EARTH.earthquake.heightM. Родник уходит (zone/end), на его месте — зона bog хозяина землетрясения (его
+ * эффект пришёл вторым): тот же диск, взведена сразу, живёт остаток Родника, но не меньше 2 с. Лимиты зон — как
+ * у новой зоны (spawnZone): итог по арене не растёт. Событие reaction {kind: "bog"}.
+ */
+function makeBog(s: MatchState, t: TickCtx, quake: Zone): void {
+  if (quake.shape.type !== "disc") return;
+  const qc = quake.shape.center;
+  const qr = quake.shape.radius;
+  const now = t.now;
+  for (const z of s.zones.filter((q) => q.kind === "spring" && now >= q.armTick && q.shape.type === "disc")) {
+    if (z.shape.type !== "disc" || !s.zones.includes(z)) continue;
+    const c = z.shape.center;
+    const dx = c.x - qc.x;
+    const dz = c.z - qc.z;
+    if (Math.sqrt(dx * dx + dz * dz) >= qr + z.shape.radius || Math.abs(c.y - qc.y) > Q.heightM) continue;
+    const endTick = Math.max(z.endTick, now + BOG_MIN_LIFE_TICKS);
+    const shape: ZoneShape = { type: "disc", center: { x: c.x, y: c.y, z: c.z }, radius: z.shape.radius };
+    endZone(s, t, z);
+    const id = spawnZone(s, t, { owner: quake.owner, kind: "bog", ability: quake.ability, shape, bornTick: now, armTick: now, endTick });
+    t.ev.push({ type: "reaction", kind: "bog", owner: quake.owner, zone: id, pos: { x: c.x, y: c.y, z: c.z } });
+  }
+}
+
+/**
+ * Шаг Топи: живые враги хозяина в диске (как у Родника: по XZ до радиуса, по высоте до 1,5 м) каждый тик Мокрые
+ * и замедлены до 0,6 на 2 с (пределы CC: −40 % и 2 с на применение; внутри — заново). Хозяина не трогает, не лечит.
+ */
+function stepBog(s: MatchState, t: TickCtx, z: Zone): void {
+  for (const u of s.units) {
+    if (!u.alive || u.id === z.owner || !zoneTouches(z.shape, u)) continue;
+    applyStatus(s, t, u.id, { source: z.owner, wetS: WATER.passive.wetS, slow: { mul: BOG.slowMul, s: BOG.slowS } });
+  }
 }
 
 /**
@@ -219,5 +257,6 @@ export function stepZones(s: MatchState, t: TickCtx, hooks: SimHooks = NO_HOOKS)
     else if (z.kind === "fireTrail") contact(s, t, z, TRAIL_PULSE_DAMAGE, TRAIL_PULSE_TICKS, false, true);
     else if (now === z.armTick && z.kind === "pillar") pillarStrike(s, t, z);
     else if (now === z.armTick && z.kind === "quake") quakeStrike(s, t, z);
+    else if (z.kind === "bog") stepBog(s, t, z);
   }
 }

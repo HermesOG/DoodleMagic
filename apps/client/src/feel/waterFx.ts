@@ -165,6 +165,12 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
       return [burst("springRing", c, UP, 1), sound("springBubble", c)];
     }
     case "reaction": {
+      if (ev.kind === "bog") {
+        // «Топь»: кольцо землетрясения и тёмная муть по луже; звук — удар и бульканье в точке
+        const out: Effect[] = [burst("quakeRing", ev.pos, UP, 0.6), burst("bogMuck", ev.pos), sound("quakeStrike", ev.pos, 0.7), sound("springBubble", ev.pos)];
+        if (mine(ev.owner)) out.push({ kind: "toast", text: "Топь!" });
+        return out;
+      }
       if (ev.kind !== "steam") return null;
       const out: Effect[] = [burst("steamPuff", ev.pos, UP, 1.3), sound("steamHiss", ev.pos)];
       if (mine(ev.owner)) out.push({ kind: "toast", text: "Пар!" });

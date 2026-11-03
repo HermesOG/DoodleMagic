@@ -96,6 +96,17 @@ describe("waterEffects: casts and releases of Water's own abilities", () => {
     expect(fx({ type: "impact", ability: "fireball", owner: ME, pos: V(), normal: V(0, 1, 0), target: NOBODY, terrain: -1 })).toBeNull();
     expect(fx({ type: "zone", zone: 3, kind: "fireWall", owner: ME, phase: "arm" })).toBeNull();
     expect(fx({ type: "reaction", kind: "fireTornado", owner: ME, zone: 3, pos: V() })).toBeNull();
+    expect(fx({ type: "reaction", kind: "fireRampart", owner: ME, zone: 3, pos: V() })).toBeNull();
+  });
+
+  it("«Топь»: quake ring and dark muck with a thud for everyone; the toast only for its owner", () => {
+    const mineBog = fx({ type: "reaction", kind: "bog", owner: ME, zone: 3, pos: V() })!;
+    expect(mineBog.filter((e) => e.kind === "burst").map((e) => (e as { preset: string }).preset)).toEqual(["quakeRing", "bogMuck"]);
+    expect(mineBog.filter((e) => e.kind === "sound").map((e) => (e as { id: string }).id)).toEqual(["quakeStrike", "springBubble"]);
+    expect(mineBog).toContainEqual({ kind: "toast", text: "Топь!" });
+    const foeBog = fx({ type: "reaction", kind: "bog", owner: FOE, zone: 3, pos: V() })!;
+    expect(foeBog.some((e) => e.kind === "toast")).toBe(false);
+    expect(foeBog.some((e) => e.kind === "burst")).toBe(true);
   });
 });
 

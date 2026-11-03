@@ -74,7 +74,7 @@ describe("element registries: every id of the four elements has its entry", () =
   });
 
   it("every zone kind has a decal style entry: steam draws none (a cloud), the rest a ring", () => {
-    const kinds: ZoneKind[] = ["fireWall", "fireTrail", "pillar", "quake", "tornado", "fireTornado", "spring", "steam"];
+    const kinds: ZoneKind[] = ["fireWall", "fireTrail", "pillar", "quake", "tornado", "fireTornado", "spring", "steam", "bog"];
     const zone = (kind: ZoneKind, owner = 2): Zone => ({
       id: 1, owner, kind, ability: "tornado", shape: { type: "disc", center: V(), radius: 3 }, bornTick: 0, armTick: 30, endTick: 300, rehit: [],
     });

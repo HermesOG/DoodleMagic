@@ -125,7 +125,7 @@ export type ProjectileKind = (typeof PROJECTILE_KINDS)[number];
 /** После шага тика endTick − 1 снаряд исчезает (огненный шар — взрывается). power — урон попадания: по таблице вида, у Ответа — впитанное. */
 export interface Projectile { id: number; owner: UnitId; ability: ProjectileKind; pos: Vec3; vel: Vec3; bornTick: number; endTick: number; power: number }
 
-export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake" | "tornado" | "fireTornado" | "spring" | "steam";
+export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake" | "tornado" | "fireTornado" | "spring" | "steam" | "bog";
 export type ZoneShape =
   | { type: "box"; box: AABB }
   | { type: "segment"; a: Vec3; b: Vec3; halfW: number }
@@ -136,6 +136,8 @@ export interface Zone {
   bornTick: number; armTick: number; endTick: number;
   /** Кого и с какого тика можно задеть снова. */
   rehit: { unit: UnitId; tick: number }[];
+  /** «Огненный вал»: стена едет на (x, z) м за тик, пока now < untilTick; нет поля — стоит. */
+  drift?: { x: number; z: number; untilTick: number };
 }
 
 export type TerrainKind = "wall" | "pillar";
@@ -149,6 +151,7 @@ export interface Terrain {
 /** tick — сколько тиков посчитано (следующий шаг считает тик с этим номером); units по возрастанию id. */
 export interface MatchState { tick: number; units: Unit[]; projectiles: Projectile[]; zones: Zone[]; terrain: Terrain[]; nextId: number }
 
+export type ReactionKind = "steam" | "fireTornado" | "fireRampart" | "bog";
 export type StatusKind = "burning" | "slow" | "root" | "airborne" | "wet";
 export type RejectReason = "cooldown" | "busy" | "notGrounded" | "noTarget" | "rooted";
 
@@ -188,8 +191,8 @@ export type MatchEvent =
   | { type: "tow"; target: UnitId; source: UnitId; phase: "start" | "end"; pos: Vec3; to: Vec3 }
   /** Лечение: amount — фактически прибавленное. */
   | { type: "heal"; target: UnitId; source: UnitId; amount: number; pos: Vec3 }
-  /** Реакция стихий: облако пара или огненный смерч; zone — её зона. */
-  | { type: "reaction"; kind: "steam" | "fireTornado"; owner: UnitId; zone: number; pos: Vec3 };
+  /** Реакция стихий: облако пара, огненный смерч, «Огненный вал» или «Топь»; zone — её зона. */
+  | { type: "reaction"; kind: ReactionKind; owner: UnitId; zone: number; pos: Vec3 };
 
 export interface MatchStep { state: MatchState; events: MatchEvent[] }
 

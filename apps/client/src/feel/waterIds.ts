@@ -11,5 +11,5 @@ export const WATER_SOUND_IDS = [
 ] as const;
 export const WATER_BURST_PRESETS = [
   "whipArc", "whipSplash", "grabSplash", "wardAbsorb", "wardBurst", "answerSplash", "springRing", "springBubbles", "steamPuff", "healMotes",
-  "wetDrips", "deathWater",
+  "wetDrips", "deathWater", "bogMuck",
 ] as const;

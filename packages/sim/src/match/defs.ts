@@ -96,6 +96,16 @@ export const KNOCKBACK = {
 } as const;
 /** Облако пара (Р9 фазы 4): диск 2,5 м высотой 3 м на 3 с, не больше 4 на арену, с одной цели — раз в 3 с. */
 export const STEAM = { radiusM: 2.5, heightM: 3, lifeS: 3, perArena: 4, everyS: 3 } as const;
+/**
+ * «Топь» (GDD 4.6, round3/03-water.md): Землетрясение по взведённому Роднику. Лужа той же площади доживает срок
+ * Родника, но не меньше minLifeS; врагов хозяина внутри замедляет до slowMul (−40 %, предел CC) на slowS и мочит.
+ */
+export const BOG = { slowMul: 0.6, slowS: 2, minLifeS: 2 } as const;
+/**
+ * «Огненный вал» (GDD 4.6, round3/02-air.md): Порыв по взведённой Стене огня — стена едет distM по взгляду за durationS.
+ * Встаёт у камня и там, где под серединой нет опоры глубже probeDownM; liftM — сколько низа бокса не проверяем на пол.
+ */
+export const RAMPART = { distM: 8, durationS: 1, probeDownM: 1, liftM: 0.25 } as const;
 export const MAGE_REGEN = { delayS: 4, perS: 20, capFrac: 2 / 3 } as const;
 /** Манекен полигона (Р12). */
 export const DUMMY = { hp: 170, runSpeed: 2, regenDelayS: 3, regenPerS: 85, respawnS: 3 } as const;
