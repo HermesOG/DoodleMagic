@@ -26,6 +26,20 @@ const MAX_RIBBON_MAGES = 6;
 const MAX_SEGS = MAX_RIBBON_MAGES * 2 * RIBBON_SEG;
 
 export type RibbonState = "spent" | "ready" | "glide";
+/** Ленты мага: 0 — правая, 1 — левая. */
+const RIBBONS: readonly (0 | 1)[] = [0, 1];
+/** Высоты свечения столба Смерча над центром, м. */
+const CORE_GLOW_H: readonly number[] = [1, 2.6];
+
+/** Точка i цепочки out: прежний объект переписывается, новый — только если его ещё нет. */
+function setPoint(out: Vec3[], i: number, x: number, y: number, z: number): void {
+  const p = out[i];
+  if (p) {
+    p.x = x;
+    p.y = y;
+    p.z = z;
+  } else out[i] = { x, y, z };
+}
 
 /** Готова ли лента side (0 — правая, 1 — левая): по заряду Взмаха на ленту. */
 export function ribbonReady(u: Unit, ribbon: 0 | 1): boolean {
@@ -35,14 +49,17 @@ export function ribbonReady(u: Unit, ribbon: 0 | 1): boolean {
 /**
  * Точки ленты в мире: от плеча за спиной вниз-назад. side +1 — правая, −1 — левая; t — часы кадра, с.
  * Потраченная висит, готовая развевается назад, в парении ленты расходятся в стороны и трепещут быстро.
+ * out — куда писать (покадрово один и тот же массив и те же точки, без новых объектов); по умолчанию новый.
  */
-export function ribbonChain(pos: Vec3, yaw: number, side: 1 | -1, state: RibbonState, t: number): Vec3[] {
+export function ribbonChain(pos: Vec3, yaw: number, side: 1 | -1, state: RibbonState, t: number, out: Vec3[] = []): Vec3[] {
   const f = forwardXZ(yaw);
   const r = rightXZ(yaw);
   const bx = -f.x;
   const bz = -f.z;
-  let p: Vec3 = { x: pos.x + bx * 0.19 + r.x * side * 0.13, y: pos.y + 1.5, z: pos.z + bz * 0.19 + r.z * side * 0.13 };
-  const out: Vec3[] = [p];
+  let px = pos.x + bx * 0.19 + r.x * side * 0.13;
+  let py = pos.y + 1.5;
+  let pz = pos.z + bz * 0.19 + r.z * side * 0.13;
+  setPoint(out, 0, px, py, pz);
   const len = state === "spent" ? SEG_M : SEG_READY_M;
   for (let i = 0; i < RIBBON_SEG; i++) {
     let b: number;
@@ -63,9 +80,12 @@ export function ribbonChain(pos: Vec3, yaw: number, side: 1 | -1, state: RibbonS
     }
     const n = Math.hypot(b, d, s) || 1;
     const k = len / n;
-    p = { x: p.x + (bx * b + r.x * s) * k, y: p.y + d * k, z: p.z + (bz * b + r.z * s) * k };
-    out.push(p);
+    px += (bx * b + r.x * s) * k;
+    py += d * k;
+    pz += (bz * b + r.z * s) * k;
+    setPoint(out, i + 1, px, py, pz);
   }
+  out.length = RIBBON_SEG + 1;
   return out;
 }
 
@@ -148,18 +168,27 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
   const wake = new Map<UnitId, { last: Vec3; acc: number }>();
   const glideAcc = new Map<UnitId, number>();
   const rng: Rng = Math.random;
+  // покадровые контейнеры — одни на эффектник: кадр их очищает, а не создаёт
+  const chainBuf: Vec3[] = [];
+  const gliders = new Set<UnitId>();
+  const liveZones = new Set<number>();
+  const liveWakes = new Set<UnitId>();
+  const due = { grow: 0, column: 0, rim: 0, flame: 0 };
+  const wakeOut: ParticleSpec[] = [];
 
   function drawRibbons(f: ElementVfxFrame): void {
     let n = 0;
+    gliders.clear();
     for (const m of f.mages) {
+      if (m.u.mage?.flight.gliding) gliders.add(m.id);
       if (m.u.mage?.element !== "air" || !m.u.alive || n + 2 * RIBBON_SEG > MAX_SEGS) continue;
       // мёртвый маг остаётся с gliding = true до возрождения, без события glide off — парение только у живого
       const gliding = m.u.mage.flight.gliding && m.u.alive;
       const r = rightXZ(m.pose.yaw);
-      for (const ribbon of [0, 1] as const) {
+      for (const ribbon of RIBBONS) {
         const ready = ribbonReady(m.u, ribbon);
         const side = ribbon === 0 ? 1 : -1;
-        const chain = ribbonChain(m.pose.pos, m.pose.yaw, side, gliding ? "glide" : ready ? "ready" : "spent", f.nowS + m.id * 0.37);
+        const chain = ribbonChain(m.pose.pos, m.pose.yaw, side, gliding ? "glide" : ready ? "ready" : "spent", f.nowS + m.id * 0.37, chainBuf);
         for (let i = 0; i < RIBBON_SEG; i++) {
           const a = chain[i]!;
           const b = chain[i + 1]!;
@@ -177,7 +206,9 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
           inks.setX(n, ready ? INK.halo : INK.enemy);
           n++;
         }
-        if (ready) f.glow({ pos: chain[3]!, color: FX_COLOR.air, halo: 0.32, light: 0, intensity: 0.65, core: 0.15 }, 1);
+        // точки цепочки перепишет следующая лента — свечению своя копия
+        const g = chain[3]!;
+        if (ready) f.glow({ pos: { x: g.x, y: g.y, z: g.z }, color: FX_COLOR.air, halo: 0.32, light: 0, intensity: 0.65, core: 0.15 }, 1);
         // парящего видно издалека: с концов лент срываются штрихи ветра
         if (gliding) {
           const k = (glideAcc.get(m.id) ?? 0) + f.dt * 8;
@@ -188,7 +219,7 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
         }
       }
     }
-    for (const id of glideAcc.keys()) if (!f.mages.some((m) => m.id === id && m.u.mage?.flight.gliding)) glideAcc.delete(id);
+    for (const id of glideAcc.keys()) if (!gliders.has(id)) glideAcc.delete(id);
     ribbons.count = n;
     ribbons.visible = n > 0;
     if (n > 0) {
@@ -198,10 +229,10 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
   }
 
   function drawVortices(f: ElementVfxFrame): void {
-    const live = new Set<number>();
+    liveZones.clear();
     for (const z of f.cur.zones) {
       if (!isVortex(z) || z.shape.type !== "disc") continue;
-      live.add(z.id);
+      liveZones.add(z.id);
       let a = acc.get(z.id);
       if (!a) {
         a = { grow: 0, column: 0, rim: 0, flame: 0 };
@@ -211,18 +242,21 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
       a.column += f.dt * VORTEX_RATE.column;
       a.rim += f.dt * VORTEX_RATE.rim;
       a.flame += f.dt * VORTEX_RATE.flame;
-      const n = { grow: Math.floor(a.grow), column: Math.floor(a.column), rim: Math.floor(a.rim), flame: Math.floor(a.flame) };
-      a.grow -= n.grow;
-      a.column -= n.column;
-      a.rim -= n.rim;
-      a.flame -= n.flame;
-      const specs = vortexParticles(z, f.tick, f.nowS, n, rng);
+      due.grow = Math.floor(a.grow);
+      due.column = Math.floor(a.column);
+      due.rim = Math.floor(a.rim);
+      due.flame = Math.floor(a.flame);
+      a.grow -= due.grow;
+      a.column -= due.column;
+      a.rim -= due.rim;
+      a.flame -= due.flame;
+      const specs = vortexParticles(z, f.tick, f.nowS, due, rng);
       if (specs.length > 0) f.emit(specs);
       if (f.tick < z.armTick) continue;
       // столб ядра: свечение без света; огненный — свет огня
       const c = z.shape.center;
       const fire = z.kind === "fireTornado";
-      for (const h of [1, 2.6])
+      for (const h of CORE_GLOW_H)
         f.glow(
           {
             pos: { x: c.x, y: c.y + h, z: c.z },
@@ -235,19 +269,19 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
           fire ? 2.5 : 1.5,
         );
     }
-    for (const id of acc.keys()) if (!live.has(id)) acc.delete(id);
+    for (const id of acc.keys()) if (!liveZones.has(id)) acc.delete(id);
   }
 
   function drawWakes(f: ElementVfxFrame): void {
-    const live = new Set<UnitId>();
+    liveWakes.clear();
     for (const it of f.units) {
       const d = it.u.mage?.dash;
       if (!d || d.ability !== "swoop") continue;
-      live.add(it.id);
+      liveWakes.add(it.id);
       const w = wake.get(it.id);
-      const p = { x: it.pos.x, y: it.pos.y, z: it.pos.z };
+      const p = it.pos;
       if (!w) {
-        wake.set(it.id, { last: p, acc: 0 });
+        wake.set(it.id, { last: { x: p.x, y: p.y, z: p.z }, acc: 0 });
         continue;
       }
       const dx = p.x - w.last.x;
@@ -257,7 +291,8 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
         w.acc += dist / 0.2;
         const n = Math.min(24, Math.floor(w.acc));
         w.acc -= n;
-        const out: ParticleSpec[] = [];
+        const out = wakeOut;
+        out.length = 0;
         for (let i = 0; i < n; i++) {
           const t = rng();
           out.push(
@@ -272,11 +307,14 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
             ),
           );
         }
+        // emit сразу копирует частицы в пул: массив можно переиспользовать
         if (out.length > 0) f.emit(out);
       }
-      w.last = p;
+      w.last.x = p.x;
+      w.last.y = p.y;
+      w.last.z = p.z;
     }
-    for (const id of wake.keys()) if (!live.has(id)) wake.delete(id);
+    for (const id of wake.keys()) if (!liveWakes.has(id)) wake.delete(id);
   }
 
   return {

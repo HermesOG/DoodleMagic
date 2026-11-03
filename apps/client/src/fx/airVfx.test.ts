@@ -58,6 +58,14 @@ describe("Air ribbons", () => {
     expect(tip(glide).x - glide[0]!.x).toBeGreaterThan(0.3);
   });
 
+  it("a ribbon chain written into a reused buffer keeps the same array and points and matches a fresh one", () => {
+    const buf = ribbonChain(V(1, 0, 2), 0.4, -1, "glide", 3);
+    const first = buf[2];
+    const again = ribbonChain(V(0, 0, 0), 1.1, 1, "ready", 5, buf);
+    expect([again === buf, again[2] === first, again.length]).toEqual([true, true, RIBBON_SEG + 1]);
+    expect(again).toEqual(ribbonChain(V(0, 0, 0), 1.1, 1, "ready", 5));
+  });
+
   it("draws ribbons by the charges of each other Air mage: ready ones in halo ink with a glow and no light; +1 draw call", () => {
     const vfx = createAirVfx({} as never);
     const a = mage(2, 2);
