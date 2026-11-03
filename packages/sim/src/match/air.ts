@@ -174,7 +174,7 @@ function releaseGust(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void 
       knock: { distM: GU.knockback.distM, upM: GU.knockback.upM }, slam: GU.slamDamage,
     });
   }
-  rampart(s, t, u, f);
+  rampart(s, t, u, f, aim.eye);
   const midY = b.pos.y + b.height / 2;
   s.projectiles = s.projectiles.filter((p) => {
     if (p.owner === u.id || Math.abs(p.pos.y - midY) > GU.halfHeightM || !inCone(b.pos.x, b.pos.z, f, p.pos.x, p.pos.z, GU.rangeM)) return true;
@@ -206,16 +206,28 @@ function gustTouchesBox(b: Vec3, f: { x: number; z: number }, box: AABB): boolea
   return false;
 }
 
+/** Ближайшая к точке p точка бокса. */
+function closestOnBox(p: Vec3, box: AABB): Vec3 {
+  return {
+    x: Math.max(box.min.x, Math.min(box.max.x, p.x)),
+    y: Math.max(box.min.y, Math.min(box.max.y, p.y)),
+    z: Math.max(box.min.z, Math.min(box.max.z, p.z)),
+  };
+}
+
 /**
  * «Огненный вал» (GDD 4.6, round3/02-air.md): Порыв задел взведённую Стену огня — стена переходит к Воздуху (его эффект
  * пришёл вторым; adoptZone) и за 1 с едет на 8 м по взгляду (drift, ход — driveWall в zones.ts), доживая свой срок.
+ * Как и тела в конусе, стену нужно видеть: свободный луч "shot" от глаз до ближайшей точки её бокса (за камнем — нет).
+ * Своя стена этого мага, ещё едущая (drift), не толкается заново и второй реакции не даёт.
  * Касание и Горение — прежние, уже за Воздуха. Новой зоны нет. Событие reaction {kind: "fireRampart"} — у середины низа стены.
  */
-function rampart(s: MatchState, t: TickCtx, u: Unit, f: { x: number; z: number }): void {
+function rampart(s: MatchState, t: TickCtx, u: Unit, f: { x: number; z: number }, eye: Vec3): void {
   for (const q of [...s.zones]) {
     if (q.kind !== "fireWall" || q.shape.type !== "box" || t.now < q.armTick || !s.zones.includes(q)) continue;
+    if (q.owner === u.id && q.drift) continue;
     const box = q.shape.box;
-    if (!gustTouchesBox(u.move.body.pos, f, box)) continue;
+    if (!gustTouchesBox(u.move.body.pos, f, box) || !clearShot(t, eye, closestOnBox(eye, box))) continue;
     adoptZone(s, t, q, u.id);
     q.drift = { x: f.x * RAMPART_STEP_M + 0, z: f.z * RAMPART_STEP_M + 0, untilTick: t.now + RAMPART_TICKS };
     const pos = { x: (box.min.x + box.max.x) / 2, y: box.min.y, z: (box.min.z + box.max.z) / 2 };

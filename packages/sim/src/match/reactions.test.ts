@@ -252,6 +252,38 @@ describe("reaction «Огненный вал» (gust on a fire wall)", () => {
     expect(evs(gustOnWall({ prep: wallAt(0, 600, aabb(-5, 0, 3.7, 5, FIRE.fireWall.heightM, 4.3)) }).log, "reaction")).toHaveLength(0);
   });
 
+  it("needs a clear shot line from the eyes to the closest point of the wall: no rampart behind stone", () => {
+    // камень выше глаз между Воздухом и стеной
+    const tall = testContext([{ box: aabb(-6, 0, -2.5, 6, 3, -2), tag: "block" }]);
+    const hidden = gustOnWall({ c: tall, n: GUST_TICKS + 5 });
+    expect(evs(hidden.log, "reaction")).toHaveLength(0);
+    expect(wallOf(hidden.s).owner).toBe(FIRE_ID);
+    expect(wallOf(hidden.s).drift).toBeUndefined();
+    // низкий камень луч не закрывает
+    const low = testContext([{ box: aabb(-6, 0, -2.5, 6, 0.5, -2), tag: "block" }]);
+    const seen = gustOnWall({ c: low, n: GUST_TICKS + 1 });
+    expect(evs(seen.log, "reaction")).toHaveLength(1);
+    expect(wallOf(seen.s).owner).toBe(AIR_ID);
+  });
+
+  it("does not re-push its own wall still travelling (no second reaction); a stopped own wall reacts again", () => {
+    const drift = { x: 0, z: -RAMPART.distM / RAMPART_TICKS, untilTick: 0 };
+    const ownWall = (travelling: boolean) => (s: MatchState, t: TickCtx) => {
+      spawnZone(s, t, {
+        owner: AIR_ID, kind: "fireWall", ability: "fireWall", shape: { type: "box", box: aabb(-5, 0, -4.3, 5, FIRE.fireWall.heightM, -3.7) },
+        bornTick: s.tick - 24, armTick: s.tick, endTick: s.tick + 600,
+      });
+      if (travelling) s.zones[s.zones.length - 1]!.drift = { ...drift, untilTick: s.tick + 600 };
+    };
+    let before: unknown = null;
+    const moving = gustOnWall({ prep: ownWall(true), n: GUST_TICKS + 1, each: (k, st) => { if (k === GUST_TICKS - 1) before = { ...wallOf(st).drift }; } });
+    expect(evs(moving.log, "reaction")).toHaveLength(0);
+    expect(wallOf(moving.s).drift).toEqual(before);
+    const stopped = gustOnWall({ prep: ownWall(false), n: GUST_TICKS + 1 });
+    expect(evs(stopped.log, "reaction")).toHaveLength(1);
+    expect(wallOf(stopped.s).drift).toBeDefined();
+  });
+
   it("respects the per-mage zone limit: Air's oldest other zone gives way", () => {
     const prep = (s: MatchState, t: TickCtx) => {
       for (let k = 0; k < LIMITS.zonesPerMage; k++) {
