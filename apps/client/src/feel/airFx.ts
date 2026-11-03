@@ -139,6 +139,13 @@ export function airEffects(ev: MatchEvent, view: EventView, me: Unit | undefined
       return [burst("tornadoDust", c), ownSound("tornadoRise", c, mine(ev.owner))];
     }
     case "reaction": {
+      if (ev.kind === "fireRampart") {
+        // «Огненный вал»: стена вспыхивает и срывается с места порывом; ход стены рисует сама зона
+        const at = { x: ev.pos.x, y: ev.pos.y + 1, z: ev.pos.z };
+        const out: Effect[] = [burst("fireWallIgnite", ev.pos), burst("gustBlast", at), ownSound("gustBlast", at, mine(ev.owner)), sound("fireWallIgnite", ev.pos)];
+        if (mine(ev.owner)) out.push({ kind: "toast", text: "Огненный вал!" });
+        return out;
+      }
       if (ev.kind !== "fireTornado") return null;
       const out: Effect[] = [burst("fireTornadoFlare", ev.pos), ownSound("fireTornado", ev.pos, mine(ev.owner))];
       if (mine(ev.owner)) out.push({ kind: "toast", text: "Огненный смерч!" });

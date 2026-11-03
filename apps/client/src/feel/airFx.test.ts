@@ -122,6 +122,17 @@ describe("airEffects: own events", () => {
     expect(fire).toContainEqual({ kind: "toast", text: "Огненный смерч!" });
   });
 
+  it("«Огненный вал»: wall ignite sparks and a gust blast; the toast only for its owner", () => {
+    const mine = fx({ type: "reaction", kind: "fireRampart", owner: ME, zone: 7, pos: V(0, 0, -4) });
+    expect(bursts(mine)).toEqual(["fireWallIgnite", "gustBlast"]);
+    expect(sounds(mine)).toEqual(["gustBlast", "fireWallIgnite"]);
+    expect(mine).toContainEqual({ kind: "toast", text: "Огненный вал!" });
+    const foe = fx({ type: "reaction", kind: "fireRampart", owner: OTHER, zone: 7, pos: V(0, 0, -4) });
+    expect(bursts(foe)).toEqual(["fireWallIgnite", "gustBlast"]);
+    expect(foe!.some((e) => e.kind === "toast")).toBe(false);
+    expect(fx({ type: "reaction", kind: "bog", owner: ME, zone: 7, pos: V() })).toBeNull();
+  });
+
   it("leaves other events to the shared map: hits, deaths, Fire's dash, other zones, steam, a non-Air charge, beams", () => {
     const other: MatchEvent[] = [
       { type: "hit", source: OTHER, target: ME, ability: "gust", amount: 10, pos: V(), dir: V(0, 0, 1), knock: { distM: 7, upM: 1 }, airborne: false, dot: false, killed: false } as MatchEvent,

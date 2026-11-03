@@ -2,9 +2,10 @@ import { overlaps } from "../aabb";
 import { bodyBox } from "../body";
 import { DEFAULT_MOVE } from "../player";
 import type { AABB, Body, Vec3 } from "../types";
-import { OVERLAP_EPS } from "../world";
+import { groundBelow } from "../raycast";
+import { OVERLAP_EPS, isFree } from "../world";
 import { applyHit, applyStatus } from "./combat";
-import { BOG, EARTH, FIRE, LIMITS, STATUS, WATER, ticks } from "./defs";
+import { BOG, EARTH, FIRE, LIMITS, RAMPART, STATUS, WATER, ticks } from "./defs";
 import { NO_HOOKS, type SimHooks } from "./hooks";
 import { horizontalDir } from "./kit";
 import { clonePlain, unitById } from "./state";
@@ -50,6 +51,24 @@ export function endZone(s: MatchState, t: TickCtx, z: Zone): void {
 
 /** Пар живёт вне лимитов зон: у него своё ограничение на арену (steam.ts). */
 const limited = (q: Zone): boolean => q.kind !== "steam";
+
+/**
+ * Зона переходит к новому хозяину (реакция «Огненный вал»): отметки повторов старого и нового хозяина сброшены (один
+ * стал целью, другой — хозяином). Всего зон не прибавилось; у нового хозяина их теперь больше LIMITS.zonesPerMage —
+ * уходят его самые старые прочие (zone/end).
+ */
+export function adoptZone(s: MatchState, t: TickCtx, z: Zone, owner: number): void {
+  const was = z.owner;
+  z.owner = owner;
+  z.rehit = z.rehit.filter((r) => r.unit !== was && r.unit !== owner);
+  if (!limited(z)) return;
+  let own = 0;
+  for (const q of s.zones) if (q.owner === owner && limited(q)) own++;
+  while (own > LIMITS.zonesPerMage) {
+    endZone(s, t, s.zones.find((q) => q !== z && q.owner === owner && limited(q))!);
+    own--;
+  }
+}
 
 /**
  * Новая зона. Сначала пределы GDD 7.3–7.4 (пар в них не входит и их не трогает): у владельца уже LIMITS.zonesPerMage —
@@ -131,6 +150,30 @@ function contact(s: MatchState, t: TickCtx, z: Zone, damage: number, rehitTicks:
     if (rec) rec.tick = now + rehitTicks;
     else z.rehit.push({ unit: u.id, tick: now + rehitTicks });
   }
+}
+
+/**
+ * Ход «Огненного вала» на тике: бокс стены сдвигается на drift, пока now < untilTick. Встаёт (drift снят) у камня —
+ * сдвинутый бокс без нижних RAMPART.liftM задел бы статику или рельеф (Стена огня и пар не мешают), — и там, где под
+ * серединой нет опоры не глубже RAMPART.probeDownM. Доезд — тоже конец хода; срок стены не меняется.
+ */
+function driveWall(t: TickCtx, z: Zone): void {
+  const d = z.drift;
+  if (!d || z.shape.type !== "box") return;
+  if (t.now >= d.untilTick) {
+    delete z.drift;
+    return;
+  }
+  const b = z.shape.box;
+  const min = { x: b.min.x + d.x, y: b.min.y, z: b.min.z + d.z };
+  const max = { x: b.max.x + d.x, y: b.max.y, z: b.max.z + d.z };
+  const probe = { min: { x: min.x, y: min.y + RAMPART.liftM, z: min.z }, max };
+  const mid = { x: (min.x + max.x) / 2, y: min.y + RAMPART.liftM, z: (min.z + max.z) / 2 };
+  if (!isFree(t.world, probe) || groundBelow(t.world, mid, RAMPART.liftM + RAMPART.probeDownM) === null) {
+    delete z.drift;
+    return;
+  }
+  z.shape.box = { min, max };
 }
 
 /** Пересекает ли тело по XZ бокс, раздутый на pad. */
@@ -253,7 +296,10 @@ export function stepZones(s: MatchState, t: TickCtx, hooks: SimHooks = NO_HOOKS)
     if (now < z.armTick) continue;
     const step = hooks.zones[z.kind];
     if (step) step(s, t, z);
-    else if (z.kind === "fireWall") contact(s, t, z, FIRE.fireWall.contactDamage, FIRE_WALL_REHIT_TICKS, true, false);
+    else if (z.kind === "fireWall") {
+      driveWall(t, z);
+      contact(s, t, z, FIRE.fireWall.contactDamage, FIRE_WALL_REHIT_TICKS, true, false);
+    }
     else if (z.kind === "fireTrail") contact(s, t, z, TRAIL_PULSE_DAMAGE, TRAIL_PULSE_TICKS, false, true);
     else if (now === z.armTick && z.kind === "pillar") pillarStrike(s, t, z);
     else if (now === z.armTick && z.kind === "quake") quakeStrike(s, t, z);

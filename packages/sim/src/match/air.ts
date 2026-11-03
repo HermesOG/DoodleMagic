@@ -1,16 +1,16 @@
 import { moveBody } from "../body";
 import { DEFAULT_MOVE, forwardXZ, sanitizeInput } from "../player";
 import { raycast } from "../raycast";
-import { TICK_DT, type MoveParams, type PlayerInput, type Vec3 } from "../types";
+import { TICK_DT, type AABB, type MoveParams, type PlayerInput, type Vec3 } from "../types";
 import { aimGround } from "./aim";
 import { applyHit, launchUnit, pullMul } from "./combat";
 import { dashStarted, startDash, stepDash, type DashSpec } from "./dash";
-import { AIR, slotCooldownTicks, ticks } from "./defs";
+import { AIR, RAMPART, slotCooldownTicks, ticks } from "./defs";
 import type { ElementSim, MoveHooks, ZoneStep } from "./hooks";
 import { castAim, castSlots, emitCast, refillCharges, spendCharge, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit, Zone } from "./types";
-import { endZone, spawnZone } from "./zones";
+import { adoptZone, endZone, spawnZone } from "./zones";
 
 /**
  * Воздух «Свобода» (round3/02-air.md; Р2, Р10–Р13 фазы 4). «Лёгкость» — хуки движения: второй прыжок и парение.
@@ -43,6 +43,11 @@ const OWNER_LIFT_SPEED = Math.sqrt(2 * G * TO.ownerLiftM);
 const GUST_COS = Math.cos((GU.halfAngleDeg * Math.PI) / 180);
 /** Взрыв шара поджигает вихрь по высоте — во весь его рост: от 0,5 м ниже основания до 4 м выше (Р10). */
 const FIRE_REACH_DY_M = TO.belowM + TO.aboveM;
+const RAMPART_TICKS = ticks(RAMPART.durationS); // 60
+/** Шаг «Огненного вала» за тик, м: 8 м за 1 с. */
+const RAMPART_STEP_M = RAMPART.distM / RAMPART_TICKS;
+/** Шаг проб по средней линии стены для конуса Порыва, м. */
+const WALL_SAMPLE_M = 0.25;
 /** Порыв без снаряда: в событии release projectile −1. */
 const NO_PROJECTILE = -1;
 
@@ -149,7 +154,7 @@ function clearShot(t: TickCtx, a: Vec3, b: Vec3): boolean {
  * Выпуск Порыва (Р12): конус по взгляду этого тика. Цель — живой не-хозяин, центр тела по XZ не дальше 7 м + полтела,
  * не дальше 30° от взгляда, подошвы по высоте не дальше 2,5 м, свободный луч "shot" от глаз до центра тела:
  * 10 урона, толчок {7, 1} по взгляду, удар о стену +20. Чужие снаряды в конусе (по XZ до 7 м, 30°, по высоте 2,5 м от
- * середины тела мага) сдуваются без взрыва — событие blown.
+ * середины тела мага) сдуваются без взрыва — событие blown. Взведённая Стена огня в конусе — «Огненный вал» (rampart).
  */
 function releaseGust(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   const look = sanitizeInput(inp, u.move);
@@ -169,12 +174,53 @@ function releaseGust(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void 
       knock: { distM: GU.knockback.distM, upM: GU.knockback.upM }, slam: GU.slamDamage,
     });
   }
+  rampart(s, t, u, f);
   const midY = b.pos.y + b.height / 2;
   s.projectiles = s.projectiles.filter((p) => {
     if (p.owner === u.id || Math.abs(p.pos.y - midY) > GU.halfHeightM || !inCone(b.pos.x, b.pos.z, f, p.pos.x, p.pos.z, GU.rangeM)) return true;
     t.ev.push({ type: "blown", unit: u.id, projectile: p.id, kind: p.ability, owner: p.owner, pos: copy(p.pos) });
     return false;
   });
+}
+
+/**
+ * Задевает ли конус Порыва из подошвы b бокс Стены огня: по высоте бокс пересекает ±2,5 м от подошвы, а по XZ
+ * в конусе (7 м, 30°) хоть одна проба средней линии стены (через 0,25 м по длинной стороне) или ближайшая к магу точка.
+ */
+function gustTouchesBox(b: Vec3, f: { x: number; z: number }, box: AABB): boolean {
+  if (box.max.y < b.y - GU.halfHeightM || box.min.y > b.y + GU.halfHeightM) return false;
+  const nx = Math.max(box.min.x, Math.min(box.max.x, b.x));
+  const nz = Math.max(box.min.z, Math.min(box.max.z, b.z));
+  if (inCone(b.x, b.z, f, nx, nz, GU.rangeM)) return true;
+  const alongX = box.max.x - box.min.x >= box.max.z - box.min.z;
+  const len = alongX ? box.max.x - box.min.x : box.max.z - box.min.z;
+  const n = Math.ceil(len / WALL_SAMPLE_M);
+  const cx = (box.min.x + box.max.x) / 2;
+  const cz = (box.min.z + box.max.z) / 2;
+  for (let k = 0; k <= n; k++) {
+    const a = Math.min(len, k * WALL_SAMPLE_M);
+    const x = alongX ? box.min.x + a : cx;
+    const z = alongX ? cz : box.min.z + a;
+    if (inCone(b.x, b.z, f, x, z, GU.rangeM)) return true;
+  }
+  return false;
+}
+
+/**
+ * «Огненный вал» (GDD 4.6, round3/02-air.md): Порыв задел взведённую Стену огня — стена переходит к Воздуху (его эффект
+ * пришёл вторым; adoptZone) и за 1 с едет на 8 м по взгляду (drift, ход — driveWall в zones.ts), доживая свой срок.
+ * Касание и Горение — прежние, уже за Воздуха. Новой зоны нет. Событие reaction {kind: "fireRampart"} — у середины низа стены.
+ */
+function rampart(s: MatchState, t: TickCtx, u: Unit, f: { x: number; z: number }): void {
+  for (const q of [...s.zones]) {
+    if (q.kind !== "fireWall" || q.shape.type !== "box" || t.now < q.armTick || !s.zones.includes(q)) continue;
+    const box = q.shape.box;
+    if (!gustTouchesBox(u.move.body.pos, f, box)) continue;
+    adoptZone(s, t, q, u.id);
+    q.drift = { x: f.x * RAMPART_STEP_M + 0, z: f.z * RAMPART_STEP_M + 0, untilTick: t.now + RAMPART_TICKS };
+    const pos = { x: (box.min.x + box.max.x) / 2, y: box.min.y, z: (box.min.z + box.max.z) / 2 };
+    t.ev.push({ type: "reaction", kind: "fireRampart", owner: u.id, zone: q.id, pos });
+  }
 }
 
 /**

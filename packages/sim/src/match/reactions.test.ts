@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { aabb } from "../aabb";
 import type { Spawn } from "../types";
 import { buildTickWorld } from "./dynamic";
-import { BOG, CC_LIMITS, EARTH, ticks } from "./defs";
+import { AIR, BOG, CC_LIMITS, EARTH, FIRE, LIMITS, RAMPART, ticks } from "./defs";
 import { testContext } from "./fixtures";
 import { createMatch, stepMatch } from "./match";
 import { idleInput, unitById } from "./state";
@@ -150,6 +151,125 @@ describe("reaction «Топь» (quake on spring)", () => {
   it("is deterministic", () => {
     const a = quakeOnSpring(springAt(), 0, QUAKE_TICKS + 60);
     const b = quakeOnSpring(springAt(), 0, QUAKE_TICKS + 60);
+    expect(JSON.stringify(b.s)).toBe(JSON.stringify(a.s));
+    expect(JSON.stringify(b.log)).toBe(JSON.stringify(a.log));
+  });
+});
+
+// ---------------------------------------------------------------- «Огненный вал»
+
+const FIRE_ID = 1;
+const AIR_ID = 2;
+const GUST_TICKS = ticks(AIR.gust.windupS); // 24
+const RAMPART_TICKS = ticks(RAMPART.durationS); // 60
+const EAST = -Math.PI / 2;
+
+/** Стена огня Огня (id 1) поперёк взгляда Воздуха: по X от −5 до 5, центр z = −4; взведена (или через armIn). */
+function wallAt(armIn = 0, life = 600, box = aabb(-5, 0, -4.3, 5, FIRE.fireWall.heightM, -3.7)) {
+  return (s: MatchState, t: TickCtx) => {
+    spawnZone(s, t, {
+      owner: FIRE_ID, kind: "fireWall", ability: "fireWall", shape: { type: "box", box },
+      bornTick: s.tick - 24 + armIn, armTick: s.tick + armIn, endTick: s.tick + life,
+    });
+  };
+}
+interface GustSetup { prep?: (s: MatchState, t: TickCtx) => void; fire?: Spawn; air?: Spawn; c?: MatchContext; n?: number; each?: (k: number, s: MatchState) => void }
+/** Огонь (id 1) и Воздух (id 2, смотрит на −Z); Воздух жмёт Q на тике 0 — выпуск на тике 24. */
+function gustOnWall(o: GustSetup = {}) {
+  return play(
+    { mages: [{ element: "fire", spawn: o.fire ?? spot(0, -16) }, { element: "air", spawn: o.air ?? spot(0, 0) }], prep: o.prep ?? wallAt(), c: o.c },
+    o.n ?? GUST_TICKS + RAMPART_TICKS + 10,
+    (k) => (k === 0 ? { [AIR_ID]: { q: true } } : {}),
+    o.each,
+  );
+}
+const wallOf = (s: MatchState) => s.zones.find((z) => z.kind === "fireWall")!;
+const boxOf = (s: MatchState) => {
+  const z = wallOf(s);
+  if (z.shape.type !== "box") throw new Error("not a box");
+  return z.shape.box;
+};
+
+describe("reaction «Огненный вал» (gust on a fire wall)", () => {
+  it("the gust release turns an armed fire wall into a rampart owned by Air (second effect), no new zone", () => {
+    let zones = -1;
+    const { s, log } = gustOnWall({ n: GUST_TICKS + 1, each: (k, st) => { if (k === GUST_TICKS - 1) zones = st.zones.length; } });
+    const r = evs(log, "reaction");
+    expect(r).toHaveLength(1);
+    expect(r[0]!.t).toBe(GUST_TICKS);
+    const w = wallOf(s);
+    expect(r[0]!.e).toMatchObject({ kind: "fireRampart", owner: AIR_ID, zone: w.id });
+    expect(w.owner).toBe(AIR_ID);
+    expect(w.kind).toBe("fireWall");
+    expect(s.zones.length).toBe(zones);
+  });
+
+  it("travels 8 m along the gust over 1 s, then stands until its normal end tick", () => {
+    const life = GUST_TICKS + RAMPART_TICKS + 30;
+    let mid = 0;
+    const { s, start } = gustOnWall({ prep: wallAt(0, life), n: GUST_TICKS + RAMPART_TICKS + 5, each: (k, st) => { if (k === GUST_TICKS + 29) mid = (boxOf(st).min.z + boxOf(st).max.z) / 2; } });
+    const b = boxOf(s);
+    expect((b.min.z + b.max.z) / 2).toBeCloseTo(-4 - RAMPART.distM, 6);
+    expect([b.min.x, b.max.x]).toEqual([-5, 5]);
+    expect(mid).toBeCloseTo(-4 - RAMPART.distM / 2, 6);
+    expect(wallOf(s).drift).toBeUndefined();
+    expect(wallOf(s).endTick).toBe(start + life);
+    const end = gustOnWall({ prep: wallAt(0, life), n: life + 1 });
+    expect(end.s.zones.some((z) => z.kind === "fireWall")).toBe(false);
+    expect(evs(end.log, "zone").find(({ e }) => e.kind === "fireWall" && e.phase === "end")?.t).toBe(life);
+  });
+
+  it("burns its former owner on the way (contact damage and Burning, credited to Air); never its new owner", () => {
+    const { log } = gustOnWall({ fire: spot(0, -10) });
+    const hits = evs(log, "hit").filter(({ e }) => e.ability === "fireWall");
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0]!.e).toMatchObject({ source: AIR_ID, target: FIRE_ID, amount: FIRE.fireWall.contactDamage });
+    expect(evs(log, "status").some(({ e }) => e.target === FIRE_ID && e.status === "burning" && e.source === AIR_ID)).toBe(true);
+    expect(evs(log, "hit").some(({ e }) => e.target === AIR_ID)).toBe(false);
+  });
+
+  it("stops at static geometry", () => {
+    const c = testContext([{ box: aabb(-6, 0, -9.5, 6, 3, -9), tag: "block" }]);
+    const { s } = gustOnWall({ c });
+    const b = boxOf(s);
+    expect(b.min.z).toBeGreaterThanOrEqual(-9 - 1e-6);
+    expect(b.min.z).toBeLessThan(-9 + RAMPART.distM / RAMPART_TICKS + 1e-6);
+    expect(wallOf(s).drift).toBeUndefined();
+  });
+
+  it("stops where there is no support under its middle (the floor ends at x = 20)", () => {
+    const box = aabb(13.7, 0, -5, 14.3, FIRE.fireWall.heightM, 5);
+    const { s } = gustOnWall({ prep: wallAt(0, 600, box), air: spot(10, 0, EAST), fire: spot(-10, 0) });
+    const b = boxOf(s);
+    const cx = (b.min.x + b.max.x) / 2;
+    expect(cx).toBeGreaterThan(14 + 4);
+    expect(cx).toBeLessThanOrEqual(20 + 1e-6);
+  });
+
+  it("no rampart from a wall still in telegraph or out of the cone", () => {
+    expect(evs(gustOnWall({ prep: wallAt(GUST_TICKS + 5) }).log, "reaction")).toHaveLength(0);
+    // стена за спиной Воздуха
+    expect(evs(gustOnWall({ prep: wallAt(0, 600, aabb(-5, 0, 3.7, 5, FIRE.fireWall.heightM, 4.3)) }).log, "reaction")).toHaveLength(0);
+  });
+
+  it("respects the per-mage zone limit: Air's oldest other zone gives way", () => {
+    const prep = (s: MatchState, t: TickCtx) => {
+      for (let k = 0; k < LIMITS.zonesPerMage; k++) {
+        spawnZone(s, t, {
+          owner: AIR_ID, kind: "tornado", ability: "tornado", shape: { type: "disc", center: { x: -30, y: 0, z: 10 * k - 20 }, radius: 5 },
+          bornTick: s.tick, armTick: s.tick + 600, endTick: s.tick + 900,
+        });
+      }
+      wallAt()(s, t);
+    };
+    const { s } = gustOnWall({ prep, n: GUST_TICKS + 1 });
+    expect(s.zones.filter((z) => z.owner === AIR_ID)).toHaveLength(LIMITS.zonesPerMage);
+    expect(wallOf(s).owner).toBe(AIR_ID);
+  });
+
+  it("is deterministic", () => {
+    const a = gustOnWall({ fire: spot(0, -10) });
+    const b = gustOnWall({ fire: spot(0, -10) });
     expect(JSON.stringify(b.s)).toBe(JSON.stringify(a.s));
     expect(JSON.stringify(b.log)).toBe(JSON.stringify(a.log));
   });
