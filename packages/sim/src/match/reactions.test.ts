@@ -122,6 +122,22 @@ describe("reaction «Топь» (quake on spring)", () => {
     expect(evs(quakeOnSpring(springAt(0, SPRING_LEFT, 15)).log, "reaction")).toHaveLength(0);
   });
 
+  it("needs the spring's centre inside the quake radius: an edge overlap is not enough", () => {
+    // Земля в (0, −3), радиус 7 м. Родник в x = 9: до центра ≈ 9,5 м — диски пересекаются (7 + 4), центр снаружи.
+    expect(evs(quakeOnSpring(springAt(0, SPRING_LEFT, 9)).log, "reaction")).toHaveLength(0);
+    // Родник в x = 6: до центра ≈ 6,7 м — внутри радиуса.
+    expect(evs(quakeOnSpring(springAt(0, SPRING_LEFT, 6)).log, "reaction")).toHaveLength(1);
+  });
+
+  it("the slow lingers only 0.5 s after leaving the bog", () => {
+    const at = QUAKE_TICKS + ticks(3.5);
+    const { s } = quakeOnSpring(springAt(), 0, at + 1);
+    const w = u(s, WATER_ID);
+    const now = s.tick - 1;
+    expect(BOG.slowS).toBe(0.5);
+    expect(w.status.slowUntil - now).toBeLessThanOrEqual(ticks(BOG.slowS) + 1);
+  });
+
   it("slows (40 %, CC limits) and wets the owner's enemies inside, again and again; no healing", () => {
     const at = QUAKE_TICKS + ticks(3.5); // замедление и Мокрый самого землетрясения и Родника уже сошли бы
     const { s, log } = quakeOnSpring(springAt(), 0, at + 1);

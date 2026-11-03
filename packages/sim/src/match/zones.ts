@@ -242,8 +242,8 @@ function quakeStrike(s: MatchState, t: TickCtx, z: Zone): void {
 }
 
 /**
- * «Топь» (GDD 4.6): удар землетрясения по взведённому Роднику — их диски пересекаются по XZ, центры по высоте
- * не дальше EARTH.earthquake.heightM. Родник уходит (zone/end), на его месте — зона bog хозяина землетрясения (его
+ * «Топь» (GDD 4.6): удар землетрясения по взведённому Роднику — центр Родника по XZ в радиусе землетрясения (краем
+ * задеть мало), центры по высоте не дальше EARTH.earthquake.heightM. Родник уходит (zone/end), на его месте — зона bog хозяина землетрясения (его
  * эффект пришёл вторым): тот же диск, взведена сразу, живёт остаток Родника, но не меньше 2 с. Лимиты зон — как
  * у новой зоны (spawnZone): итог по арене не растёт. Событие reaction {kind: "bog"}.
  */
@@ -257,7 +257,7 @@ function makeBog(s: MatchState, t: TickCtx, quake: Zone): void {
     const c = z.shape.center;
     const dx = c.x - qc.x;
     const dz = c.z - qc.z;
-    if (Math.sqrt(dx * dx + dz * dz) >= qr + z.shape.radius || Math.abs(c.y - qc.y) > Q.heightM) continue;
+    if (Math.sqrt(dx * dx + dz * dz) > qr || Math.abs(c.y - qc.y) > Q.heightM) continue;
     const endTick = Math.max(z.endTick, now + BOG_MIN_LIFE_TICKS);
     const shape: ZoneShape = { type: "disc", center: { x: c.x, y: c.y, z: c.z }, radius: z.shape.radius };
     endZone(s, t, z);
@@ -268,7 +268,7 @@ function makeBog(s: MatchState, t: TickCtx, quake: Zone): void {
 
 /**
  * Шаг Топи: живые враги хозяина в диске (как у Родника: по XZ до радиуса, по высоте до 1,5 м) каждый тик Мокрые
- * и замедлены до 0,6 на 2 с (пределы CC: −40 % и 2 с на применение; внутри — заново). Хозяина не трогает, не лечит.
+ * и замедлены до 0,6 (предел CC −40 %); замедление держится ещё 0,5 с после выхода, как у Родника (внутри — заново). Хозяина не трогает, не лечит.
  */
 function stepBog(s: MatchState, t: TickCtx, z: Zone): void {
   for (const u of s.units) {
