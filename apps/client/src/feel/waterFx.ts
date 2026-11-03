@@ -109,7 +109,8 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
       const own = mine(ev.unit);
       // whipArc: pos — конец дуги, dir — вектор от конца к глазам кастующего (не единичный), owner — кто бьёт: по нему
       // waterVfx находит руку, из которой рисовать дугу; общий пул нормирует dir и бросает капли к Воде
-      const out: Effect[] = [{ ...burst("whipArc", ev.to, sub(ev.from, ev.to)), owner: ev.unit }, at("whipCrack", ev.from, own)];
+      const arc: Effect = { kind: "burst", preset: "whipArc", pos: ev.to, dir: sub(ev.from, ev.to), scale: 1, owner: ev.unit };
+      const out: Effect[] = [arc, at("whipCrack", ev.from, own)];
       if (ev.target !== NOBODY) out.push(burst("whipSplash", ev.to, unitDir(sub(ev.from, ev.to))), hitSound("whipHit", ev.to, own));
       return out;
     }
