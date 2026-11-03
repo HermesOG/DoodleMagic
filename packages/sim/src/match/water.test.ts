@@ -215,7 +215,8 @@ describe("Water ward (E)", () => {
   it("LMB drops it early: the Answer carries the absorbed 12 raised to 20, wets the target, counts as the ward; no extra whip", () => {
     const { s, log, start } = play(
       { mages: [water(), shooter("fire", 0, -10)] }, 80,
-      (k) => ({ 1: { e: k === 0, primary: k === 30 }, 2: { primary: k === 0 } }),
+      // клик держится 6 тиков, как настоящий: удержание после Ответа не начинает лишний хлыст
+      (k) => ({ 1: { e: k === 0, primary: k >= 30 && k < 36 }, 2: { primary: k === 0 } }),
     );
     expect(evs(log, "absorb").map(({ e }) => [e.kind, e.amount])).toEqual([["fireFists", 12]]);
     expect(evs(log, "release").filter(({ e }) => e.unit === 1).map(({ t, e }) => [t, e.ability])).toEqual([[30, "waterWard"]]);

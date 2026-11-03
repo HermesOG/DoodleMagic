@@ -166,13 +166,15 @@ const WATER_ORDER: readonly Slot[] = Object.freeze(["q", "e", "c", "primary"]);
 export const WATER_KIT: Kit = Object.freeze({
   /**
    * Нажатие ЛКМ под диском гасит его досрочно (Ответ — сразу) и поглощается: ни хлыста на этом тике, ни нажатия
-   * в буфере. Удержание после этого тика снова бьёт хлыстом, как у любой ЛКМ.
+   * в буфере. Ответ считается ударом хлыста: клик держится несколько тиков, и без перезарядки удержание сразу
+   * начало бы лишний замах. Дальше удержание бьёт хлыстом, как у любой ЛКМ.
    */
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {
     const m = u.mage!;
     if (pressed.primary && wardUp(m, t.now)) {
       dropWard(s, t, u, inp);
       m.pending.primary = NEVER;
+      m.ready.primary = Math.max(m.ready.primary, t.now + WHIP_CD);
       castSlots(s, t, u, { ...inp, primary: false }, { ...pressed, primary: false }, WATER_CASTS, WATER_ORDER);
       return;
     }
