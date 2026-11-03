@@ -105,12 +105,14 @@ export type TryCast = (s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => R
 export const PRESS_BUFFER_TICKS = ticks(PRESS_BUFFER_S);
 /**
  * С какого тика отказ r снимет само время: перезарядка — с ready слота; замах — со следующего тика после выпуска
- * (input идёт раньше tick, который выпускает снаряд). Прочие отказы (нет опоры, цели, обездвижен) время не снимет — null.
+ * (input идёт раньше tick, который выпускает снаряд); диск Отражения Воды — с ward.endTick, когда он уже не стоит.
+ * Прочие отказы (нет опоры, цели, обездвижен) время не снимет — null. У Огня, Земли и Воздуха диска нет (ward = null).
  */
 function legalAt(m: NonNullable<Unit["mage"]>, slot: Slot, r: RejectReason, now: number): number | null {
   if (r === "cooldown") return m.ready[slot];
-  if (r === "busy") return m.windup ? m.windup.releaseTick + 1 : now + 1;
-  return null;
+  if (r !== "busy") return null;
+  const free = m.windup ? m.windup.releaseTick + 1 : now + 1;
+  return m.ward && now < m.ward.endTick ? Math.max(free, m.ward.endTick) : free;
 }
 
 /**

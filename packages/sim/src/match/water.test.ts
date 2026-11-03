@@ -255,7 +255,15 @@ describe("Water ward (E)", () => {
   it("under the ward a held LMB is silent and Q is busy; whipping resumes when it drops", () => {
     const { log } = play(solo([]), 70, (k) => ({ 1: { e: k === 0, primary: true, q: k === 5 } }));
     expect([ticksOf(log, "cast", "waterWhip"), ticksOf(log, "cast", "waterGrab")]).toEqual([[60], []]);
-    expect(evs(log, "reject").map(({ t, e }) => [t, e.slot, e.reason])).toEqual([[18, "primary", "busy"], [23, "q", "busy"]]);
+    // диск не снимется за 0,3 с: отказ сразу, на тике нажатия, а не через 18 тиков ожидания
+    expect(evs(log, "reject").map(({ t, e }) => [t, e.slot, e.reason])).toEqual([[0, "primary", "busy"], [5, "q", "busy"]]);
+  });
+
+  it("a Q pressed in the ward's last 0.3 s waits and casts as it drops; 19 ticks before — rejects at once", () => {
+    const late = play(solo([]), 70, (k) => ({ 1: { e: k === 0, q: k === 42 } }));
+    expect([ticksOf(late.log, "cast", "waterGrab"), evs(late.log, "reject").length]).toEqual([[60], 0]);
+    const early = play(solo([]), 70, (k) => ({ 1: { e: k === 0, q: k === 41 } }));
+    expect([ticksOf(early.log, "cast", "waterGrab"), evs(early.log, "reject").map(({ t, e }) => [t, e.slot, e.reason])]).toEqual([[], [[41, "q", "busy"]]]);
   });
 });
 
