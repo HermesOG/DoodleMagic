@@ -13,7 +13,7 @@ export interface DecalSpec {
   stage: "telegraph" | "active";
   progress: number;
   shape: "rect" | "ring" | "segment";
-  style: "sparks" | "cracks" | "quake" | "embers" | "tornado" | "fireTornado" | "spring";
+  style: "sparks" | "cracks" | "quake" | "embers" | "tornado" | "fireTornado" | "spring" | "scorch";
   center: Vec3;
   sizeX: number;
   sizeZ: number;
@@ -22,12 +22,12 @@ export interface DecalSpec {
 }
 
 /**
- * Стиль по виду зоны; null — без декали (пар рисуется облаком, а не на полу). Смерч и Родник пока без своего узора
- * в шейдере (их рисуют частицы стихий), а нефритовое кольцо «Корней» под ними путало бы с Землёй.
+ * Стиль по виду зоны; null — без декали (пар рисуется облаком, а не на полу). Смерч и Родник — свои простые следы
+ * на полу (вихрь и круги); частицы стихий рисуются поверх. Чужие — с тёмной зубчатой кромкой.
  */
 const STYLE: Readonly<Record<ZoneKind, DecalSpec["style"] | null>> = {
   fireWall: "sparks", fireTrail: "embers", pillar: "cracks", quake: "quake",
-  tornado: null, fireTornado: null, spring: null, steam: null,
+  tornado: "tornado", fireTornado: "fireTornado", spring: "spring", steam: null,
 };
 /** Разовые зоны бьют ровно на armTick: после взвода декали нет, удар рисует всплеск. */
 const ONE_SHOT: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["pillar", "quake"]);
@@ -75,14 +75,25 @@ export function zoneDecal(z: Zone, nowTick: number, localId: UnitId = NOBODY): D
   }
 }
 
+/** Подпалина шара на полу живёт столько секунд, след землетрясения — столько (round3/01, A3). */
+export const SCORCH_S = 8;
+export const QUAKE_AFTER_S = 2.5;
+
+/** След удара на полу — не зона: подпалина шара или трещины землетрясения. age — секунды с удара; null — уже погас. */
+export function markDecal(kind: "scorch" | "quake", center: Vec3, radius: number, age: number): DecalSpec | null {
+  const life = kind === "scorch" ? SCORCH_S : QUAKE_AFTER_S;
+  if (age < 0 || age >= life) return null;
+  return { stage: "active", progress: age / life, shape: "ring", style: kind, center, sizeX: 2 * radius, sizeZ: 2 * radius, angle: 0, enemy: false };
+}
+
 /** Внутренний стиль декали «обездвижен»: нефритовое кольцо у ног (не зона, а статус юнита). */
 export interface RootRing {
   center: Vec3;
   radius: number;
 }
 
-/** Номер узора в шейдере. Своих узоров у Смерча и Родника пока нет — до задач 5–6 рисуется кольцо (узор 4). */
-const STYLE_ID: Readonly<Record<DecalSpec["style"], number>> = { sparks: 0, cracks: 1, quake: 2, embers: 3, tornado: 4, fireTornado: 4, spring: 4 };
+/** Номер узора в шейдере; 4 — кольцо обездвиженного (не зона). */
+const STYLE_ID: Readonly<Record<DecalSpec["style"], number>> = { sparks: 0, cracks: 1, quake: 2, embers: 3, scorch: 5, tornado: 6, fireTornado: 7, spring: 8 };
 const SHAPE_ID = { rect: 0, ring: 1, segment: 2 } as const;
 const STYLE_ROOT = 4;
 
@@ -94,7 +105,7 @@ const STYLE_ROOT = 4;
 const DECAL_VERT = /* glsl */ `
 attribute vec4 aD0; // середина (x, y, z), угол
 attribute vec4 aD1; // sizeX, sizeZ, progress, яркость
-attribute vec4 aD2; // стиль, стадия (0 телеграф, 1 действие), форма, семя
+attribute vec4 aD2; // стиль, стадия (0 телеграф, 1 действие; +2 — чужая), форма, семя
 varying vec3 vRay;
 varying float vViewZ;
 varying vec4 vD0;
@@ -102,7 +113,7 @@ varying vec4 vD1;
 varying vec4 vD2;
 void main() {
   float style = aD2.x;
-  float spill = style < 0.5 ? (aD2.y > 0.5 ? 1.9 : 0.6) : style < 1.5 ? 0.5 : style < 2.5 ? 0.3 : style < 3.5 ? 0.9 : 0.2;
+  float spill = style < 0.5 ? (mod(aD2.y, 2.0) > 0.5 ? 1.9 : 0.6) : style < 1.5 ? 0.5 : style < 2.5 ? 0.3 : style < 3.5 ? 0.9 : 0.2;
   vec2 halfSize = aD1.xy * 0.5 + spill;
   vec2 l = position.xy * 2.0 * halfSize;
   float c = cos(aD0.w);
@@ -124,6 +135,8 @@ uniform vec3 uFire;
 uniform vec3 uCore;
 uniform vec3 uEmber;
 uniform vec3 uJade;
+uniform vec3 uAir;
+uniform vec3 uWater;
 varying vec3 vRay;
 varying float vViewZ;
 varying vec4 vD0;
@@ -148,7 +161,8 @@ void main() {
   float prog = vD1.z;
   float inten = vD1.w;
   int style = int(vD2.x + 0.5);
-  bool tele = vD2.y < 0.5;
+  bool tele = mod(vD2.y, 2.0) < 0.5;
+  bool foe = vD2.y > 1.5;
   int shape = int(vD2.z + 0.5);
   float seed = vD2.w;
   float t = uTime;
@@ -200,6 +214,28 @@ void main() {
       add += uJade * core * mask * (0.5 + 0.9 * prog) * pulse;
     }
     add += uJade * (1.0 - smoothstep(0.5, 1.0, r)) * (0.06 + 0.22 * prog) * pulse;
+  } else if (style == 2 && !tele) {
+    // после удара землетрясения (A3): волна-кольцо 1 → R за 0,35 с, за ней трещины тушью; гаснут к 2,5 с
+    float rr = length(l);
+    float R = hs.x;
+    float ts = prog * QUAKE_AFTER_S;
+    float w = clamp(ts / 0.35, 0.0, 1.0);
+    float front = mix(1.0, R, 1.0 - (1.0 - w) * (1.0 - w));
+    float shock = fxBell((rr - front) / (0.25 + 0.35 * w)) * (1.0 - smoothstep(0.3, 0.6, ts)) * step(rr, R + 0.3);
+    add += uJade * shock * 1.1;
+    a = shock * 0.35;
+    float fade = 1.0 - smoothstep(0.55, 1.0, prog);
+    float swept = (1.0 - smoothstep(front - 0.2, front + 0.2, rr)) * (1.0 - smoothstep(R - 0.3, R + 0.1, rr));
+    // ячейки шума (9 выборок) — только там, где волна прошла и трещина может быть
+    if (swept > 0.0) {
+      float keep = smoothstep(0.42, 0.62, fxNoise(l * 0.5 + seed * 3.0));
+      if (keep > 0.0) {
+        float cell = fxCells(l * 0.9 + seed);
+        float crack = (1.0 - smoothstep(0.015, 0.055, cell)) * swept * keep;
+        a = max(a, crack * 0.75 * fade);
+        add += uJade * (1.0 - smoothstep(0.0, 0.03, cell)) * swept * keep * (1.0 - smoothstep(0.1, 0.35, prog)) * 0.9;
+      }
+    }
   } else if (style == 2) {
     // землетрясение: тёмная граница 7 м, к удару внутрь сходится нефритовое кольцо, за ним — трещины
     float rr = length(l);
@@ -232,6 +268,45 @@ void main() {
       add += mix(uEmber, uFire, n) * inside * (0.3 + 0.8 * n * n) * env;
       a = inside * 0.35 * smoothstep(0.15, 0.9, prog) * (1.0 - smoothstep(0.85, 1.0, prog));
       ink = vec3(0.12, 0.1, 0.09);
+    }
+  } else if (style == 5) {
+    // подпалина шара (A3): рваное пятно тушью, первые секунды в нём тлеют угли; к концу 8 с бледнеет
+    float r = length(l) / hs.x + (fxNoise(l * 1.6 + seed) - 0.5) * 0.45;
+    float body = 1.0 - smoothstep(0.45, 1.0, r);
+    float fade = 1.0 - smoothstep(0.65, 1.0, prog);
+    float n = fxNoise(l * 4.0 + seed * 7.0);
+    a = body * (0.4 + 0.25 * n) * fade;
+    float hot = 1.0 - smoothstep(0.0, 0.2, prog);
+    add += mix(uEmber, uFire, n) * smoothstep(0.55, 0.8, n) * body * hot * (0.8 + 0.2 * sin(t * 13.0 + seed));
+    ink = vec3(0.07, 0.055, 0.045);
+  } else if (style >= 6 && style <= 8) {
+    // Смерч, огненный смерч и Родник: свой след на полу; телеграф — кромка растёт к взводу
+    float rr = length(l);
+    float R = hs.x;
+    float q = rr / R;
+    float ang = atan(l.y, l.x);
+    float inside = 1.0 - smoothstep(0.92, 1.02, q);
+    vec3 col = style == 8 ? uWater : style == 7 ? mix(uAir, uFire, 0.55) : uAir;
+    float env = tele ? 1.0 : smoothstep(0.0, 0.05, prog) * (1.0 - smoothstep(0.9, 1.0, prog));
+    add += col * fxBell((rr - R * (tele ? prog : 1.0)) / 0.06) * (tele ? 0.5 : 0.35) * env;
+    if (!tele && style == 8) {
+      // Родник: круги расходятся от середины
+      float ripple = fxBell((fract(q * 3.0 - t * 0.7) - 0.5) / 0.12);
+      add += col * ripple * inside * 0.3 * env;
+      a = ripple * inside * 0.08 * env;
+    } else if (!tele) {
+      // Смерч: три рукава закручиваются к середине
+      float arms = sin(ang * 3.0 + q * 7.0 - t * 7.0);
+      float swirl = smoothstep(0.55, 1.0, arms) * inside * smoothstep(0.08, 0.3, q);
+      add += col * swirl * 0.32 * env;
+      a = swirl * 0.12 * env;
+    }
+    if (foe) {
+      // чужая зона: тёмная зубчатая кромка, как у чужой лужи Воды
+      float saw = abs(fract(ang * 9.5493 + seed) - 0.5) * 2.0;
+      float band = step(0.88, q) * (1.0 - step(0.92 + 0.08 * saw, q)) * env;
+      add *= 1.0 - band;
+      a = max(a, 0.7 * band);
     }
   } else {
     // обездвижен: нефритовое кольцо у ног, бегущие штрихи
@@ -277,8 +352,11 @@ export function createDecalMeshes(gbuffer: FxGBuffer, time: TimeUniform, max = 3
     vertexShader: DECAL_VERT,
     fragmentShader: DECAL_FRAG,
     gbuffer,
-    defines: { ROOT_FRAC: glslFloat(EARTH.earthquake.rootRadiusM / EARTH.earthquake.radiusM) },
-    uniforms: { uTime: time, uFire: { value: v3(FX_COLOR.fire) }, uCore: { value: v3(FX_COLOR.core) }, uEmber: { value: v3(FX_COLOR.ember) }, uJade: { value: v3(FX_COLOR.jade) } },
+    defines: { ROOT_FRAC: glslFloat(EARTH.earthquake.rootRadiusM / EARTH.earthquake.radiusM), QUAKE_AFTER_S: glslFloat(QUAKE_AFTER_S) },
+    uniforms: {
+      uTime: time, uFire: { value: v3(FX_COLOR.fire) }, uCore: { value: v3(FX_COLOR.core) }, uEmber: { value: v3(FX_COLOR.ember) }, uJade: { value: v3(FX_COLOR.jade) },
+      uAir: { value: v3(FX_COLOR.air) }, uWater: { value: v3(FX_COLOR.water) },
+    },
   });
   const mesh = new InstancedMesh(geometry, material, max);
   mesh.name = "fx-decals";
@@ -295,7 +373,7 @@ export function createDecalMeshes(gbuffer: FxGBuffer, time: TimeUniform, max = 3
         const s = d.spec;
         a0.setXYZW(n, s.center.x, s.center.y, s.center.z, s.angle);
         a1.setXYZW(n, s.sizeX, s.sizeZ, s.progress, d.intensity);
-        a2.setXYZW(n, STYLE_ID[s.style], s.stage === "telegraph" ? 0 : 1, SHAPE_ID[s.shape], d.seed);
+        a2.setXYZW(n, STYLE_ID[s.style], (s.stage === "telegraph" ? 0 : 1) + (s.enemy ? 2 : 0), SHAPE_ID[s.shape], d.seed);
         n++;
       }
       for (const r of roots) {

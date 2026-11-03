@@ -1,12 +1,12 @@
 import { Group, Scene, Vector3, type PerspectiveCamera } from "three";
-import { ELEMENT_INFO, TICK_HZ, statusFlags, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
+import { EARTH, ELEMENT_INFO, TICK_HZ, statusFlags, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
 import type { BurstPreset, Effect, FeelTier } from "../feel/effects";
 import { TIERS } from "../feel/eventMap";
 import { stepSpring, type Spring } from "../hands/spring";
 import type { PresetId } from "../render/quality";
 import { HANDS_FOV, WORLD_FOV, type FxLayers, type StyleRenderer } from "../render/styleRenderer";
 import { createDebris } from "./debris";
-import { createDecalMeshes, zoneDecal, type DecalSpec, type RootRing } from "./decals";
+import { createDecalMeshes, markDecal, zoneDecal, type DecalSpec, type RootRing } from "./decals";
 import { createDummyMeshes, type DummyView } from "./dummyMeshes";
 import { ELEMENT_VFX, type ElementVfxFrame } from "./elementVfx";
 import { createFireWallMeshes, fireWallSheet, type FireWallSheet } from "./fireWalls";
@@ -140,6 +140,31 @@ interface DummyAnim {
   frozen: { x: number; y: number; z: number; yaw: number; pitch: number };
 }
 
+/** След удара на полу (A3): подпалина шара, трещины землетрясения. Живёт в эффектнике, не в зоне. */
+interface Mark {
+  kind: "scorch" | "quake";
+  center: Vec3;
+  radius: number;
+  born: number;
+  seed: number;
+}
+/** Следов на полу одновременно — не больше: старый уступает новому. */
+const MAX_MARKS = 8;
+
+/**
+ * Пол под взрывом шара: попал в стоящего — его подошва; в летящего — пола рядом нет (null); иначе — точка взрыва
+ * (пол, рельеф или стена).
+ */
+export function scorchFloor(pos: Vec3, units: readonly Unit[]): number | null {
+  for (const u of units) {
+    if (!u.alive) continue;
+    const b = u.move.body.pos;
+    if (Math.hypot(b.x - pos.x, b.z - pos.z) > 1.2 || pos.y < b.y - 0.3 || pos.y > b.y + 2.4) continue;
+    return u.move.onGround ? b.y : null;
+  }
+  return pos.y;
+}
+
 interface Flash {
   pos: Vec3;
   light: number;
@@ -236,6 +261,13 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const terrainSeen = new Map<number, Seen<Terrain>>();
   const ignited = new Map<number, { embers: number }>();
   const flashes: Flash[] = [];
+  const marks: Mark[] = [];
+  /** Юниты прошлого кадра — где пол под взрывом. */
+  let lastUnits: readonly Unit[] = [];
+  const addMark = (m: Mark): void => {
+    if (marks.length >= MAX_MARKS) marks.shift();
+    marks.push(m);
+  };
   const palms = { right: new Vector3(REST_PALM.x, REST_PALM.y, REST_PALM.z), left: new Vector3(-REST_PALM.x, REST_PALM.y, REST_PALM.z) };
   let lastPalmHand: "left" | "right" = "right";
   /** Стихия своего мага (из прошлого кадра) — у кулака Огня нет паузы цели. */
@@ -276,6 +308,12 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           emitWorld(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), t);
           const l = BURST_LIGHT[e.preset];
           if (l) flashes.push({ ...l, pos: { ...e.pos }, born: t, light: l.light * Math.min(1.5, Math.max(0.7, e.scale)) });
+          if (e.preset === "fireballBoom") {
+            const y = scorchFloor(e.pos, lastUnits);
+            if (y !== null) addMark({ kind: "scorch", center: { x: e.pos.x, y, z: e.pos.z }, radius: 1.2 * Math.min(1.5, Math.max(0.5, e.scale)), born: t, seed: Math.random() * 17 });
+          } else if (e.preset === "quakeRing") {
+            addMark({ kind: "quake", center: { ...e.pos }, radius: EARTH.earthquake.radiusM * Math.min(1.5, Math.max(0.5, e.scale)), born: t, seed: Math.random() * 17 });
+          }
           break;
         }
         case "palm": {
@@ -317,6 +355,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     sync(v) {
       const nowT = rel(v.nowS);
       time.value = nowT;
+      lastUnits = v.cur.units;
       const dt = lastNowS === null ? 0 : Math.min(0.1, Math.max(0, v.nowS - lastNowS));
       lastNowS = v.nowS;
       const tick = renderTick(v.prev, v.cur, v.alpha);
@@ -582,6 +621,13 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         decal: (spec, seed, intensity = 1) => decalList.push({ spec, seed, intensity }),
       };
       for (const el of elements) el.sync(frame);
+      // следы ударов на полу: подпалины и трещины
+      for (let i = marks.length - 1; i >= 0; i--) {
+        const m = marks[i]!;
+        const spec = markDecal(m.kind, m.center, m.radius, nowT - m.born);
+        if (spec) decalList.push({ spec, seed: m.seed, intensity: 1 });
+        else marks.splice(i, 1);
+      }
       decals.update(decalList, roots);
 
       // рельеф: боксы в G-буфер, прожилки; сломанный — обломки
