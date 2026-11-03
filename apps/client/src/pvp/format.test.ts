@@ -241,10 +241,12 @@ describe("results and board texts", () => {
     ]);
   });
 
-  it("1 and 2 pick Fire and Earth", () => {
+  it("1–4 pick Fire, Earth, Air and Water", () => {
     expect(ELEMENT_KEYS).toEqual([
       { code: "Digit1", element: "fire", label: "1 — Огонь" },
       { code: "Digit2", element: "earth", label: "2 — Земля" },
+      { code: "Digit3", element: "air", label: "3 — Воздух" },
+      { code: "Digit4", element: "water", label: "4 — Вода" },
     ]);
   });
 });

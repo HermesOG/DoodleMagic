@@ -203,14 +203,14 @@ describe("parseClientMsg: rejected", () => {
   });
 
   it("rejects a join with an unknown element, a non-finite version or no element", () => {
-    expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, name: "a", element: "water" }))).toBeNull();
+    expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, name: "a", element: "lava" }))).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: "join", v: 1, name: "a" }))).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: "join", v: "1", name: "a", element: "fire" }))).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: "join", name: "a", element: "fire" }))).toBeNull();
   });
 
   it("rejects an el with an unknown element, and a ping with a bad ct or rtt", () => {
-    expect(parseClientMsg(JSON.stringify({ t: "el", element: "air" }))).toBeNull();
+    expect(parseClientMsg(JSON.stringify({ t: "el", element: "lava" }))).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: "el" }))).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: "ping", ct: "5", rtt: 1 }))).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: "ping", ct: 5 }))).toBeNull();

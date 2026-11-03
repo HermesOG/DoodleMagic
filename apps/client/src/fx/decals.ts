@@ -1,5 +1,5 @@
 import { DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, PlaneGeometry, Vector3, type ShaderMaterial } from "three";
-import { EARTH, type Vec3, type Zone, type ZoneKind } from "@doodlemagic/sim";
+import { EARTH, NOBODY, type UnitId, type Vec3, type Zone, type ZoneKind } from "@doodlemagic/sim";
 import { glslFloat } from "../render/stylePass";
 import { FX_ORDER, createFxMaterial, type FxGBuffer, type TimeUniform } from "./fxShader";
 import { FX_COLOR } from "./presets";
@@ -7,26 +7,33 @@ import { FX_COLOR } from "./presets";
 /**
  * Декаль зоны на полу. stage: до armTick — телеграф (progress 0…1 от каста до взвода), потом — действие
  * (progress 0…1 до конца зоны). angle — поворот вокруг Y: локальная +X декали идёт в мире вдоль (cos a, −sin a).
+ * enemy — зона чужого мага (известен свой и хозяин не он): стихии рисуют её по-вражески.
  */
 export interface DecalSpec {
   stage: "telegraph" | "active";
   progress: number;
   shape: "rect" | "ring" | "segment";
-  style: "sparks" | "cracks" | "quake" | "embers";
+  style: "sparks" | "cracks" | "quake" | "embers" | "tornado" | "fireTornado" | "spring";
   center: Vec3;
   sizeX: number;
   sizeZ: number;
   angle: number;
+  enemy: boolean;
 }
 
-const STYLE: Readonly<Record<ZoneKind, DecalSpec["style"]>> = { fireWall: "sparks", fireTrail: "embers", pillar: "cracks", quake: "quake" };
+/** Стиль по виду зоны; null — без декали (пар рисуется облаком, а не на полу). */
+const STYLE: Readonly<Record<ZoneKind, DecalSpec["style"] | null>> = {
+  fireWall: "sparks", fireTrail: "embers", pillar: "cracks", quake: "quake",
+  tornado: "tornado", fireTornado: "fireTornado", spring: "spring", steam: null,
+};
 /** Разовые зоны бьют ровно на armTick: после взвода декали нет, удар рисует всплеск. */
 const ONE_SHOT: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["pillar", "quake"]);
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 
-/** Что рисовать на полу для зоны на тике nowTick (дробный — между тиками). null — ничего. */
-export function zoneDecal(z: Zone, nowTick: number): DecalSpec | null {
-  if (nowTick >= z.endTick) return null;
+/** Что рисовать на полу для зоны на тике nowTick (дробный — между тиками). null — ничего. localId — свой маг. */
+export function zoneDecal(z: Zone, nowTick: number, localId: UnitId = NOBODY): DecalSpec | null {
+  const style = STYLE[z.kind];
+  if (style === null || nowTick >= z.endTick) return null;
   const telegraph = nowTick < z.armTick;
   if (!telegraph && ONE_SHOT.has(z.kind)) return null;
   const progress = telegraph
@@ -36,7 +43,7 @@ export function zoneDecal(z: Zone, nowTick: number): DecalSpec | null {
     : z.endTick > z.armTick
       ? clamp01((nowTick - z.armTick) / (z.endTick - z.armTick))
       : 1;
-  const base = { stage: telegraph ? "telegraph" : "active", progress, style: STYLE[z.kind] } as const;
+  const base = { stage: telegraph ? "telegraph" : "active", progress, style, enemy: localId !== NOBODY && z.owner !== localId } as const;
   const s = z.shape;
   switch (s.type) {
     case "box":
@@ -71,7 +78,8 @@ export interface RootRing {
   radius: number;
 }
 
-const STYLE_ID = { sparks: 0, cracks: 1, quake: 2, embers: 3 } as const;
+/** Номер узора в шейдере. Своих узоров у Смерча и Родника пока нет — до задач 5–6 рисуется кольцо (узор 4). */
+const STYLE_ID: Readonly<Record<DecalSpec["style"], number>> = { sparks: 0, cracks: 1, quake: 2, embers: 3, tornado: 4, fireTornado: 4, spring: 4 };
 const SHAPE_ID = { rect: 0, ring: 1, segment: 2 } as const;
 const STYLE_ROOT = 4;
 

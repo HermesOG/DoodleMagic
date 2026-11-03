@@ -1,22 +1,34 @@
 import { DynamicDrawUsage, IcosahedronGeometry, InstancedMesh, Matrix4, Quaternion, SphereGeometry, Vector3, type ShaderMaterial } from "three";
-import type { Projectile, Vec3 } from "@doodlemagic/sim";
+import { PROJECTILE_KINDS, type ProjectileKind, type Vec3 } from "@doodlemagic/sim";
 import { createInkMaterial } from "../render/gbuffer";
 import { INK } from "../render/palette";
-import { FX_COLOR } from "./presets";
+import { FX_COLOR, type ProjectileLook } from "./particleKit";
+import { AIR_PROJECTILE_LOOK } from "./presets.air";
+import { WATER_PROJECTILE_LOOK } from "./presets.water";
 
-type ProjectileKind = Projectile["ability"];
+export type { ProjectileLook } from "./particleKit";
 
 /**
  * Вид снаряда: ядро в G-буфер (огонь — сфера чернилами magic, камень — икосаэдр terrain), ореол и свет —
- * в проходе света. Свет на мир — только у огня: Земля не светится (round1/05).
+ * в проходе света. Свет на мир — только у огня: Земля не светится (round1/05). Воздух и Вода — своими таблицами.
  */
-export const PROJECTILE_LOOK: Readonly<
-  Record<ProjectileKind, { core: number; halo: number; color: readonly [number, number, number]; light: number; intensity: number; whiteCore: number; trailEveryM: number }>
-> = {
-  fireFists: { core: 0.12, halo: 0.5, color: FX_COLOR.fire, light: 1.8, intensity: 1.1, whiteCore: 0.8, trailEveryM: 0.35 },
-  fireball: { core: 0.35, halo: 1.4, color: FX_COLOR.fire, light: 5, intensity: 1.15, whiteCore: 1, trailEveryM: 0.1 },
-  stoneShot: { core: 0.25, halo: 0.4, color: FX_COLOR.jade, light: 0, intensity: 0.5, whiteCore: 0, trailEveryM: 0.14 },
+const BASE_LOOK: Readonly<Partial<Record<ProjectileKind, ProjectileLook>>> = {
+  fireFists: { mesh: "sphere", core: 0.12, halo: 0.5, color: FX_COLOR.fire, light: 1.8, intensity: 1.1, whiteCore: 0.8, trailEveryM: 0.35 },
+  fireball: { mesh: "sphere", core: 0.35, halo: 1.4, color: FX_COLOR.fire, light: 5, intensity: 1.15, whiteCore: 1, trailEveryM: 0.1 },
+  stoneShot: { mesh: "stone", core: 0.25, halo: 0.4, color: FX_COLOR.jade, light: 0, intensity: 0.5, whiteCore: 0, trailEveryM: 0.14 },
 };
+
+/** Таблица по всем видам снарядов; вида без записи быть не может — модуль упадёт при загрузке, а не в бою. */
+function completeLooks(t: Readonly<Partial<Record<ProjectileKind, ProjectileLook>>>): Readonly<Record<ProjectileKind, ProjectileLook>> {
+  const out = {} as Record<ProjectileKind, ProjectileLook>;
+  for (const k of PROJECTILE_KINDS) {
+    const look = t[k];
+    if (!look) throw new Error(`Нет вида снаряда ${k}`);
+    out[k] = look;
+  }
+  return Object.freeze(out);
+}
+export const PROJECTILE_LOOK: Readonly<Record<ProjectileKind, ProjectileLook>> = completeLooks({ ...BASE_LOOK, ...AIR_PROJECTILE_LOOK, ...WATER_PROJECTILE_LOOK });
 
 export interface ProjectileDraw {
   id: number;
@@ -29,7 +41,7 @@ export interface ProjectileDraw {
 }
 
 export interface ProjectileMeshes {
-  /** Огненные ядра: сферы чернилами magic. */
+  /** Ядра-сферы (огонь, серп, вода): чернилами magic. */
   readonly fire: InstancedMesh<SphereGeometry, ShaderMaterial>;
   /** Камни: икосаэдры чернилами terrain, кувыркаются. */
   readonly stone: InstancedMesh<IcosahedronGeometry, ShaderMaterial>;
@@ -62,7 +74,8 @@ export function createProjectileMeshes(max = 48): ProjectileMeshes {
       for (const d of list) {
         const look = PROJECTILE_LOOK[d.ability];
         p.set(d.pos.x, d.pos.y, d.pos.z);
-        if (d.ability === "stoneShot") {
+        if (look.mesh === "none") continue;
+        if (look.mesh === "stone") {
           if (ns >= max) continue;
           // кувырок: ось и скорость — по id
           const h = Math.sin(d.id * 12.9898) * 43758.5453;
@@ -72,7 +85,7 @@ export function createProjectileMeshes(max = 48): ProjectileMeshes {
           stone.setMatrixAt(ns++, mat.compose(p, q, s));
         } else {
           if (nf >= max) continue;
-          // огненное ядро чуть дышит
+          // ядро-сфера чуть дышит
           const r = look.core * d.scale * (1 + 0.08 * Math.sin(d.ageS * 40 + d.id));
           fire.setMatrixAt(nf++, mat.compose(p, q.identity(), s.setScalar(r)));
         }

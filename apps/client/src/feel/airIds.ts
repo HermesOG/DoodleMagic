@@ -1,0 +1,6 @@
+/**
+ * Звуки и всплески Воздуха (фаза 4). Список правит только задача 5 (клиент Воздуха); общие таблицы
+ * (effects.ts, recipes.ts, presets.ts) берут его одной строкой.
+ */
+export const AIR_SOUND_IDS = ["sickleThrow", "sickleHit", "gustWindup", "gustBlast", "airBlown", "airSlam", "swoop", "airCharge", "tornadoRise", "tornadoHum", "fireTornado", "airJump", "glideWhistle"] as const;
+export const AIR_BURST_PRESETS = ["sicklePuff", "gustBlast", "airBlown", "airSlam", "swoopWake", "airJumpRing", "tornadoDust", "fireTornadoFlare", "deathAir"] as const;

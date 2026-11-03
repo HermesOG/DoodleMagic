@@ -1,7 +1,9 @@
-import type { Vec3 } from "@doodlemagic/sim";
+import type { Element, Vec3 } from "@doodlemagic/sim";
 import { SOUND_IDS, type SoundId } from "../feel/effects";
+import { AIR_SOUND_LABELS } from "./airRecipes";
 import { RECIPES, SOUND_ELEMENT, recipeLength } from "./recipes";
 import { DEFAULT_VOLUME, createAudio, createVoiceKit, scheduleRecipe, type GameAudio } from "./synth";
+import { WATER_SOUND_LABELS } from "./waterRecipes";
 
 /**
  * Прослушка звуков без игры. Страница: `/src/audio/audition.html` в `pnpm dev:client` (в сборку не входит).
@@ -38,6 +40,8 @@ export const SOUND_LABELS: Record<SoundId, string> = {
   jump: "Прыжок",
   land: "Приземление",
   knockWhoosh: "Отбрасывание: вжух",
+  ...AIR_SOUND_LABELS,
+  ...WATER_SOUND_LABELS,
 };
 
 const EAR = 1.6;
@@ -55,6 +59,8 @@ const PLACES: { label: string; pos: Vec3 | null }[] = [
 const GROUPS: { title: string; ids: SoundId[] }[] = [
   { title: "Огонь", ids: SOUND_IDS.filter((id) => SOUND_ELEMENT[id] === "fire") },
   { title: "Земля", ids: SOUND_IDS.filter((id) => SOUND_ELEMENT[id] === "earth") },
+  { title: "Воздух", ids: SOUND_IDS.filter((id) => SOUND_ELEMENT[id] === "air") },
+  { title: "Вода", ids: SOUND_IDS.filter((id) => SOUND_ELEMENT[id] === "water") },
   { title: "Общие", ids: SOUND_IDS.filter((id) => SOUND_ELEMENT[id] === null) },
 ];
 
@@ -137,7 +143,7 @@ export interface AudioConsole {
   /** Без x — у уха; иначе источник в (x, 1.6, z) от слушателя в начале координат, взгляд вдоль −Z. */
   play(id: SoundId, x?: number, z?: number): void;
   /** Все звуки группы подряд через 0,9 с. */
-  all(group?: "fire" | "earth" | "common"): void;
+  all(group?: Element | "common"): void;
   stats(): ReturnType<GameAudio["stats"]>;
   volume(v: number): void;
   mute(m?: boolean): void;
@@ -153,7 +159,7 @@ export function installAudioConsole(audio: GameAudio, target: object = globalThi
     ids: SOUND_IDS,
     play,
     all(group) {
-      const el = group === "fire" ? "fire" : group === "earth" ? "earth" : group === "common" ? null : undefined;
+      const el = group === "common" ? null : group;
       const ids = SOUND_IDS.filter((id) => el === undefined || SOUND_ELEMENT[id] === el);
       ids.forEach((id, i) => setTimeout(() => play(id), i * 900));
     },

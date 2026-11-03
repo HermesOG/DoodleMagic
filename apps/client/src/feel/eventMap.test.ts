@@ -9,7 +9,7 @@ const OTHER = 3;
 const view = { localId: ME, state: createMatchState([createMageUnit(ME, "fire", { pos: V(), yaw: 0 }), createMageUnit(OTHER, "earth", { pos: V(6, 0, -8), yaw: 0.4 })]) };
 const fx = (ev: MatchEvent): Effect[] => effectsFor(ev, view);
 const cast = (unit: number, ability: AbilityId, pos = V(6, 1.6, -8)): MatchEvent => ({ type: "cast", unit, ability, slot: "q", pos, dir: V(0, 0, -1) });
-const dash = (unit: number, phase: "start" | "end"): MatchEvent => ({ type: "dash", unit, phase, pos: V(6, 0.9, -8), dir: V(0.6, 0, -0.8) });
+const dash = (unit: number, phase: "start" | "end"): MatchEvent => ({ type: "dash", unit, ability: "jetDash", phase, pos: V(6, 0.9, -8), dir: V(0.6, 0, -0.8) });
 
 describe("effectsFor: other mages", () => {
   it("plays another mage's cast as one positional sound where it is cast — the same sound as my own cast", () => {
@@ -34,12 +34,12 @@ describe("effectsFor: other mages", () => {
       { kind: "sound", id: "fireballCharge", pos: null, gain: 1 },
       { kind: "kick", pitchDeg: 1, yawDeg: 0, rollDeg: 0 },
     ]);
-    expect(fx({ type: "dash", unit: ME, phase: "start", pos: V(), dir: V(1, 0, 0) })).toEqual([
+    expect(fx({ type: "dash", unit: ME, ability: "jetDash", phase: "start", pos: V(), dir: V(1, 0, 0) })).toEqual([
       { kind: "fov", deg: 8 },
       { kind: "kick", pitchDeg: 0, yawDeg: 0, rollDeg: -3 },
       { kind: "burst", preset: "dashBlast", pos: V(), dir: V(-1, 0, 0), scale: 1 },
     ]);
-    expect(fx({ type: "dash", unit: ME, phase: "end", pos: V(), dir: V(1, 0, 0) })).toEqual([]);
+    expect(fx({ type: "dash", unit: ME, ability: "jetDash", phase: "end", pos: V(), dir: V(1, 0, 0) })).toEqual([]);
   });
 });
 

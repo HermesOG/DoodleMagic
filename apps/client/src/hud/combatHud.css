@@ -14,6 +14,9 @@
   --ch-red-dry: rgba(200, 50, 42, 0.32);
   --ch-fire: #ff7a1a;
   --ch-earth: #3dbe7a;
+  /* Воздух — сиреневый темнее частиц (#c8c0f2), иначе на бумаге не читается; Вода — как её частицы */
+  --ch-air: #8f84d6;
+  --ch-water: #2ea8e6;
   --ch-head: "Cormorant SC", "Cormorant Garamond", "Forum", Georgia, "Times New Roman", serif;
   --ch-ui: "Manrope", system-ui, "Segoe UI", sans-serif;
   /* ореол бумаги вокруг туши: читается и на светлой арене, и на тёмных манекенах */

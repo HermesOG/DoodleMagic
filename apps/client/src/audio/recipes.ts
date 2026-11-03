@@ -1,82 +1,13 @@
 import type { Element } from "@doodlemagic/sim";
 import type { SoundId } from "../feel/effects";
+import { AIR_SOUND_IDS } from "../feel/airIds";
+import { WATER_SOUND_IDS } from "../feel/waterIds";
+import { AIR_RECIPES } from "./airRecipes";
+import { SIG, noise, tone, REVERB_SEND, type Recipe } from "./layers";
+import { WATER_RECIPES } from "./waterRecipes";
 
-/**
- * Слой звука: шум или тон с короткой огибающей. Огибающая: тишина до delay, линейный подъём до gain за attack,
- * экспонента вниз до тишины к delay + dur. Всё в секундах и герцах.
- *
- * - tone: freq → freqEnd — высота осциллятора. Фильтр, если задан, идёт за той же кривой.
- * - noise: белый шум, freq → freqEnd — частота фильтра. Без фильтра шум полосы не имеет.
- * - q — как у BiquadFilterNode: для lowpass и highpass резонанс в дБ (0 — почти без горба), для bandpass — добротность.
- * - signature — слой-подпись стихии: в нём полоса, по которой стихию узнают вслепую (GDD 5).
- *
- * Необязательные поля сверх плана (интерфейс плана они не меняют):
- * - sweep — за какую долю dur частота доходит до freqEnd (1 — за весь слой). У ударов падение высоты быстрее спада громкости;
- * - drive — перегруз waveshaper'ом (tanh), до огибающей: у саба Земли появляются гармоники, слышные на динамиках ноутбука;
- * - clicks — столько случайных щелчков поверх тихой подложки того же шума: треск огня, хруст и скрежет камня;
- * - ceiling — потолок: lowpass на этой частоте после фильтра слоя. Белый шум после highpass 3 кГц иначе почти весь
- *   выше 8 кГц и звучит шипением, а не треском; потолок держит энергию треска в полосе Огня 2–8 кГц.
- */
-export interface Layer {
-  kind: "noise" | "tone";
-  wave?: OscillatorType;
-  freq: number;
-  freqEnd: number;
-  filter?: BiquadFilterType;
-  q?: number;
-  delay: number;
-  attack: number;
-  dur: number;
-  gain: number;
-  signature?: true;
-  sweep?: number;
-  drive?: number;
-  clicks?: number;
-  ceiling?: number;
-}
-
-/**
- * vary — разброс высоты ± за каждый запуск, чтобы частый звук (кулаки 5 раз в секунду) не звучал пулемётом.
- * reverb — посыл в общий реверб по ступени отклика (round3/01, A4): малая 0, средняя 0,2, крупная 0,35.
- */
-export interface Recipe {
-  layers: Layer[];
-  vary?: number;
-  reverb?: number;
-}
-
-/** Посыл в реверб по ступени отклика (round3/01, 2.1). */
-export const REVERB_SEND = { small: 0, medium: 0.2, large: 0.35 } as const;
-
-type Opt = Partial<Pick<Layer, "q" | "delay" | "attack" | "signature" | "sweep" | "drive" | "clicks" | "ceiling">>;
-
-const ATTACK = 0.003;
-
-const noise = (filter: BiquadFilterType | null, freq: number, freqEnd: number, dur: number, gain: number, o: Opt = {}): Layer => ({
-  kind: "noise",
-  ...(filter ? { filter } : {}),
-  freq,
-  freqEnd,
-  delay: 0,
-  attack: ATTACK,
-  dur,
-  gain,
-  ...o,
-});
-
-const tone = (wave: OscillatorType, freq: number, freqEnd: number, dur: number, gain: number, o: Opt = {}): Layer => ({
-  kind: "tone",
-  wave,
-  freq,
-  freqEnd,
-  delay: 0,
-  attack: ATTACK,
-  dur,
-  gain,
-  ...o,
-});
-
-const SIG = { signature: true } as const;
+export { REVERB_SEND } from "./layers";
+export type { Layer, Recipe } from "./layers";
 
 /**
  * Огонь — ярко и рвано: треск highpass 3–6 кГц со щелчками, «вуумп» lowpass, открывающийся 200 → 2000 Гц.
@@ -292,10 +223,19 @@ export const RECIPES: Record<SoundId, Recipe> = {
   },
   // «вжух» отбрасывания (K3): bandpass 1,2 → 0,4 кГц, 0,3 с
   knockWhoosh: { layers: [noise("bandpass", 1200, 400, 0.3, 0.6, { q: 2, attack: 0.05 })] },
+  // ── Воздух и Вода — своими таблицами (airRecipes.ts, waterRecipes.ts) ──
+  ...AIR_RECIPES,
+  ...WATER_RECIPES,
 };
 
-/** Чья это подпись: Огонь, Земля или общий звук (null). Рельеф — камень Земли, чем бы по нему ни попали. */
+/** Всем id списка — одна стихия. */
+const signedBy = <K extends string>(ids: readonly K[], el: Element): Record<K, Element> =>
+  Object.fromEntries(ids.map((id) => [id, el])) as Record<K, Element>;
+
+/** Чья это подпись: стихия или общий звук (null). Рельеф — камень Земли, чем бы по нему ни попали. */
 export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
+  ...signedBy(AIR_SOUND_IDS, "air"),
+  ...signedBy(WATER_SOUND_IDS, "water"),
   fireFist: "fire",
   fireballCharge: "fire",
   fireballBoom: "fire",

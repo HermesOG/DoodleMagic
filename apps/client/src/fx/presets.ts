@@ -1,7 +1,11 @@
-import type { Element, Vec3 } from "@doodlemagic/sim";
+import type { Element, ProjectileKind, Vec3 } from "@doodlemagic/sim";
 import type { BurstPreset } from "../feel/effects";
-import { PAPER, type RGB } from "../render/palette";
+import { AIR_BURSTS, AIR_PALM, AIR_TRAILS } from "./presets.air";
+import { WATER_BURSTS, WATER_PALM, WATER_TRAILS } from "./presets.water";
+import { FX_COLOR, L, UP, emit, randomUnit, spawn, lerp, type Layer, type PalmLayers, type ParticleSpec, type TrailFn } from "./particleKit";
 import type { PresetId } from "../render/quality";
+
+export { FX_COLOR, SMOKE_ALPHA, type ParticleSpec } from "./particleKit";
 
 /** Частиц на кадр по пресету качества (план, Global Constraints): мировой пул — 4/5, пул ладоней — 1/5. */
 export const PARTICLE_BUDGET: Readonly<Record<PresetId, number>> = { low: 600, medium: 1500, high: 3000 };
@@ -15,99 +19,6 @@ export function poolCaps(p: PresetId): { world: number; palm: number } {
   const world = Math.round((total * 4) / 5);
   return { world, palm: total - world };
 }
-
-const hex = (h: number): RGB => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
-
-/**
- * Цвета магии (round1/05), в пространстве экрана. Огонь — оранжевый с почти белым ядром, светится.
- * Земля не светится: тёмный камень, нефрит только в трещинах и искрах, пыль цвета бумаги.
- */
-export const FX_COLOR = {
-  fire: hex(0xff7a1a),
-  core: hex(0xffe2a0),
-  ember: [0.85, 0.25, 0.05] as RGB,
-  smoke: [0.22, 0.21, 0.2] as RGB,
-  jade: hex(0x3dbe7a),
-  dust: PAPER,
-  /** Осколки камня: средний тон, как освещённая грань рельефа. */
-  stone: [0.5, 0.48, 0.44] as RGB,
-} as const;
-export const SMOKE_ALPHA = 0.35;
-
-/**
- * Частица пула. `color` — прямой (не предумноженный) цвет; `alpha` — плотность: 0 — чистое сложение (свет),
- * > 0 — плотная частица поверх кадра. Форма в шейдере выводится из этих чисел: свет (alpha 0) — мягкое пятно
- * с белым центром и шлейфом по скорости; плотная с gravity ≥ 9 — угловатый осколок; остальные плотные —
- * рваное облако с сопротивлением воздуха (пыль, дым, тело пламени).
- */
-export interface ParticleSpec {
-  pos: Vec3;
-  vel: Vec3;
-  /** Ускорение вниз, м/с²; отрицательное — всплывает (огонь, дым). */
-  gravity: number;
-  life: number;
-  size0: number;
-  size1: number;
-  color: readonly [number, number, number];
-  alpha: number;
-}
-
-type Kind = "core" | "glow" | "flame" | "smoke" | "ember" | "dust" | "chip" | "jade";
-type Spread = "sphere" | "hemi" | "cone" | "up" | "ring" | "converge";
-type Range = readonly [number, number];
-
-interface Layer {
-  kind: Kind;
-  n: number;
-  spread: Spread;
-  speed: Range;
-  life: Range;
-  size0: Range;
-  size1: Range;
-  /** Радиус точки рождения вокруг центра (у ring — внутренний радиус кольца, у converge — откуда сходятся). */
-  r0?: number;
-  /** Внешний радиус кольца. */
-  r1?: number;
-  /** Прибавка к скорости вверх, м/с. */
-  up?: number;
-  gravity?: number;
-  /** Полуугол конуса, рад. */
-  cone?: number;
-}
-
-const L = (kind: Kind, n: number, spread: Spread, speed: Range, life: Range, size0: Range, size1: Range, o: Partial<Layer> = {}): Layer => ({
-  kind,
-  n,
-  spread,
-  speed,
-  life,
-  size0,
-  size1,
-  ...o,
-});
-
-type Rng = () => number;
-const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
-const pick = (r: Range, rng: Rng): number => lerp(r[0], r[1], rng());
-const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
-const jitter = (c: RGB, amount: number, rng: Rng): RGB => {
-  const k = (rng() - 0.5) * 2 * amount;
-  return [clamp01(c[0] + k), clamp01(c[1] + k), clamp01(c[2] + k)];
-};
-const mixRGB = (a: RGB, b: RGB, t: number): RGB => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-
-/** Цвет, плотность и тяжесть по виду частицы. */
-const KIND: Record<Kind, { color: (rng: Rng) => RGB; alpha: (rng: Rng) => number; gravity: number }> = {
-  core: { color: () => FX_COLOR.core, alpha: () => 0, gravity: -1 },
-  glow: { color: (rng) => mixRGB(FX_COLOR.fire, FX_COLOR.core, rng() * 0.6), alpha: () => 0, gravity: -1.5 },
-  // тело пламени плотное: на светлой бумаге чистое сложение выцвело бы в белое, а оранжевый должен читаться
-  flame: { color: (rng) => mixRGB(FX_COLOR.fire, FX_COLOR.ember, rng() * 0.35), alpha: (rng) => lerp(0.55, 0.7, rng()), gravity: -3 },
-  smoke: { color: (rng) => jitter(FX_COLOR.smoke, 0.03, rng), alpha: () => SMOKE_ALPHA, gravity: -0.8 },
-  ember: { color: (rng) => mixRGB(FX_COLOR.ember, FX_COLOR.fire, rng()), alpha: () => 0, gravity: 7 },
-  dust: { color: (rng) => jitter(FX_COLOR.dust, 0.025, rng), alpha: (rng) => lerp(0.4, 0.6, rng()), gravity: -0.4 },
-  chip: { color: (rng) => jitter(FX_COLOR.stone, 0.07, rng), alpha: () => 1, gravity: 12 },
-  jade: { color: (rng) => mixRGB(FX_COLOR.jade, [0.75, 1, 0.85], rng() * 0.3), alpha: () => 0, gravity: 3 },
-};
 
 /**
  * Всплески по пресетам (числа — на scale = 1). Огонь — вверх, рвано, 0,3–0,6 с, свет; Земля — осколки вниз
@@ -204,10 +115,13 @@ const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
   paperFlash: [L("dust", 1, "sphere", [0, 0], [0.08, 0.08], [0.6, 0.6], [1.4, 1.4], { gravity: 0 })],
   // тяжёлое приземление чужого мага (M2): пыль из-под ног
   landDust: [L("dust", 10, "ring", [0.6, 1.4], [0.5, 0.8], [0.2, 0.3], [0.5, 0.8], { r0: 0.2, r1: 0.5, up: 0.4 })],
+  // Воздух и Вода — своими таблицами (presets.air.ts, presets.water.ts)
+  ...AIR_BURSTS,
+  ...WATER_BURSTS,
 };
 
 /** Эффекты у ладони — в пространстве камеры рук (метры, взгляд вдоль −z): мелкие и короткие. */
-const PALM: Readonly<Record<Element, Readonly<Record<"flash" | "charge" | "fizzle", readonly Layer[]>>>> = {
+const PALM: Readonly<Record<Element, PalmLayers>> = {
   fire: {
     flash: [
       L("core", 3, "sphere", [0, 0.2], [0.07, 0.11], [0.06, 0.08], [0.1, 0.12]),
@@ -238,107 +152,11 @@ const PALM: Readonly<Record<Element, Readonly<Record<"flash" | "charge" | "fizzl
       L("chip", 2, "sphere", [0.2, 0.4], [0.2, 0.3], [0.012, 0.018], [0.008, 0.01]),
     ],
   },
+  air: AIR_PALM,
+  water: WATER_PALM,
 };
-
-const UP: Vec3 = { x: 0, y: 1, z: 0 };
-
-function normalizeOr(v: Vec3, fallback: Vec3): Vec3 {
-  const l = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-  return l > 1e-6 ? { x: v.x / l, y: v.y / l, z: v.z / l } : fallback;
-}
-
-function randomUnit(rng: Rng): Vec3 {
-  const z = 2 * rng() - 1;
-  const phi = 2 * Math.PI * rng();
-  const s = Math.sqrt(Math.max(0, 1 - z * z));
-  return { x: s * Math.cos(phi), y: z, z: s * Math.sin(phi) };
-}
-
-/** Направление в конусе вокруг d с полууглом a (равномерно по телесному углу). */
-function randomCone(d: Vec3, a: number, rng: Rng): Vec3 {
-  const t = normalizeOr(Math.abs(d.y) < 0.9 ? { x: d.z, y: 0, z: -d.x } : { x: 0, y: -d.z, z: d.y }, { x: 1, y: 0, z: 0 });
-  const b = { x: d.y * t.z - d.z * t.y, y: d.z * t.x - d.x * t.z, z: d.x * t.y - d.y * t.x };
-  const cosT = 1 - rng() * (1 - Math.cos(a));
-  const sinT = Math.sqrt(Math.max(0, 1 - cosT * cosT));
-  const phi = 2 * Math.PI * rng();
-  const c = Math.cos(phi) * sinT;
-  const s = Math.sin(phi) * sinT;
-  return { x: t.x * c + b.x * s + d.x * cosT, y: t.y * c + b.y * s + d.y * cosT, z: t.z * c + b.z * s + d.z * cosT };
-}
-
-function spawn(layer: Layer, pos: Vec3, dir: Vec3, rng: Rng): ParticleSpec {
-  const k = KIND[layer.kind];
-  const life = pick(layer.life, rng);
-  const speed = pick(layer.speed, rng);
-  let p: Vec3 = pos;
-  let v: Vec3;
-  switch (layer.spread) {
-    case "sphere":
-    case "hemi": {
-      let u = randomUnit(rng);
-      if (layer.spread === "hemi" && u.x * dir.x + u.y * dir.y + u.z * dir.z < 0) u = { x: -u.x, y: -u.y, z: -u.z };
-      v = { x: u.x * speed, y: u.y * speed, z: u.z * speed };
-      break;
-    }
-    case "cone":
-    case "up": {
-      const u = randomCone(layer.spread === "up" ? UP : dir, layer.cone ?? 0.5, rng);
-      v = { x: u.x * speed, y: u.y * speed, z: u.z * speed };
-      break;
-    }
-    case "ring": {
-      const phi = 2 * Math.PI * rng();
-      const r = lerp(layer.r0 ?? 0, layer.r1 ?? layer.r0 ?? 1, Math.sqrt(rng()));
-      const cx = Math.cos(phi);
-      const cz = Math.sin(phi);
-      p = { x: pos.x + cx * r, y: pos.y + 0.05, z: pos.z + cz * r };
-      v = { x: cx * speed, y: 0, z: cz * speed };
-      break;
-    }
-    case "converge": {
-      const u = randomUnit(rng);
-      const r = (layer.r0 ?? 0.5) * lerp(0.7, 1, rng());
-      p = { x: pos.x + u.x * r, y: pos.y + u.y * r, z: pos.z + u.z * r };
-      v = { x: (-u.x * r) / life, y: (-u.y * r) / life, z: (-u.z * r) / life };
-      break;
-    }
-  }
-  if (layer.r0 && layer.spread === "up") {
-    // «вверх» рождается на круге у земли: пламя по площадке, пыль у основания
-    const phi = 2 * Math.PI * rng();
-    const r = layer.r0 * Math.sqrt(rng());
-    p = { x: pos.x + Math.cos(phi) * r, y: pos.y, z: pos.z + Math.sin(phi) * r };
-  } else if (layer.r0 && layer.spread !== "ring" && layer.spread !== "converge") {
-    const u = randomUnit(rng);
-    const r = layer.r0 * Math.cbrt(rng());
-    p = { x: pos.x + u.x * r, y: pos.y + u.y * r, z: pos.z + u.z * r };
-  }
-  const up = layer.up ? layer.up * lerp(0.5, 1, rng()) : 0;
-  return {
-    pos: p,
-    vel: { x: v.x, y: v.y + up, z: v.z },
-    gravity: layer.gravity ?? k.gravity,
-    life,
-    size0: pick(layer.size0, rng),
-    size1: pick(layer.size1, rng),
-    color: k.color(rng),
-    alpha: k.alpha(rng),
-  };
-}
-
-function emit(layers: readonly Layer[], total: number, pos: Vec3, dir: Vec3, rng: Rng): ParticleSpec[] {
-  const base = layers.reduce((a, l) => a + l.n, 0);
-  if (base <= 0 || total <= 0) return [];
-  const counts = layers.map((l) => Math.floor((l.n * total) / base));
-  let rest = total - counts.reduce((a, c) => a + c, 0);
-  for (let i = 0; rest > 0; i = (i + 1) % counts.length, rest--) counts[i]!++;
-  const d = normalizeOr(dir, UP);
-  const out: ParticleSpec[] = [];
-  layers.forEach((l, i) => {
-    for (let j = 0; j < counts[i]!; j++) out.push(spawn(l, pos, d, rng));
-  });
-  return out;
-}
+/** Следы снарядов стихий фазы 4 (у Огня и Земли — свои ветки trailParticles). */
+const ELEMENT_TRAILS: Readonly<Partial<Record<ProjectileKind, TrailFn>>> = { ...AIR_TRAILS, ...WATER_TRAILS };
 
 /**
  * Частицы всплеска `p` в точке pos. Число — round(n × clamp(scale, 0,5, 3)), не больше MAX_BURST.
@@ -372,9 +190,10 @@ const TRAIL = {
 
 /**
  * Частицы следа снаряда на отрезке a → b (их число задаёт вызывающий по пройденному пути).
- * Огонь роняет языки пламени, угли и дым; камень — пыль цвета бумаги.
+ * Огонь роняет языки пламени, угли и дым; камень — пыль цвета бумаги; прочие виды — след своей стихии (TrailFn).
  */
-export function trailParticles(kind: "fireFists" | "fireball" | "stoneShot", a: Vec3, b: Vec3, n: number, rng: () => number): ParticleSpec[] {
+export function trailParticles(kind: ProjectileKind, a: Vec3, b: Vec3, n: number, rng: () => number): ParticleSpec[] {
+  if (kind !== "fireFists" && kind !== "fireball" && kind !== "stoneShot") return ELEMENT_TRAILS[kind]?.(a, b, n, rng) ?? [];
   const out: ParticleSpec[] = [];
   for (let i = 0; i < n; i++) {
     const t = (i + rng()) / n;

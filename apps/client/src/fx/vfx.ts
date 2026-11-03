@@ -7,6 +7,7 @@ import { HANDS_FOV, WORLD_FOV, type FxLayers, type StyleRenderer } from "../rend
 import { createDebris } from "./debris";
 import { createDecalMeshes, zoneDecal, type DecalSpec, type RootRing } from "./decals";
 import { createDummyMeshes, type DummyView } from "./dummyMeshes";
+import { ELEMENT_VFX, type ElementVfxFrame } from "./elementVfx";
 import { createFireWallMeshes, fireWallSheet, type FireWallSheet } from "./fireWalls";
 import type { TimeUniform } from "./fxShader";
 import { createGlowMeshes, cullGlows, type Glow } from "./glows";
@@ -84,6 +85,8 @@ const HAND_LIGHT_M = 2.2;
 const HAND_GLOW: Readonly<Record<Element, { color: readonly [number, number, number]; intensity: number; light: number }>> = {
   fire: { color: FX_COLOR.fire, intensity: 0.9, light: HAND_LIGHT_M },
   earth: { color: FX_COLOR.jade, intensity: 0.8, light: 0 },
+  air: { color: FX_COLOR.air, intensity: 0.75, light: 0 },
+  water: { color: FX_COLOR.water, intensity: 0.85, light: 1.6 },
 };
 /** Свечение рук уступает свет мира снарядам, стенам и вспышкам, но не горению (prio 1). */
 const HAND_PRIO = 0.6;
@@ -193,6 +196,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const terrain = createTerrainMeshes(24);
   const cores = createProjectileMeshes(48);
   const debris = createDebris();
+  const elements = ELEMENT_VFX.map((make) => make({ gbuffer, time }));
 
   const worldGroup = new Group();
   worldGroup.name = "vfx";
@@ -200,6 +204,10 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const fxWorld = new Scene();
   fxWorld.name = "fx-world";
   fxWorld.add(walls.mesh, decals.mesh, worldPool.mesh, glows.mesh, veins.mesh);
+  for (const el of elements) {
+    if (el.world) worldGroup.add(el.world);
+    if (el.light) fxWorld.add(el.light);
+  }
   const fxPalm = new Scene();
   fxPalm.name = "fx-palm";
   fxPalm.add(palmPool.mesh);
@@ -240,6 +248,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
 
     apply(e, nowS, hand) {
       const t = rel(nowS);
+      for (const el of elements) el.apply?.(e, nowS);
       switch (e.kind) {
         case "burst": {
           emitWorld(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), t);
@@ -306,9 +315,12 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       for (const u of v.prev.units) prevUnits.set(u.id, u);
       const views: DummyView[] = [];
       const mageViews: MagePose[] = [];
+      const liveUnits: { id: UnitId; pos: Vec3; u: Unit }[] = [];
+      const liveMages: { id: UnitId; pose: MagePose; u: Unit }[] = [];
       for (const it of lerpById(unitsOf(v.prev), unitsOf(v.cur), v.alpha)) {
         const u = it.u;
         if (!u.alive) continue;
+        liveUnits.push(it);
         const flags = statusFlags(u, v.cur.tick);
         if (flags.rooted) roots.push({ center: { x: it.pos.x, y: it.pos.y, z: it.pos.z }, radius: 0.65 });
         const mage = u.kind === "mage";
@@ -359,6 +371,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             leanZ,
           };
           mageViews.push(pose);
+          liveMages.push({ id: u.id, pose, u });
           // стихия на руках: видно издалека и сбоку; в замахе руки разгораются
           const hands = mageHands(pose);
           const look = HAND_GLOW[element];
@@ -451,7 +464,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       const liveZones = new Set<number>();
       for (const z of v.cur.zones) {
         liveZones.add(z.id);
-        const spec = zoneDecal(z, tick);
+        const spec = zoneDecal(z, tick, v.localId);
         if (spec) decalList.push({ spec, seed: (z.id * 0.731) % 17, intensity: 1 });
         const sheet = fireWallSheet(z, tick);
         const line = lineOfBox(z);
@@ -490,6 +503,26 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       }
       for (const id of ignited.keys()) if (!liveZones.has(id)) ignited.delete(id);
       walls.update(sheets);
+
+      // стихии фазы 4: свои меши и логика поверх общих пулов — до декалей и разбора свечений
+      const frame: ElementVfxFrame = {
+        prev: v.prev,
+        cur: v.cur,
+        alpha: v.alpha,
+        tick,
+        nowS: v.nowS,
+        dt,
+        camera: cam,
+        eye: { x: eye.x, y: eye.y, z: eye.z },
+        localId: v.localId,
+        units: liveUnits,
+        mages: liveMages,
+        palmWorld,
+        emit: (specs) => emitWorld(specs, nowT),
+        glow: (g, prio) => glowList.push({ ...g, prio }),
+        decal: (spec, seed, intensity = 1) => decalList.push({ spec, seed, intensity }),
+      };
+      for (const el of elements) el.sync(frame);
       decals.update(decalList, roots);
 
       // рельеф: боксы в G-буфер, прожилки; сломанный — обломки
@@ -552,6 +585,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       walls.setCheap(p !== "high");
       worldPool.setCap(caps.world);
       palmPool.setCap(caps.palm);
+      for (const el of elements) el.setPreset?.(p);
     },
 
     dispose() {
@@ -566,6 +600,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       terrain.dispose();
       cores.dispose();
       debris.dispose();
+      for (const el of elements) el.dispose();
     },
   };
 }

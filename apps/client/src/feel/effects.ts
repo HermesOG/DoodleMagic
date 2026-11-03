@@ -1,16 +1,23 @@
 import type { AbilityId, Element, Slot, UnitId, Vec3 } from "@doodlemagic/sim";
+import { AIR_BURST_PRESETS, AIR_SOUND_IDS } from "./airIds";
+import { WATER_BURST_PRESETS, WATER_SOUND_IDS } from "./waterIds";
 
-/** Всплески частиц. Огонь — вверх, рвано, свет; Земля — угловатые осколки вниз и пыль цвета бумаги (GDD 6). */
+/**
+ * Всплески частиц. Огонь — вверх, рвано, свет; Земля — угловатые осколки вниз и пыль цвета бумаги (GDD 6).
+ * Воздух и Вода — своими списками (airIds.ts, waterIds.ts).
+ */
 export const BURST_PRESETS = [
   "fistFlash", "fistImpact", "fireballCharge", "fireballBoom", "dashBlast", "fireWallSparks", "fireWallIgnite", "burnLick",
   "stoneCrumble", "stoneImpact", "pillarCracks", "pillarBurst", "wallDust", "quakeRing", "terrainChips", "terrainBreak",
   "deathFire", "deathEarth", "respawnPuff", "fizzle", "paperFlash", "landDust",
+  ...AIR_BURST_PRESETS, ...WATER_BURST_PRESETS,
 ] as const;
 export type BurstPreset = (typeof BURST_PRESETS)[number];
 export const SOUND_IDS = [
   "fireFist", "fireballCharge", "fireballBoom", "dash", "fireWallTelegraph", "fireWallIgnite", "stoneCast", "stoneImpact", "pillarTelegraph", "pillarStrike",
   "wallRise", "quakeWindup", "quakeStrike", "terrainHit", "terrainBreak", "hitLight", "hitHeavy", "kill", "fall", "fizzle", "overheat", "courage",
   "fireballLaunch", "stoneThrow", "fistHit", "step", "jump", "land", "knockWhoosh",
+  ...AIR_SOUND_IDS, ...WATER_SOUND_IDS,
 ] as const;
 export type SoundId = (typeof SOUND_IDS)[number];
 /**

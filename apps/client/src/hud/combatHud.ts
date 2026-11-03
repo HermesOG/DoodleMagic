@@ -17,6 +17,7 @@ import {
 import type { Effect, FeelTier } from "../feel/effects";
 import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
+import { KIT_WIDGETS, type KitWidget } from "./kitWidgets";
 import { NUMBER_LIFE_S, cooldownFraction, formatDamage, heatFraction, hpBar, mergeNumbers, numberAnim, type FloatingNumber } from "./format";
 
 /** Что HUD видит в кадре: два последних состояния и доля между ними, камера мира, часы и проверка видимости точки. */
@@ -72,7 +73,7 @@ const BAR_ABOVE_M = 0.45;
 /** У мага полоса — над шляпой. */
 const MAGE_BAR_M = MAGE_TOP_M + 0.15;
 const KEY_LABEL: Readonly<Record<Slot, string>> = { primary: "ЛКМ", q: "Q", e: "E", c: "C" };
-const ELEMENT_COLOR: Readonly<Record<Elem, string>> = { fire: "var(--ch-fire)", earth: "var(--ch-earth)" };
+const ELEMENT_COLOR: Readonly<Record<Elem, string>> = { fire: "var(--ch-fire)", earth: "var(--ch-earth)", air: "var(--ch-air)", water: "var(--ch-water)" };
 const ENSO_R = 22;
 const ENSO_LEN = 2 * Math.PI * ENSO_R;
 
@@ -239,6 +240,8 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   let vignetteK = 0;
   let lastNowS = Number.NaN;
   let element: Elem | null = null;
+  /** Свой виджет стихии в ките (Воздух, Вода); у Огня и Земли — null. */
+  let widget: KitWidget | null = null;
   // экран: размер окна, без чтения раскладки в кадре
   let W = window.innerWidth;
   let H = window.innerHeight;
@@ -273,6 +276,9 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     }
     setText(ultName, ELEMENT_INFO[e].ult);
     setHidden(heat, e !== "fire");
+    // смена стихии: виджет прежней — долой, новой — в кит
+    widget?.dispose();
+    widget = KIT_WIDGETS[e]?.(kit) ?? null;
   };
 
   const lerpPos = (prev: MatchState, u: Unit, alpha: number): Vec3 => {
@@ -320,6 +326,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       setStyle(heatFill, "transform", `scaleX(${heatFraction(m).toFixed(4)})`);
       heat.classList.toggle("is-hot", now < m.overheatUntil);
     }
+    widget?.update(me, now, nowS);
   };
 
   const updateLife = (me: Unit): void => {
@@ -500,6 +507,8 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     },
     dispose() {
       window.removeEventListener("resize", onResize);
+      widget?.dispose();
+      widget = null;
       hud.remove();
       bars.clear();
       numbers = [];

@@ -174,7 +174,7 @@ function buildState(tick: number, view: View, still: boolean): MatchState {
       d.normalize();
       const age = at / TICK_HZ;
       const sp = FIRE.fireFists.projectile.speed;
-      projectiles.push({ id: 2000 + n, owner: LOCAL, ability: "fireFists", pos: { x: from.x + d.x * sp * age, y: from.y + d.y * sp * age, z: from.z + d.z * sp * age }, vel: { x: d.x * sp, y: d.y * sp, z: d.z * sp }, bornTick: born, endTick: born + flight });
+      projectiles.push({ id: 2000 + n, owner: LOCAL, ability: "fireFists", pos: { x: from.x + d.x * sp * age, y: from.y + d.y * sp * age, z: from.z + d.z * sp * age }, vel: { x: d.x * sp, y: d.y * sp, z: d.z * sp }, bornTick: born, endTick: born + flight, power: 0 });
     }
   }
   // огненный шар туда-обратно вдоль стены огня
@@ -186,7 +186,7 @@ function buildState(tick: number, view: View, still: boolean): MatchState {
       const dir = n % 2 === 0 ? 1 : -1;
       const sp = FIRE.fireball.projectile.speed;
       const x = -7.5 * dir + dir * sp * (at / TICK_HZ);
-      projectiles.push({ id: 3000 + n, owner: OTHER, ability: "fireball", pos: { x, y: 1.5, z: -8.6 }, vel: { x: dir * sp, y: 0, z: 0 }, bornTick: n * period, endTick: n * period + flight });
+      projectiles.push({ id: 3000 + n, owner: OTHER, ability: "fireball", pos: { x, y: 1.5, z: -8.6 }, vel: { x: dir * sp, y: 0, z: 0 }, bornTick: n * period, endTick: n * period + flight, power: 0 });
     }
   }
   // камень по дуге поперёк кадра
@@ -199,7 +199,7 @@ function buildState(tick: number, view: View, still: boolean): MatchState {
       const sp = EARTH.stoneShot.projectile.speed;
       const age = at / TICK_HZ;
       const g = EARTH.stoneShot.projectile.gravity;
-      projectiles.push({ id: 4000 + n, owner: OTHER, ability: "stoneShot", pos: { x: 9 * -dir + dir * sp * age, y: 1.7 + 1.2 * age - 0.5 * g * age * age, z: -2.4 }, vel: { x: dir * sp, y: 1.2 - g * age, z: 0 }, bornTick: n * period, endTick: n * period + flight });
+      projectiles.push({ id: 4000 + n, owner: OTHER, ability: "stoneShot", pos: { x: 9 * -dir + dir * sp * age, y: 1.7 + 1.2 * age - 0.5 * g * age * age, z: -2.4 }, vel: { x: dir * sp, y: 1.2 - g * age, z: 0 }, bornTick: n * period, endTick: n * period + flight, power: 0 });
     }
   }
   s.projectiles = projectiles;

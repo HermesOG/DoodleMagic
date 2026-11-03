@@ -23,15 +23,15 @@ describe("audio", () => {
 });
 
 describe("recipes table", () => {
-  it("every Fire sound signs in 2–8 kHz and every Earth sound in 30–200 Hz, so the pair passes a blind test", () => {
+  it("every element sound signs in its own band: Fire 2–8 kHz, Earth 30–200 Hz, Water 300–1500 Hz, Air 800–4000 Hz (GDD 5)", () => {
+    const BAND = { fire: [2000, 8000], earth: [30, 200], water: [300, 1500], air: [800, 4000] } as const;
     for (const id of SOUND_IDS) {
       const el = SOUND_ELEMENT[id];
       const sig = RECIPES[id].layers.filter((l) => l.signature);
       if (el === null) continue;
       expect(sig.length, id).toBe(1);
       const [lo, hi] = bandOf(RECIPES[id]);
-      if (el === "fire") expect([lo >= 2000, hi <= 8000], id).toEqual([true, true]);
-      else expect([lo >= 30, hi <= 200], id).toEqual([true, true]);
+      expect([lo >= BAND[el][0], hi <= BAND[el][1]], id).toEqual([true, true]);
     }
   });
 

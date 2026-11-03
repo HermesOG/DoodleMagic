@@ -43,7 +43,7 @@ describe("effectsFor", () => {
   });
 
   it("punches the FOV on a dash, marks kills, ring-outs and «Кураж», fizzles bad casts, wiggles on cooldown", () => {
-    expect(fx({ type: "dash", unit: 1, phase: "start", pos: V(), dir: V(1, 0, 0) })).toContainEqual(expect.objectContaining({ kind: "fov", deg: 8 }));
+    expect(fx({ type: "dash", unit: 1, ability: "jetDash", phase: "start", pos: V(), dir: V(1, 0, 0) })).toContainEqual(expect.objectContaining({ kind: "fov", deg: 8 }));
     expect(fx(hitOn(2, { killed: true }))).toContainEqual(expect.objectContaining({ kind: "hitmarker", kill: true }));
     expect(fx({ type: "fall", target: 2, credit: 1, pos: V(2, -4, -3) })).toContainEqual(expect.objectContaining({ kind: "toast", text: "Сброс!" }));
     expect(fx({ type: "courage", unit: 1 })).toContainEqual(expect.objectContaining({ kind: "toast", text: "Кураж!" }));

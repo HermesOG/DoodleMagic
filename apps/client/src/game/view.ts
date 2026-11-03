@@ -23,9 +23,10 @@ import { createAudio, unlockOnGesture } from "../audio/synth";
 import { createEyeSmooth, createMoveTracker, stepEyeSmooth, trackMovement } from "../feel/body";
 import { addFeel, addLanding, createCameraFeel, stepCameraFeel, type CameraOffset } from "../feel/camera";
 import type { Effect } from "../feel/effects";
+import { elementFrameEffects } from "../feel/elementFx";
 import { effectsFor } from "../feel/eventMap";
 import { createVfx } from "../fx/vfx";
-import { createGestures, startGesture, stepGestures } from "../hands/gestures";
+import { createGestures, isFistGesture, startGesture, stepGestures } from "../hands/gestures";
 import { createMittens } from "../hands/mittens";
 import { createHandRig, updateHandRig } from "../hands/motion";
 import { createCombatHud, type CombatHud } from "../hud/combatHud";
@@ -200,7 +201,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
       () => {
         if (e.kind === "gesture") {
           // gesture идёт раньше palm: palm с hand "auto" вспыхнет на руке этого удара
-          if (e.ability === "fireFists") fistHand = gestures.nextFist;
+          if (isFistGesture(e.ability)) fistHand = gestures.nextFist;
           gestures = startGesture(gestures, e.ability);
         } else if (sink === "vfx") vfx.apply(e, nowS, fistHand);
         else if (e.kind === "sound") audio.play(e.id, e.pos, e.gain, e.floor);
@@ -414,6 +415,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
       guard.run("effects", trackTick, undefined);
     }
     for (const ev of frame.late) onEvent(ev, cur);
+    // непрерывное у стихий (зёрна парения, гул Смерча, журчание Родника) — раз в кадр
+    for (const e of guard.run("effects", () => elementFrameEffects({ prev, cur, alpha, localId, nowS, dtS }), NO_EFFECTS)) route(e, nowS);
     // руки после возрождения — в покое, а не с отставанием и креном от падения
     if (respawned) handRig = createHandRig();
     // приземление садит камеру: −0,006 м на 1 м/с, не глубже 8 см (M1)

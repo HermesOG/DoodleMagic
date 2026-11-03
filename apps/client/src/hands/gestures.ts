@@ -1,4 +1,7 @@
 import type { AbilityId } from "@doodlemagic/sim";
+import { AIR_GESTURES } from "./airGestures";
+import { O, both, right, type GestureDef, type Key, type Off } from "./gestureKeys";
+import { WATER_GESTURES } from "./waterGestures";
 
 /** Добавка к позе покоя одной руки в пространстве камеры рук: сдвиг, м, и наклон кисти (rotation.x), рад. */
 export interface HandOffset {
@@ -16,25 +19,6 @@ export interface GestureState {
   active: { ability: AbilityId; hand: "left" | "right" | "both"; t: number }[];
   nextFist: "left" | "right";
 }
-
-/** [x, y, z, pitch] — смещение и наклон руки в ключевой позе. */
-type Off = readonly [number, number, number, number];
-/** Ключевая поза: время с начала жеста, правая рука, левая. У одноручных жестов левая — в покое. */
-interface Key {
-  t: number;
-  r: Off;
-  l: Off;
-}
-interface GestureDef {
-  durS: number;
-  /** Кто ведёт жест: обе руки, правая или та, чья очередь бить кулаком. */
-  hand: "both" | "right" | "fist";
-  keys: readonly Key[];
-}
-
-const O: Off = [0, 0, 0, 0];
-const both = (t: number, o: Off): Key => ({ t, r: o, l: o });
-const right = (t: number, o: Off): Key => ({ t, r: o, l: O });
 
 /**
  * Жесты способностей (round1/03 п. 5, round2/03 п. 4.2, GDD 4.3–4.4): ключевые позы из таблицы задачи, между ними —
@@ -71,7 +55,15 @@ const GESTURES: Readonly<Record<AbilityId, GestureDef>> = {
   stoneWall: { durS: 0.6, hand: "both", keys: [both(0, O), both(0.1, [0, -0.1, 0, -0.3]), both(0.28, [0, 0.12, 0, 0.25]), both(0.6, O)] },
   // долгий замах вверх 0,4 с и тяжёлый удар вниз
   earthquake: { durS: 0.8, hand: "both", keys: [both(0, O), both(0.4, [0, 0.08, 0, 0.2]), both(0.46, [0, -0.18, 0, -0.35]), both(0.8, O)] },
+  // Воздух и Вода — своими таблицами (airGestures.ts, waterGestures.ts)
+  ...AIR_GESTURES,
+  ...WATER_GESTURES,
 };
+
+/** Жест «кулака»: бьёт рукой очереди, и ладонь с hand "auto" вспыхивает на ней. */
+export function isFistGesture(a: AbilityId): boolean {
+  return GESTURES[a].hand === "fist";
+}
 
 /** Больше жестов разом не бывает: кулаки 5 раз/с × 0,22 с — два; остальное ждёт перезарядки. */
 const MAX_ACTIVE = 8;

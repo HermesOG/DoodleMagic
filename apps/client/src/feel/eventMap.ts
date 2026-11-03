@@ -1,6 +1,7 @@
 import {
   ABILITY_OF,
   EARTH,
+  ELEMENT_OF,
   NOBODY,
   forwardXZ,
   rightXZ,
@@ -16,7 +17,9 @@ import {
   type Zone,
   type ZoneShape,
 } from "@doodlemagic/sim";
+import { isFistGesture } from "../hands/gestures";
 import type { BurstPreset, Effect, FeelTier, SoundId } from "./effects";
+import { elementEffects } from "./elementFx";
 
 /** Чьими глазами смотрим: «я» — localId; state — состояние после шага, в котором родилось событие. */
 export interface EventView {
@@ -25,10 +28,10 @@ export interface EventView {
 }
 
 const UP: Vec3 = { x: 0, y: 1, z: 0 };
-const FIRE_ABILITIES: ReadonlySet<DamageSource> = new Set<DamageSource>([...Object.values(ABILITY_OF.fire), "burning"]);
-const elementOf = (a: DamageSource): Element => (FIRE_ABILITIES.has(a) ? "fire" : "earth");
+/** Стихия источника урона; горение — Огонь. */
+const elementOf = (a: DamageSource): Element => (a === "burning" ? "fire" : ELEMENT_OF[a]);
 /** ЛКМ — лёгкая ступень шкалы мощности: свой «сок» по темпу, без тряски у стреляющего (round2/03, п. 7). */
-const isPrimary = (a: DamageSource): boolean => a === ABILITY_OF.fire.primary || a === ABILITY_OF.earth.primary;
+const isPrimary = (a: DamageSource): boolean => a !== "burning" && ABILITY_OF[ELEMENT_OF[a]].primary === a;
 
 /**
  * Ступени отклика (round3/01, 2.1) — одна таблица чисел на все события. trauma — жертве; kickDeg — предел толчка
@@ -76,20 +79,39 @@ const overTime = (ev: Extract<MatchEvent, { type: "hit" }>): boolean => ev.dot |
 const CAST_SOUND: Readonly<Record<AbilityId, SoundId>> = {
   fireFists: "fireFist", fireball: "fireballCharge", jetDash: "dash", fireWall: "fireWallTelegraph",
   stoneShot: "stoneCast", stonePillar: "pillarTelegraph", stoneWall: "wallRise", earthquake: "quakeWindup",
+  airSickle: "sickleThrow", gust: "gustWindup", swoop: "swoop", tornado: "tornadoRise",
+  waterWhip: "whipCrack", waterGrab: "grabWindup", waterWard: "wardUp", spring: "springSpread",
 };
 /**
- * Отдача камеры у кастующего на нажатии, градусы: кулаки и камень 0,2° (у камня ещё 0,6° на броске, A1), ладони в
- * землю — вниз (GROUND_SLAM, A2), замах землетрясения — 0 (удар вниз придёт с ударом), остальное 1°.
+ * Отдача камеры у кастующего на нажатии, градусы: ЛКМ (кулаки, камень, серп, хлыст) 0,2° (у камня ещё 0,6° на броске,
+ * A1), ладони в землю — вниз (GROUND_SLAM, A2), замах землетрясения — 0 (удар вниз придёт с ударом), остальное 1°.
  */
 const castKick = (a: AbilityId): Effect =>
   a === "stonePillar" || a === "stoneWall"
     ? GROUND_SLAM
-    : { kind: "kick", pitchDeg: a === "fireFists" || a === "stoneShot" ? 0.2 : a === "earthquake" ? 0 : 1, yawDeg: 0, rollDeg: 0 };
+    : { kind: "kick", pitchDeg: isPrimary(a) ? 0.2 : a === "earthquake" ? 0 : 1, yawDeg: 0, rollDeg: 0 };
 /** Чем попали в меня — глухой удар плюс отпечаток стихии (round1/03, п. 3); у кулака свой треск попадания (H3). */
 const HIT_SOUND: Readonly<Record<DamageSource, SoundId>> = {
   fireFists: "fistHit", fireball: "fireballBoom", jetDash: "fireWallIgnite", fireWall: "fireWallIgnite", burning: "fireWallIgnite",
   stoneShot: "stoneImpact", stonePillar: "pillarStrike", stoneWall: "terrainHit", earthquake: "quakeStrike",
+  airSickle: "sickleHit", gust: "airBlown", swoop: "airBlown", tornado: "airBlown",
+  waterWhip: "whipHit", waterGrab: "grabHit", waterWard: "answerHit", spring: "springBubble",
 };
+/** Выпуск снаряда или удара в конце замаха (A1): звук у меня у уха, у чужого — там, где он бросил. */
+const RELEASE_SOUND: Readonly<Partial<Record<AbilityId, SoundId>>> = {
+  fireball: "fireballLaunch", stoneShot: "stoneThrow", gust: "gustBlast", waterGrab: "grabThrow", waterWard: "answerThrow",
+};
+/** Попадание снаряда в цель или мир (первая фаза): всплеск и звук по способности; рельеф — всегда крошка камня. */
+const IMPACT_FX: Readonly<Partial<Record<AbilityId, { burst: BurstPreset; sound: SoundId }>>> = {
+  fireFists: { burst: "fistImpact", sound: "fistHit" },
+  fireball: { burst: "fistImpact", sound: "fistHit" },
+  stoneShot: { burst: "stoneImpact", sound: "stoneImpact" },
+  airSickle: { burst: "sicklePuff", sound: "sickleHit" },
+  waterGrab: { burst: "grabSplash", sound: "grabHit" },
+  waterWard: { burst: "answerSplash", sound: "answerHit" },
+};
+/** Всплеск смерти — по стихии убийцы. */
+const DEATH_BURST: Readonly<Record<Element, BurstPreset>> = { fire: "deathFire", earth: "deathEarth", air: "deathAir", water: "deathWater" };
 
 const sound = (id: SoundId, pos: Vec3 | null = null, gain = 1): Effect => ({ kind: "sound", id, pos, gain });
 /** Звук попадания в мире; своё — не тише OWN_HIT_FLOOR и издалека. */
@@ -222,6 +244,9 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
  */
 export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
   const me = unitById(view.state, view.localId);
+  // событие своей стихии (Воздух, Вода) — её файл; null — общая карта
+  const own = elementEffects(ev, view, me);
+  if (own) return own;
   const mine = (unit: UnitId): boolean => unit === view.localId;
   switch (ev.type) {
     case "cast": {
@@ -233,7 +258,7 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
         { kind: "gesture", ability: ev.ability },
         {
           kind: "palm",
-          hand: ev.ability === "fireFists" ? "auto" : "both",
+          hand: isFistGesture(ev.ability) ? "auto" : "both",
           element,
           preset: ev.ability === "fireball" || ev.ability === "stoneShot" ? "charge" : "flash",
         },
@@ -246,21 +271,22 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
     }
     case "release": {
       // такт «удар» (A1): выпуск звучит — у меня у уха, у чужого — там, где он бросил
-      const id: SoundId | null = ev.ability === "fireball" ? "fireballLaunch" : ev.ability === "stoneShot" ? "stoneThrow" : null;
+      const id: SoundId | null = RELEASE_SOUND[ev.ability] ?? null;
       if (!mine(ev.unit)) return id ? [sound(id, ev.pos)] : [];
       if (ev.ability === "fireball")
         return [{ kind: "kick", pitchDeg: 1.5, yawDeg: 0, rollDeg: 0 }, { kind: "fov", deg: 3 }, { kind: "trauma", amount: 0.15 }, sound("fireballLaunch")];
       // pos выпуска — глаза: крошка сыплется у рук, впереди и ниже, а не в лицо (≈ 1,9 раза в секунду); отдача 0,6° — на броске
       if (ev.ability === "stoneShot")
         return [burst("stoneCrumble", releaseCrumblePoint(ev.pos, ev.dir)), { kind: "kick", pitchDeg: 0.6, yawDeg: 0, rollDeg: 0 }, sound("stoneThrow")];
-      return [];
+      return id ? [sound(id)] : [];
     }
     case "impact": {
       // первая фаза попадания: снаряд врезался — видно и слышно в мире, хитмаркер ждёт события hit
       const stone = ev.ability === "stoneShot";
-      const preset: BurstPreset = ev.terrain >= 0 ? "terrainChips" : stone ? "stoneImpact" : "fistImpact";
+      const fx = IMPACT_FX[ev.ability] ?? IMPACT_FX.fireFists!;
+      const preset: BurstPreset = ev.terrain >= 0 ? "terrainChips" : fx.burst;
       // пол громкости — только своему попаданию в цель, промах звучит по расстоянию
-      const hit = ownSound(stone ? "stoneImpact" : "fistHit", ev.pos, mine(ev.owner) && ev.target !== NOBODY);
+      const hit = ownSound(fx.sound, ev.pos, mine(ev.owner) && ev.target !== NOBODY);
       // Земле вместо света — белая бумажная вспышка (H3)
       return stone && ev.terrain < 0 ? [burst(preset, ev.pos, ev.normal), burst("paperFlash", ev.pos), hit] : [burst(preset, ev.pos, ev.normal), hit];
     }
@@ -281,7 +307,8 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
       if (ev.phase === "expire") return [burst("wallDust", ev.pos)];
       return [];
     case "dash": {
-      if (ev.phase !== "start") return [];
+      // Взмах рисует Воздух (airFx); здесь — только Реактивный рывок
+      if (ev.phase !== "start" || ev.ability !== "jetDash") return [];
       // пламя бьёт назад, за спину рывка
       const blast = burst("dashBlast", ev.pos, { x: -ev.dir.x + 0, y: -ev.dir.y + 0, z: -ev.dir.z + 0 });
       if (!mine(ev.unit)) return [blast];
@@ -309,7 +336,7 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
       return mine(ev.unit) ? [{ kind: "toast", text: "Кураж!" }, sound("courage")] : [];
     case "death": {
       const element = unitById(view.state, ev.killer)?.mage?.element ?? elementOf(ev.ability);
-      return [burst(element === "fire" ? "deathFire" : "deathEarth", ev.pos), ...(mine(ev.killer) ? [sound("kill")] : [])];
+      return [burst(DEATH_BURST[element], ev.pos), ...(mine(ev.killer) ? [sound("kill")] : [])];
     }
     case "fall":
       return mine(ev.credit) ? [{ kind: "toast", text: "Сброс!" }, sound("fall")] : [];
@@ -317,6 +344,19 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
       return [burst("respawnPuff", ev.pos)];
     case "status":
       // статусы HUD и частицы читают из состояния
+      return [];
+    // события фазы 4 без общего отклика: их рисуют файлы стихий (elementEffects)
+    case "beam":
+    case "blown":
+    case "slam":
+    case "airJump":
+    case "glide":
+    case "charge":
+    case "absorb":
+    case "ward":
+    case "tow":
+    case "heal":
+    case "reaction":
       return [];
   }
 }

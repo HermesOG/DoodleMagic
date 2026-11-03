@@ -40,6 +40,6 @@ describe("HUD formatting", () => {
     expect([cooldownFraction(u.mage!, "q", 100), cooldownFraction(u.mage!, "q", 400), heatFraction(u.mage!)]).toEqual([0.5, 0, 0.4]);
     expect(hpBar(u)).toEqual({ frac: 0.5, notch: 2 / 3, text: "75 / 150" });
     expect(parsePrefs('{"element":"earth","cameraMotion":0.5}')).toEqual({ element: "earth", cameraMotion: 0.5 });
-    expect([parsePrefs(null), parsePrefs('{"element":"water","cameraMotion":7}')]).toEqual([DEFAULT_PREFS, { element: "fire", cameraMotion: 1 }]);
+    expect([parsePrefs(null), parsePrefs('{"element":"lava","cameraMotion":7}')]).toEqual([DEFAULT_PREFS, { element: "fire", cameraMotion: 1 }]);
   });
 });
