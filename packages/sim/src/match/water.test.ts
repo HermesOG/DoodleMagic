@@ -5,6 +5,7 @@ import { applyHit, pullMul } from "./combat";
 import { buildTickWorld } from "./dynamic";
 import { deepFreeze, testContext } from "./fixtures";
 import { createMatch, stepMatch } from "./match";
+import { wardFaces } from "./projectiles";
 import { idleInput, NO_MATCH_INPUT, statusFlags, unitById } from "./state";
 import { spawnTerrain } from "./terrain";
 import { NOBODY, type DummySpot, type Element, type MatchContext, type MatchEvent, type MatchInput, type MatchState, type TickCtx, type UnitId } from "./types";
@@ -191,6 +192,15 @@ describe("Water ward (E)", () => {
 
     const back = play({ mages: [water(), shooter("fire", 0, 10)] }, 40, (k) => ({ 1: { e: k === 0 }, 2: { primary: k === 0 } }));
     expect([evs(back.log, "absorb").length, hitsOn(back.log, 1).map(({ e }) => [e.ability, e.amount])]).toEqual([0, [["fireFists", 12]]]);
+  });
+
+  it("a shot travelling exactly sideways (velocity · forward = 0) is not met by the ward: it hits", () => {
+    const { s } = play(solo([]), 1, (k) => ({ 1: { e: k === 0 } }));
+    const w = u(s, 1);
+    // взгляд (0, −1): поперёк — ровно 0, не «против взгляда»; встречный (0, +1) — диск
+    expect([wardFaces(w, { x: 1, z: 0 }, s.tick), wardFaces(w, { x: -1, z: 0 }, s.tick), wardFaces(w, { x: 0, z: 1 }, s.tick)]).toEqual([false, false, true]);
+    const side = play({ mages: [water(), shooter("fire", -10, 0)] }, 40, (k) => ({ 1: { e: k === 0 }, 2: { primary: k === 0 } }));
+    expect([evs(side.log, "absorb").length, hitsOn(side.log, 1).map(({ e }) => [e.ability, e.amount])]).toEqual([0, [["fireFists", 12]]]);
   });
 
   it("anchors Water for the ward: no push, launch, tow or pull; damage, slow and the earthquake root still land", () => {
