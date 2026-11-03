@@ -21,10 +21,13 @@ export interface DecalSpec {
   enemy: boolean;
 }
 
-/** Стиль по виду зоны; null — без декали (пар рисуется облаком, а не на полу). */
+/**
+ * Стиль по виду зоны; null — без декали (пар рисуется облаком, а не на полу). Смерч и Родник пока без своего узора
+ * в шейдере (их рисуют частицы стихий), а нефритовое кольцо «Корней» под ними путало бы с Землёй.
+ */
 const STYLE: Readonly<Record<ZoneKind, DecalSpec["style"] | null>> = {
   fireWall: "sparks", fireTrail: "embers", pillar: "cracks", quake: "quake",
-  tornado: "tornado", fireTornado: "fireTornado", spring: "spring", steam: null,
+  tornado: null, fireTornado: null, spring: null, steam: null,
 };
 /** Разовые зоны бьют ровно на armTick: после взвода декали нет, удар рисует всплеск. */
 const ONE_SHOT: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["pillar", "quake"]);

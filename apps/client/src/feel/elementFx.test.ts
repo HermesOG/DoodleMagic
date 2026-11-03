@@ -73,19 +73,19 @@ describe("element registries: every id of the four elements has its entry", () =
     }
   });
 
-  it("every zone kind has a decal style entry: steam draws none, the rest draw a ring or their own pattern", () => {
+  it("every zone kind has a decal style entry: steam, tornado and spring draw none (element particles do), the rest a ring", () => {
     const kinds: ZoneKind[] = ["fireWall", "fireTrail", "pillar", "quake", "tornado", "fireTornado", "spring", "steam"];
     const zone = (kind: ZoneKind, owner = 2): Zone => ({
       id: 1, owner, kind, ability: "tornado", shape: { type: "disc", center: V(), radius: 3 }, bornTick: 0, armTick: 30, endTick: 300, rehit: [],
     });
+    const none = new Set<ZoneKind>(["steam", "tornado", "fireTornado", "spring"]);
     for (const k of kinds) {
       const d = zoneDecal(zone(k), 10);
-      if (k === "steam") expect(d, k).toBeNull();
+      if (none.has(k)) expect(d, k).toBeNull();
       else expect(d?.shape, k).toBe("ring");
     }
-    expect(zoneDecal(zone("tornado"), 10)?.style).toBe("tornado");
     // enemy: известен свой маг и хозяин — не он
-    expect([zoneDecal(zone("spring", 2), 10, ME)?.enemy, zoneDecal(zone("spring", ME), 10, ME)?.enemy, zoneDecal(zone("spring", 2), 10)?.enemy]).toEqual([true, false, false]);
+    expect([zoneDecal(zone("quake", 2), 10, ME)?.enemy, zoneDecal(zone("quake", ME), 10, ME)?.enemy, zoneDecal(zone("quake", 2), 10)?.enemy]).toEqual([true, false, false]);
   });
 
   it("Air and Water have kit widgets; Fire and Earth keep their own kit", () => {
