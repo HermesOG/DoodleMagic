@@ -102,6 +102,11 @@ export const STEAM = { radiusM: 2.5, heightM: 3, lifeS: 3, perArena: 4, everyS: 
  */
 export const BOIL_OFF = { radiusM: 4 } as const;
 /**
+ * «Песчаный смерч» (GDD 4.6, round3/02-air.md): камень Земли, столб, стена или землетрясение по взведённому Смерчу.
+ * Вихрь шире на radiusBonusM, его импульсы ещё и замедляют до slowMul на slowS (в пределах CC).
+ */
+export const SAND_TORNADO = { radiusBonusM: 1, slowMul: 0.8, slowS: 0.5 } as const;
+/**
  * «Топь» (GDD 4.6, round3/03-water.md): Землетрясение по взведённому Роднику. Лужа той же площади доживает срок
  * Родника, но не меньше minLifeS; врагов хозяина внутри замедляет до slowMul (−40 %, предел CC) и мочит; замедление
  * держится slowS после выхода (как slowAfterS у Родника). Срабатывает, только если центр Родника в радиусе землетрясения.

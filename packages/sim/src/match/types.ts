@@ -125,7 +125,7 @@ export type ProjectileKind = (typeof PROJECTILE_KINDS)[number];
 /** После шага тика endTick − 1 снаряд исчезает (огненный шар — взрывается). power — урон попадания: по таблице вида, у Ответа — впитанное. */
 export interface Projectile { id: number; owner: UnitId; ability: ProjectileKind; pos: Vec3; vel: Vec3; bornTick: number; endTick: number; power: number }
 
-export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake" | "tornado" | "fireTornado" | "spring" | "steam" | "bog";
+export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake" | "tornado" | "fireTornado" | "sandTornado" | "spring" | "steam" | "bog";
 export type ZoneShape =
   | { type: "box"; box: AABB }
   | { type: "segment"; a: Vec3; b: Vec3; halfW: number }
@@ -151,7 +151,7 @@ export interface Terrain {
 /** tick — сколько тиков посчитано (следующий шаг считает тик с этим номером); units по возрастанию id. */
 export interface MatchState { tick: number; units: Unit[]; projectiles: Projectile[]; zones: Zone[]; terrain: Terrain[]; nextId: number }
 
-export type ReactionKind = "steam" | "fireTornado" | "fireRampart" | "bog" | "boilOff";
+export type ReactionKind = "steam" | "fireTornado" | "fireRampart" | "bog" | "boilOff" | "sandTornado";
 export type StatusKind = "burning" | "slow" | "root" | "airborne" | "wet";
 export type RejectReason = "cooldown" | "busy" | "notGrounded" | "noTarget" | "rooted";
 

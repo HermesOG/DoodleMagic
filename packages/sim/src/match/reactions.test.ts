@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { aabb } from "../aabb";
 import type { Spawn } from "../types";
 import { buildTickWorld } from "./dynamic";
-import { AIR, BOG, BOIL_OFF, CC_LIMITS, EARTH, FIRE, LIMITS, RAMPART, STEAM, ticks } from "./defs";
+import { AIR, BOG, BOIL_OFF, CC_LIMITS, EARTH, FIRE, LIMITS, RAMPART, SAND_TORNADO, STEAM, ticks } from "./defs";
 import { testContext } from "./fixtures";
 import { createMatch, stepMatch } from "./match";
 import { explodeFireball } from "./projectiles";
@@ -410,5 +410,78 @@ describe("reaction «Выкипание» (fire on a spring)", () => {
     const y = springState();
     expect(JSON.stringify(blast(y, { x: 2, y: 0.5, z: 1 }))).toBe(JSON.stringify(blast(x, { x: 2, y: 0.5, z: 1 })));
     expect(JSON.stringify(y)).toBe(JSON.stringify(x));
+  });
+});
+
+// ---------------------------------------------------------------- «Песчаный смерч»
+
+const SAND_AIR = 1;
+const SAND_EARTH = 2;
+const sandMages = (): Setup["mages"] => [{ element: "air", spawn: spot(2, 0) }, { element: "earth", spawn: spot(0, -15) }];
+
+/** Смерч Воздуха (id 1) в (0, 0, 0), рождён 30 тиков назад, взведён (или через armIn). */
+function tornadoAt(s: MatchState, t: TickCtx, armIn = 0) {
+  spawnZone(s, t, {
+    owner: SAND_AIR, kind: "tornado", ability: "tornado", shape: { type: "disc", center: { x: 0, y: 0, z: 0 }, radius: AIR.tornado.radiusM },
+    bornTick: s.tick - 30, armTick: s.tick + armIn, endTick: s.tick + 240,
+  });
+}
+/** Камень Земли висит в цилиндре вихря над головами (x = −3, y = 3,5). */
+function stoneIn(s: MatchState) {
+  s.projectiles.push({ id: s.nextId++, owner: SAND_EARTH, ability: "stoneShot", pos: { x: -3, y: 3.5, z: 0 }, vel: { x: 0, y: 0, z: 0 }, bornTick: s.tick, endTick: s.tick + 2, power: 1 });
+}
+/** Землетрясение Земли в (3, 0, 0): bornAgo тиков назад, бьёт на этом тике. */
+function quakeAt(s: MatchState, t: TickCtx, bornAgo: number) {
+  spawnZone(s, t, {
+    owner: SAND_EARTH, kind: "quake", ability: "earthquake", shape: { type: "disc", center: { x: 3, y: 0, z: 0 }, radius: EARTH.earthquake.radiusM },
+    bornTick: s.tick - bornAgo, armTick: s.tick, endTick: s.tick + 1,
+  });
+}
+const sandPlay = (prep: (s: MatchState, t: TickCtx) => void, n = 1) => play({ mages: sandMages(), prep }, n);
+
+describe("reaction «Песчаный смерч» (Earth on an armed tornado)", () => {
+  it("a stone shot in the cylinder turns the tornado into a sand tornado owned by the Earth mage, 1 m wider", () => {
+    const { s, log } = sandPlay((s, t) => { tornadoAt(s, t); stoneIn(s); });
+    const r = evs(log, "reaction");
+    expect(r).toHaveLength(1);
+    expect(r[0]!.e).toMatchObject({ kind: "sandTornado", owner: SAND_EARTH, pos: { x: 0, y: 0, z: 0 } });
+    const z = s.zones.find((q) => q.id === r[0]!.e.zone)!;
+    expect(z.kind).toBe("sandTornado");
+    expect(z.owner).toBe(SAND_EARTH);
+    expect(z.shape).toEqual({ type: "disc", center: { x: 0, y: 0, z: 0 }, radius: AIR.tornado.radiusM + SAND_TORNADO.radiusBonusM });
+    expect(s.zones.filter((q) => q.kind === "tornado")).toHaveLength(0);
+  });
+
+  it("a quake born after the tornado: Earth owns it (second effect); an older quake leaves the Air mage the owner", () => {
+    const late = sandPlay((s, t) => { tornadoAt(s, t); quakeAt(s, t, 0); });
+    expect(evs(late.log, "reaction")[0]!.e).toMatchObject({ kind: "sandTornado", owner: SAND_EARTH });
+    const early = sandPlay((s, t) => { quakeAt(s, t, 60); tornadoAt(s, t); });
+    expect(evs(early.log, "reaction")[0]!.e).toMatchObject({ kind: "sandTornado", owner: SAND_AIR });
+    expect(early.s.zones.find((q) => q.kind === "sandTornado")?.owner).toBe(SAND_AIR);
+  });
+
+  it("no reaction on a tornado still growing (telegraph) or with no Earth around", () => {
+    expect(evs(sandPlay((s, t) => { tornadoAt(s, t, 5); stoneIn(s); }).log, "reaction")).toHaveLength(0);
+    expect(evs(sandPlay((s, t) => tornadoAt(s, t), 3).log, "reaction")).toHaveLength(0);
+  });
+
+  it("its pulses also slow the new owner's enemies by 20 % for 0.5 s (within CC limits)", () => {
+    const { s } = sandPlay((s, t) => { tornadoAt(s, t); stoneIn(s); });
+    const a = u(s, SAND_AIR);
+    const now = s.tick - 1;
+    expect(a.status.slowMul).toBeCloseTo(SAND_TORNADO.slowMul, 9);
+    expect(a.status.slowMul).toBeGreaterThanOrEqual(1 - CC_LIMITS.slowMaxFrac - 1e-9);
+    expect(a.status.slowUntil - now).toBeGreaterThan(0);
+    expect(a.status.slowUntil - now).toBeLessThanOrEqual(ticks(SAND_TORNADO.slowS) + 1);
+    // хозяина (Землю) вихрь не замедляет
+    expect(u(s, SAND_EARTH).status.slowUntil).toBeLessThanOrEqual(now);
+  });
+
+  it("is deterministic", () => {
+    const prep = (s: MatchState, t: TickCtx) => { tornadoAt(s, t); stoneIn(s); };
+    const a = sandPlay(prep, 40);
+    const b = sandPlay(prep, 40);
+    expect(JSON.stringify(b.s)).toBe(JSON.stringify(a.s));
+    expect(JSON.stringify(b.log)).toBe(JSON.stringify(a.log));
   });
 });

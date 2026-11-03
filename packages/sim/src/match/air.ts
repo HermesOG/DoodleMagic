@@ -5,7 +5,7 @@ import { TICK_DT, type AABB, type MoveParams, type PlayerInput, type Vec3 } from
 import { aimGround } from "./aim";
 import { applyHit, launchUnit, pullMul } from "./combat";
 import { dashStarted, startDash, stepDash, type DashSpec } from "./dash";
-import { AIR, RAMPART, slotCooldownTicks, ticks } from "./defs";
+import { AIR, RAMPART, SAND_TORNADO, slotCooldownTicks, ticks } from "./defs";
 import type { ElementSim, MoveHooks, ZoneStep } from "./hooks";
 import { castAim, castSlots, emitCast, refillCharges, spendCharge, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
@@ -371,6 +371,77 @@ function ignite(s: MatchState, t: TickCtx, z: Zone): void {
   t.ev.push({ type: "reaction", kind: "fireTornado", owner, zone: z.id, pos: copy(c) });
 }
 
+/** Диск зоны (землетрясение) задевает цилиндр вихря: по XZ ближе суммы радиусов, центр по высоте в цилиндре. */
+function discMeetsVortex(q: Zone, c: Vec3, radius: number): boolean {
+  if (q.shape.type !== "disc") return false;
+  const p = q.shape.center;
+  if (p.y < c.y - TO.belowM || p.y > c.y + TO.aboveM) return false;
+  const dx = p.x - c.x;
+  const dz = p.z - c.z;
+  return Math.sqrt(dx * dx + dz * dz) < radius + q.shape.radius;
+}
+
+/** Точка в цилиндре вихря: по XZ до радиуса, по высоте от belowM под центром до aboveM над ним. */
+function pointInVortex(p: Vec3, c: Vec3, radius: number): boolean {
+  if (p.y < c.y - TO.belowM || p.y > c.y + TO.aboveM) return false;
+  const dx = p.x - c.x;
+  const dz = p.z - c.z;
+  return Math.sqrt(dx * dx + dz * dz) <= radius;
+}
+
+/**
+ * «Песчаный смерч» (GDD 4.6, round3/02-air.md): взведённый вихрь набирает песок, если в его цилиндре летит камень Земли
+ * (или камень в этот тик ударился в цилиндре — по событию impact), или его задевает взведённый столб, землетрясение
+ * либо каменная стена/столб-препятствие. Хозяин — тот, чей эффект пришёл вторым: у камня — его хозяин; у столба,
+ * землетрясения и стены — их хозяин, если они родились позже вихря, иначе прежний. Камень и камень-препятствия
+ * не поглощаются. Вихрь шире на SAND_TORNADO.radiusBonusM. Событие reaction {kind: "sandTornado"}.
+ */
+function sandUp(s: MatchState, t: TickCtx, z: Zone): void {
+  if (z.shape.type !== "disc") return;
+  const c = z.shape.center;
+  const r = z.shape.radius;
+  let owner: number | null = null;
+  for (const p of s.projectiles) {
+    if (p.ability !== "stoneShot" || !pointInVortex(p.pos, c, r)) continue;
+    owner = p.owner;
+    break;
+  }
+  if (owner === null) {
+    for (const e of t.ev) {
+      if (e.type !== "impact" || e.ability !== "stoneShot" || !pointInVortex(e.pos, c, r)) continue;
+      owner = e.owner;
+      break;
+    }
+  }
+  if (owner === null) {
+    for (const q of s.zones) {
+      if ((q.kind !== "pillar" && q.kind !== "quake") || t.now < q.armTick) continue;
+      if (!(q.kind === "quake" ? discMeetsVortex(q, c, r) : crossesDisc(q, c, r))) continue;
+      owner = q.bornTick > z.bornTick ? q.owner : z.owner;
+      break;
+    }
+  }
+  if (owner === null) {
+    for (const tr of s.terrain) {
+      if (!tr.solid) continue;
+      const bx = tr.box;
+      if (bx.max.y < c.y - TO.belowM || bx.min.y > c.y + TO.aboveM) continue;
+      const dx = Math.max(bx.min.x, Math.min(bx.max.x, c.x)) - c.x;
+      const dz = Math.max(bx.min.z, Math.min(bx.max.z, c.z)) - c.z;
+      if (dx * dx + dz * dz >= r * r) continue;
+      owner = tr.bornTick > z.bornTick ? tr.owner : z.owner;
+      break;
+    }
+  }
+  if (owner === null) return;
+  const was = z.owner;
+  z.rehit = z.rehit.filter((q) => q.unit !== was && q.unit !== owner);
+  z.kind = "sandTornado";
+  z.owner = owner;
+  z.shape = { type: "disc", center: copy(c), radius: r + SAND_TORNADO.radiusBonusM };
+  t.ev.push({ type: "reaction", kind: "sandTornado", owner, zone: z.id, pos: copy(c) });
+}
+
 /** Тяга на шаг к центру отдельным moveBody, как канал толчка: своя скорость тела не меняется. */
 function pullStep(t: TickCtx, v: Unit, c: Vec3, d: number, step: number): void {
   const b = v.move.body;
@@ -382,20 +453,24 @@ function pullStep(t: TickCtx, v: Unit, c: Vec3, d: number, step: number): void {
 }
 
 /**
- * Шаг вихря после взвода (Смерч и «Огненный смерч»): реакция (только у обычного) → тяга → импульсы → ядро.
+ * Шаг вихря после взвода (Смерч, «Огненный» и «Песчаный смерч»): реакции (только у обычного) → тяга → импульсы → ядро.
  * - Тяга: живые не-хозяева без рывка, буксира и защиты после появления в цилиндре (парящие тоже) — к центру
  *   2,5 × pullMul м/с, не дальше центра.
- * - Импульсы: каждому в цилиндре раз в 0,5 с (rehit) — 4 урона по времени; у огненного — 8 и Горение.
+ * - Импульсы: каждому в цилиндре раз в 0,5 с (rehit) — 4 урона по времени; у огненного — 8 и Горение; у песчаного —
+ *   ещё замедление SAND_TORNADO.
  * - Ядро 1,5 м: не-хозяина подбрасывает на 3 м (launchUnit: не чаще иммунитета, сброс — хозяину вихря); хозяина на
  *   полу поднимает на 2 м без урона и статуса, раз в 1 с (запись rehit хозяина) — уйти парением.
  */
 const stepVortex: ZoneStep = (s, t, z) => {
   if (z.shape.type !== "disc") return;
   if (z.kind === "tornado") ignite(s, t, z);
+  if (z.kind === "tornado") sandUp(s, t, z);
+  if (z.shape.type !== "disc") return;
   const now = t.now;
   const c = z.shape.center;
   const r = z.shape.radius;
   const fire = z.kind === "fireTornado";
+  const sand = z.kind === "sandTornado";
   for (const v of s.units) {
     // защищённого после появления не тянет, как не бьёт applyHit и не подбрасывает launchUnit
     if (!v.alive || v.id === z.owner || v.tow || (v.mage?.dash ?? null) || now < v.status.shieldUntil) continue;
@@ -410,7 +485,7 @@ const stepVortex: ZoneStep = (s, t, z) => {
     if (rec && rec.tick > now) continue;
     applyHit(s, t, {
       source: z.owner, target: v.id, ability: z.ability, damage: fire ? TO.firePulseDamage : TO.pulseDamage, pos: bodyCenter(v), dir: { x: 0, z: 0 },
-      burn: fire, dot: true,
+      burn: fire, dot: true, slow: sand ? { mul: SAND_TORNADO.slowMul, s: SAND_TORNADO.slowS } : undefined,
     });
     if (rec) rec.tick = now + PULSE_TICKS;
     else z.rehit.push({ unit: v.id, tick: now + PULSE_TICKS });
@@ -439,5 +514,5 @@ const stepVortex: ZoneStep = (s, t, z) => {
 export const AIR_SIM: ElementSim = Object.freeze({
   kit: AIR_KIT,
   move: LIGHTNESS,
-  zones: Object.freeze({ tornado: stepVortex, fireTornado: stepVortex }),
+  zones: Object.freeze({ tornado: stepVortex, fireTornado: stepVortex, sandTornado: stepVortex }),
 });

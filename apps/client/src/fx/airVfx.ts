@@ -144,7 +144,7 @@ export function vortexParticles(z: Zone, tick: number, nowS: number, n: { grow: 
   return out;
 }
 
-const isVortex = (z: Zone): boolean => z.kind === "tornado" || z.kind === "fireTornado";
+const isVortex = (z: Zone): boolean => z.kind === "tornado" || z.kind === "fireTornado" || z.kind === "sandTornado";
 
 export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
   const geom = new BoxGeometry(1, 1, 1);

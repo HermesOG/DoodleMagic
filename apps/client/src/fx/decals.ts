@@ -27,7 +27,7 @@ export interface DecalSpec {
  */
 const STYLE: Readonly<Record<ZoneKind, DecalSpec["style"] | null>> = {
   fireWall: "sparks", fireTrail: "embers", pillar: "cracks", quake: "quake",
-  tornado: "tornado", fireTornado: "fireTornado", spring: "spring", steam: null,
+  tornado: "tornado", fireTornado: "fireTornado", sandTornado: "tornado", spring: "spring", steam: null,
   // «Топь» — круги Родника; у врага хозяина (и у самой Воды) — с вражеской кромкой
   bog: "spring",
 };

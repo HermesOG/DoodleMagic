@@ -11,7 +11,7 @@ import type { EventView } from "./eventMap";
 
 const UP: Vec3 = { x: 0, y: 1, z: 0 };
 const AIR_ABILITIES: ReadonlySet<AbilityId> = new Set<AbilityId>(["airSickle", "gust", "swoop", "tornado"]);
-const VORTEX: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["tornado", "fireTornado"]);
+const VORTEX: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["tornado", "fireTornado", "sandTornado"]);
 /** Своё попадание слышно не тише этого и издалека — как в общей карте (round3/01, H3). */
 const OWN_FLOOR = 0.6;
 /** Толчок камеры средней ступени (TIERS.medium.kickDeg) и её trauma — у выпуска Порыва и удара о стену. */
@@ -144,6 +144,13 @@ export function airEffects(ev: MatchEvent, view: EventView, me: Unit | undefined
         const at = { x: ev.pos.x, y: ev.pos.y + 1, z: ev.pos.z };
         const out: Effect[] = [burst("fireWallIgnite", ev.pos), burst("gustBlast", at), ownSound("gustBlast", at, mine(ev.owner)), sound("fireWallIgnite", ev.pos)];
         if (mine(ev.owner)) out.push({ kind: "toast", text: "Огненный вал!" });
+        return out;
+      }
+      if (ev.kind === "sandTornado") {
+        // «Песчаный смерч»: вихрь набирает песок — второе кольцо пыли выше по стволу; шире и с песком его рисует зона
+        const up = { x: ev.pos.x, y: ev.pos.y + 1.5, z: ev.pos.z };
+        const out: Effect[] = [burst("tornadoDust", ev.pos), burst("tornadoDust", up), ownSound("tornadoRise", ev.pos, mine(ev.owner))];
+        if (mine(ev.owner)) out.push({ kind: "toast", text: "Песчаный смерч!" });
         return out;
       }
       if (ev.kind !== "fireTornado") return null;
