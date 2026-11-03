@@ -305,6 +305,9 @@ function ignite(s: MatchState, t: TickCtx, z: Zone): void {
     }
   }
   if (owner === null) return;
+  // отметки повторов старого и нового хозяина меняют смысл (подъём ↔ импульс огня) — сбрасываем их
+  const was = z.owner;
+  z.rehit = z.rehit.filter((q) => q.unit !== was && q.unit !== owner);
   z.kind = "fireTornado";
   z.owner = owner;
   t.ev.push({ type: "reaction", kind: "fireTornado", owner, zone: z.id, pos: copy(c) });
@@ -356,6 +359,8 @@ const stepVortex: ZoneStep = (s, t, z) => {
     if (!v.alive) continue;
     const d = inVortex(c, r, v);
     if (d < 0 || d > TO.coreRadiusM) continue;
+    // в рывке и на буксире вертикаль ведёт не ядро: подброс пропал бы, а иммунитет или слот подъёма потратился бы
+    if (v.tow || (v.mage?.dash ?? null)) continue;
     if (v.id !== z.owner) {
       launchUnit(s, t, v.id, TO.coreLiftM, z.owner);
       continue;
