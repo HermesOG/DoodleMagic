@@ -411,6 +411,49 @@ describe("synth", () => {
     expect(() => audio.play("hitLight", null, 1)).not.toThrow();
   });
 
+  it("hitHeavy is limited to 4 a second too: an area hit on several targets plays one thud", () => {
+    const { audio, ctx } = setup();
+    audio.unlock();
+    for (const t of [0, 0, 0, 0.1, 0.25]) {
+      ctx().currentTime = t;
+      audio.play("hitHeavy", null, 1);
+    }
+    expect(ctx().sources().length).toBe(2 * RECIPES.hitHeavy.layers.length);
+  });
+
+  it("sends medium and large sounds to the reverb; a reverb that fails to build leaves the sound dry, not silent", () => {
+    FakeCtx.made = [];
+    class WithReverb extends FakeCtx {
+      createConvolver() {
+        return this.add(Object.assign(new FakeNode("convolver"), { normalize: false, buffer: null as unknown }));
+      }
+    }
+    const wet = createAudio({ contextClass: WithReverb as unknown as typeof AudioContext, rand: () => 0.5 });
+    wet.unlock();
+    const c = FakeCtx.made[0]!;
+    const [conv] = c.of("convolver");
+    const master = c.of("gain").find((g) => g.outs[0]?.kind === "compressor");
+    expect([conv!.outs[0] === master, c.buffers.map((b) => b.length)]).toEqual([true, [48000, Math.round(48000 * 1.4)]]);
+    const sends = () => c.of("gain").filter((g) => g.outs.includes(conv!)).map((g) => (g.gain as FakeParam).value);
+    wet.play("hitLight", null, 1);
+    expect(sends()).toEqual([]);
+    wet.play("fireballBoom", null, 1);
+    wet.play("kill", null, 1);
+    expect(sends()).toEqual([0.2, 0.35]);
+
+    FakeCtx.made = [];
+    class BadReverb extends FakeCtx {
+      createConvolver(): never {
+        throw new Error("NotSupportedError");
+      }
+    }
+    const dry = createAudio({ contextClass: BadReverb as unknown as typeof AudioContext, rand: () => 0.5 });
+    expect(() => dry.unlock()).not.toThrow();
+    expect(dry.stats().unlocked).toBe(true);
+    dry.play("fireballBoom", null, 1);
+    expect(FakeCtx.made[0]!.sources().length).toBe(RECIPES.fireballBoom.layers.length);
+  });
+
   it("never throws from unlock: a context whose nodes fail is closed and the game stays silent", () => {
     FakeCtx.made = [];
     class Failing extends FakeCtx {

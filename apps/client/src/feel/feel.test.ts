@@ -35,7 +35,7 @@ describe("effectsFor", () => {
 
   it("shakes me and pushes my camera ≤ 1.25° away from the source when I am hit, never for damage over time", () => {
     const got = fx(hitOn(1, { ability: "fireball", amount: 50, dir: V(0, 0, 1), knock: { distM: 3, upM: 1.2 } }));
-    expect(got).toContainEqual(expect.objectContaining({ kind: "trauma", amount: 0.5, profile: "fire" }));
+    expect(got).toContainEqual(expect.objectContaining({ kind: "trauma", amount: 0.35, profile: "fire" })); // ещё 0,15 даёт взрыв рядом
     const kick = got.find((e) => e.kind === "kick");
     expect(kick?.kind === "kick" && Math.abs(kick.pitchDeg) + Math.abs(kick.yawDeg) <= 1.25 + 1e-12).toBe(true);
     expect([got.some((e) => e.kind === "indicator"), got.some((e) => e.kind === "hitmarker")]).toEqual([true, false]);

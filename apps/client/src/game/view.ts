@@ -336,9 +336,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     const was = unitById(from, driver.localId) ?? me;
     const p = lerpVec(was.move.body.pos, me.move.body.pos, alpha);
     // ступени лестницы камера догоняет за ≈ 0,07 с, а не прыгает на 0,4 м за тик (M1)
-    const smooth = stepEyeSmooth(eyeSmooth, p.y + EYE_HEIGHT, was.move.onGround && me.move.onGround, dtS);
-    eyeSmooth = smooth.state;
-    const eye = { x: p.x, y: smooth.y, z: p.z };
+    const eye = { x: p.x, y: stepEyeSmooth(eyeSmooth, p.y + EYE_HEIGHT, was.move.onGround && me.move.onGround, dtS), z: p.z };
     // в ров (пол на −1 м) маг тоже спрыгивает ниже FALL_HOLD_Y, но под ним пол: это не падение
     const falling = p.y < FALL_HOLD_Y && !me.move.onGround && groundBelow(ctx.world, p, FALL_PROBE_M) === null;
     fallCam = stepFallCamera(fallCam, { eye, target: { x: p.x, y: p.y + EYE_HEIGHT / 2, z: p.z }, falling, look, dt: dtS });
@@ -367,6 +365,9 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   /** Время текущего кадра для звуков движения: обработчик создаётся один раз, а не каждый кадр. */
   let frameNowS = 0;
   const emitMove = (e: Effect): void => route(e, frameNowS);
+  /** Тик для звуков движения: один обработчик на все тики, а не замыкание на каждый. */
+  let moveState: MatchState = cur;
+  const trackTick = (): void => trackMovement(moves, moveState, driver.localId, emitMove);
   const step = (now: number): void => {
     // метка rAF бывает чуть раньше performance.now(), снятого после прогрева: шаг не должен быть отрицательным
     const rawMs = Math.max(0, now - last);
@@ -409,7 +410,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
         landTick = k;
       }
       for (const ev of t.events) onEvent(ev, t.state);
-      guard.run("effects", () => trackMovement(moves, t.state, localId, emitMove), undefined);
+      moveState = t.state;
+      guard.run("effects", trackTick, undefined);
     }
     for (const ev of frame.late) onEvent(ev, cur);
     // руки после возрождения — в покое, а не с отставанием и креном от падения

@@ -24,11 +24,11 @@ export function createEyeSmooth(): EyeSmooth {
 
 /**
  * Шаг сглаживания ступеней: rawY — высота глаз по симуляции в этом кадре, grounded — маг на полу в обоих тиках
- * кадра. Возвращает сглаженную высоту. Прыжок, падение и возрождение (в воздухе или скачок больше 0,55 м)
- * камера показывает как есть.
+ * кадра. Меняет s на месте (каждый кадр — без новых объектов) и возвращает сглаженную высоту. Прыжок, падение
+ * и возрождение (в воздухе или скачок больше 0,55 м) камера показывает как есть.
  */
-export function stepEyeSmooth(s: EyeSmooth, rawY: number, grounded: boolean, dt: number): { state: EyeSmooth; y: number } {
-  if (!Number.isFinite(rawY)) return { state: s, y: rawY };
+export function stepEyeSmooth(s: EyeSmooth, rawY: number, grounded: boolean, dt: number): number {
+  if (!Number.isFinite(rawY)) return rawY;
   const h = Number.isFinite(dt) && dt > 0 ? dt : 0;
   const d = Number.isFinite(s.lastY) ? rawY - s.lastY : 0;
   let off = s.off;
@@ -39,7 +39,9 @@ export function stepEyeSmooth(s: EyeSmooth, rawY: number, grounded: boolean, dt:
   else if (off < -EYE_STEP.maxM) off = -EYE_STEP.maxM;
   // `+ 0` убирает −0
   off = Math.abs(off) < 1e-6 ? 0 : off + 0;
-  return { state: { lastY: rawY, off }, y: rawY + off };
+  s.lastY = rawY;
+  s.off = off;
+  return rawY + off;
 }
 
 /**
@@ -79,19 +81,30 @@ interface Walker {
 export interface MoveTracker {
   walkers: Map<UnitId, Walker>;
   gen: number;
+  /** Последний учтённый тик: тик не новее (перемотка сети после обрезки хоста) второй раз не звучит. */
+  lastTick: number;
 }
 
 export function createMoveTracker(): MoveTracker {
-  return { walkers: new Map(), gen: 0 };
+  return { walkers: new Map(), gen: 0, lastTick: Number.NEGATIVE_INFINITY };
+}
+
+/** Ушедших из состояния магов забываем; функция одна на все тики — без замыкания на каждый вызов. */
+function forgetGone(this: MoveTracker, w: Walker, id: UnitId): void {
+  if (w.seen !== this.gen) this.walkers.delete(id);
 }
 
 /**
  * Тик состояния → звуки движения всех живых магов. emit получает эффекты (sound, burst); объекты эффектов
- * рождаются только на шагах, прыжках и приземлениях. Ушедшие из состояния маги забываются.
+ * рождаются только на шагах, прыжках и приземлениях. Ушедшие из состояния маги забываются. Тик не новее уже
+ * учтённого пропускается: перемотка не повторяет шаги и приземления.
  */
 export function trackMovement(t: MoveTracker, state: MatchState, localId: UnitId, emit: (e: Effect) => void): void {
+  if (state.tick <= t.lastTick) return;
+  t.lastTick = state.tick;
   const gen = ++t.gen;
-  for (const u of state.units) {
+  for (let i = 0; i < state.units.length; i++) {
+    const u = state.units[i]!;
     if (!u.mage || !u.alive) continue;
     const b = u.move.body;
     const ground = u.move.onGround;
@@ -133,5 +146,5 @@ export function trackMovement(t: MoveTracker, state: MatchState, localId: UnitId
     w.ground = ground;
     w.seen = gen;
   }
-  for (const [id, w] of t.walkers) if (w.seen !== gen) t.walkers.delete(id);
+  t.walkers.forEach(forgetGone, t);
 }

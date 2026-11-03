@@ -1,6 +1,7 @@
 import {
   ABILITY_OF,
   EARTH,
+  NOBODY,
   forwardXZ,
   rightXZ,
   unitById,
@@ -53,6 +54,12 @@ export function hitTier(ev: Pick<Extract<MatchEvent, { type: "hit" }>, "ability"
 const tempo = (a: DamageSource): number => (a === ABILITY_OF.fire.primary ? 0.5 : 1);
 /** Пауза у стреляющего: у кулака — 0 (5 раз/с, иначе руки стояли бы), у камня — 30 мс, дальше — по ступени. */
 const hitstopMs = (tier: FeelTier, a: DamageSource): number => (a === ABILITY_OF.fire.primary && tier === "small" ? 0 : TIERS[tier].hitstopMs);
+/**
+ * trauma, которую жертва уже получила от события области того же удара (зона столба и землетрясения, взрыв шара):
+ * попадание добавляет только остаток до своей ступени, а не складывается с ней. Итого столб 0,5, шар 0,5,
+ * землетрясение 0,65 (round3/01, 2.1).
+ */
+export const AREA_TRAUMA = { stonePillar: 0.35, earthquake: 0.65, fireball: 0.15 } as const;
 /** Своё попадание и взрыв слышно не тише этого и издалека (round3/01, H3): на 20 м было 25 %. */
 const OWN_HIT_FLOOR = 0.6;
 /** Толчок от 2 м по полу — это ≥ 4 м/с (v₀ ≈ 2·distM, Р3): жертве FOV-удар и «вжух» (round3/01, K3). */
@@ -155,11 +162,14 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
     }
   }
   if (ev.target === view.localId && ev.source !== view.localId && !overTime(ev)) {
-    // жертве — ступень самого удара, а не «крупная» за убийство: экран смерти и так всё скажет
+    // жертве — ступень самого удара, а не «крупная» за убийство: экран смерти и так всё скажет. Часть trauma уже
+    // дало событие области (зона, взрыв) — здесь только остаток
     const own: FeelTier = lmb ? "small" : "medium";
     const k = tempo(ev.ability);
+    const area = ev.ability in AREA_TRAUMA ? AREA_TRAUMA[ev.ability as keyof typeof AREA_TRAUMA] : 0;
+    const shake = Math.max(0, TIERS[own].trauma * k - area);
+    if (shake > 0) out.push({ kind: "trauma", amount: shake, profile: elementOf(ev.ability) === "earth" ? "earth" : "fire" });
     out.push(
-      { kind: "trauma", amount: TIERS[own].trauma * k, profile: elementOf(ev.ability) === "earth" ? "earth" : "fire" },
       hitKick(ev, me?.move.yaw ?? 0, TIERS[own].kickDeg * k),
       { kind: "indicator", from: { x: ev.pos.x - ev.dir.x, y: ev.pos.y - ev.dir.y, z: ev.pos.z - ev.dir.z }, amount: ev.amount },
       sound(HIT_SOUND[ev.ability]),
@@ -182,7 +192,11 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
     return [];
   }
   if (ev.kind === "pillar")
-    return [burst("pillarBurst", at), sound("pillarStrike", at), ...(near(4) ? [{ kind: "trauma", amount: 0.35, profile: "earth" } as const] : [])];
+    return [
+      burst("pillarBurst", at),
+      sound("pillarStrike", at),
+      ...(near(4) ? [{ kind: "trauma", amount: AREA_TRAUMA.stonePillar, profile: "earth" } as const] : []),
+    ];
   if (ev.kind === "quake") {
     // всем на земле в радиусе; на галерее над ударом и в воздухе не трясёт (Р8)
     const r = z.shape.type === "disc" ? z.shape.radius : EARTH.earthquake.radiusM;
@@ -193,7 +207,7 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
     const out: Effect[] = [burst("quakeRing", at, UP, 1), sound("quakeStrike", at)];
     // свой удар (A2): ладони бьют в землю — камера вниз, trauma 0,6 по профилю Земли; чужой — жертве 0,65
     if (ev.owner === view.localId) out.push(GROUND_SLAM, { kind: "trauma", amount: 0.6, profile: "earth" });
-    else if (inside) out.push({ kind: "trauma", amount: 0.65, profile: "earth" });
+    else if (inside) out.push({ kind: "trauma", amount: AREA_TRAUMA.earthquake, profile: "earth" });
     return out;
   }
   if (ev.kind === "fireWall") return [burst("fireWallIgnite", at), sound("fireWallIgnite", at), ...(near(5) ? [{ kind: "trauma", amount: 0.15 } as const] : [])];
@@ -245,13 +259,14 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
       // первая фаза попадания: снаряд врезался — видно и слышно в мире, хитмаркер ждёт события hit
       const stone = ev.ability === "stoneShot";
       const preset: BurstPreset = ev.terrain >= 0 ? "terrainChips" : stone ? "stoneImpact" : "fistImpact";
-      const hit = ownSound(stone ? "stoneImpact" : "fistHit", ev.pos, mine(ev.owner));
+      // пол громкости — только своему попаданию в цель, промах звучит по расстоянию
+      const hit = ownSound(stone ? "stoneImpact" : "fistHit", ev.pos, mine(ev.owner) && ev.target !== NOBODY);
       // Земле вместо света — белая бумажная вспышка (H3)
       return stone && ev.terrain < 0 ? [burst(preset, ev.pos, ev.normal), burst("paperFlash", ev.pos), hit] : [burst(preset, ev.pos, ev.normal), hit];
     }
     case "explosion": {
       const out: Effect[] = [burst("fireballBoom", ev.pos, UP, ev.radius / 3), ownSound("fireballBoom", ev.pos, mine(ev.owner))];
-      if (me?.alive && dist(centre(me), ev.pos) < 5) out.push({ kind: "trauma", amount: 0.15 });
+      if (me?.alive && dist(centre(me), ev.pos) < 5) out.push({ kind: "trauma", amount: AREA_TRAUMA.fireball });
       return out;
     }
     case "hit":

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ABILITY_IDS, createMageUnit, createMatchState, type AbilityId, type MatchEvent } from "@doodlemagic/sim";
+import { ABILITY_IDS, NOBODY, createMageUnit, createMatchState, type AbilityId, type MatchEvent } from "@doodlemagic/sim";
 import type { Effect } from "./effects";
-import { effectsFor, hitTier } from "./eventMap";
+import { AREA_TRAUMA, effectsFor, hitTier } from "./eventMap";
 
 const V = (x = 0, y = 0, z = 0) => ({ x, y, z });
 const ME = 1;
@@ -69,12 +69,13 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     for (const es of [small, medium, kill]) expect(pick(es, "trauma")).toEqual([]);
   });
 
-  it("shakes the victim by tier and element: a fist 0.1 Fire, a stone 0.2 Earth, a fireball 0.5 Fire with FOV and a whoosh", () => {
+  it("shakes the victim by tier and element: a fist 0.1 Fire, a stone 0.2 Earth, a fireball 0.5 Fire in all with FOV and a whoosh", () => {
     const onMe = (over: Partial<Hit>) => fx(hit({ source: OTHER, target: ME, ...over }));
     expect(pick(onMe({}), "trauma")).toEqual([{ kind: "trauma", amount: 0.1, profile: "fire" }]);
     expect(pick(onMe({ ability: "stoneShot", amount: 30 }), "trauma")).toEqual([{ kind: "trauma", amount: 0.2, profile: "earth" }]);
     const ball = onMe({ ability: "fireball", amount: 50, knock: { distM: 3, upM: 1.2 } });
-    expect(pick(ball, "trauma")).toEqual([{ kind: "trauma", amount: 0.5, profile: "fire" }]);
+    // 0,15 шару дал взрыв рядом — попадание добавляет остаток до 0,5
+    expect(pick(ball, "trauma")).toEqual([{ kind: "trauma", amount: 0.5 - AREA_TRAUMA.fireball, profile: "fire" }]);
     expect(pick(ball, "fov")).toEqual([{ kind: "fov", deg: 3 }]);
     expect(pick(ball, "sound").map((e) => e.id)).toEqual(["fireballBoom", "knockWhoosh"]);
     expect(pick(onMe({}), "sound").map((e) => e.id)).toEqual(["fistHit"]);
@@ -105,5 +106,22 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     expect(pick(theirs, "sound")).toEqual([{ kind: "sound", id: "fistHit", pos: V(0, 1, -2), gain: 1 }]);
     const boom = fx({ type: "explosion", ability: "fireball", owner: ME, pos: V(0, 1, -20), radius: 3 });
     expect(pick(boom, "sound")[0]?.floor).toBe(0.6);
+    // промах (цели нет) звучит по расстоянию, без пола
+    const miss = fx({ type: "impact", ability: "stoneShot", owner: ME, pos: V(0, 1, -20), normal: V(0, 0, 1), target: NOBODY, terrain: -1 });
+    expect(pick(miss, "sound")).toEqual([{ kind: "sound", id: "stoneImpact", pos: V(0, 1, -20), gain: 1 }]);
+    const wall = fx({ type: "impact", ability: "fireFists", owner: ME, pos: V(0, 1, -20), normal: V(0, 0, 1), target: NOBODY, terrain: 4 });
+    expect(pick(wall, "sound")[0]?.floor).toBeUndefined();
+  });
+
+  it("does not count the victim's shake twice: area + hit trauma add up to fireball 0.5, pillar 0.5, quake 0.65", () => {
+    const onMe = (ability: "fireball" | "stonePillar" | "earthquake", amount: number) =>
+      pick(fx({ type: "hit", source: OTHER, target: ME, ability, amount, pos: V(0, 1, -1), dir: V(0, 0, 1), knock: { distM: 0.5, upM: 0 }, airborne: false, dot: false, killed: false }), "trauma")
+        .reduce((a, e) => a + e.amount, 0);
+    const near = pick(fx({ type: "explosion", ability: "fireball", owner: OTHER, pos: V(0, 1, -1), radius: 3 }), "trauma").reduce((a, e) => a + e.amount, 0);
+    expect(near).toBe(AREA_TRAUMA.fireball);
+    expect(near + onMe("fireball", 50)).toBeCloseTo(0.5);
+    expect(AREA_TRAUMA.stonePillar + onMe("stonePillar", 30)).toBeCloseTo(0.5);
+    expect(AREA_TRAUMA.earthquake + onMe("earthquake", 40)).toBeCloseTo(0.65);
+    expect(onMe("earthquake", 40)).toBe(0);
   });
 });

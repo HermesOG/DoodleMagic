@@ -9,6 +9,11 @@ export const MAX_VOICES = 24;
 /** Лёгкое подтверждение попадания (hitLight) не чаще 4 раз в секунду: кулаки бьют 5 раз в секунду, а тик не должен трещать. */
 export const HIT_TICK_PER_S = 4;
 /**
+ * Тяжёлое подтверждение (hitHeavy) — тоже не чаще 4 раз в секунду: удар по области задевает сразу несколько целей,
+ * и каждое попадание иначе заняло бы свой голос.
+ */
+export const HIT_HEAVY_PER_S = 4;
+/**
  * Общий реверб (round3/01, A4): один ConvolverNode на мастере с процедурным импульсом 1,4 с — шум с экспонентой
  * до −60 дБ, темнеющий к хвосту; первые 12 мс тишина (предзадержка). Посыл — у рецепта, по ступени отклика.
  */
@@ -265,6 +270,7 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
   const listener = { pos: { x: 0, y: 0, z: 0 }, yaw: 0 };
   const voices = createVoiceLimiter(MAX_VOICES);
   const tickOk = createRateLimiter(HIT_TICK_PER_S);
+  const heavyOk = createRateLimiter(HIT_HEAVY_PER_S);
 
   const applyMaster = () => {
     if (ctx && master) master.gain.setTargetAtTime(muted ? 0 : volume, ctx.currentTime, VOLUME_TC_S);
@@ -310,16 +316,9 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
         m.connect(comp);
         kit = createVoiceKit(c, rand);
         master = m;
-        if (typeof c.createConvolver === "function") {
-          const conv = c.createConvolver();
-          conv.normalize = true;
-          conv.buffer = reverbImpulse(c, rand);
-          conv.connect(m);
-          reverbIn = conv;
-        }
       } catch {
         kit = null;
-        reverbIn = null;
+        master = null;
         contextClass = null; // узлы не собрались: живём без звука
         try {
           c.close().catch(() => {});
@@ -327,6 +326,24 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
           // уже закрыт
         }
         return;
+      }
+      // реверб — отдельно: без него звук сухой, но не пропадает
+      if (typeof c.createConvolver === "function") {
+        let conv: ConvolverNode | null = null;
+        try {
+          conv = c.createConvolver();
+          conv.normalize = true;
+          conv.buffer = reverbImpulse(c, rand);
+          conv.connect(master);
+          reverbIn = conv;
+        } catch {
+          reverbIn = null;
+          try {
+            conv?.disconnect();
+          } catch {
+            // нечего отключать
+          }
+        }
       }
       ctx = c;
       wake(c);
@@ -346,6 +363,7 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
       try {
         const now = ctx.currentTime;
         if (id === "hitLight" && !tickOk(now)) return;
+        if (id === "hitHeavy" && !heavyOk(now)) return;
         const sp = spatial(listener, pos);
         const near = floor !== undefined && Number.isFinite(floor) ? Math.max(sp.gain, Math.min(1, floor)) : sp.gain;
         const level = Math.min(gain, MAX_EVENT_GAIN) * near;
