@@ -55,7 +55,10 @@ describe("fx pure parts", () => {
 
   it("raises terrain out of the ground and runs telegraphs from cast to arm", () => {
     const t = { id: 1001, owner: 1, kind: "wall", box: box(-2, 0, -2.3, 2, 2.5, -1.7), bornTick: 100, solidTick: 112, endTick: 460, growTicks: 18, solid: false, hp: 250, maxHp: 250 } as Terrain;
-    expect([terrainVisualBox(t, 100).max.y, terrainVisualBox(t, 109).max.y > 1, terrainVisualBox(t, 118).max.y, terrainVisualBox(t, 459).max.y < 0.5]).toEqual([0, true, 2.5, true]);
+    expect([terrainVisualBox(t, 100).max.y, terrainVisualBox(t, 109).max.y > 1, terrainVisualBox(t, 123).max.y, terrainVisualBox(t, 459).max.y < 0.5]).toEqual([0, true, 2.5, true]);
+    // перелёт 8 % в конце роста, сел за 80 мс (≈ 5 тиков); коллизия — прежний бокс
+    expect(terrainVisualBox(t, 118).max.y).toBeCloseTo(2.7, 6);
+    expect(terrainVisualBox(t, 120.4).max.y).toBeCloseTo(2.6, 6);
     const wall = { id: 1, owner: 1, kind: "fireWall", ability: "fireWall", shape: { type: "box", box: box(-5, 0, -10.3, 5, 2.5, -9.7) }, bornTick: 100, armTick: 124, endTick: 424, rehit: [] } as Zone;
     expect(zoneDecal(wall, 100)).toMatchObject({ stage: "telegraph", progress: 0, shape: "rect", style: "sparks" });
     expect([zoneDecal(wall, 112)!.progress, zoneDecal(wall, 124)!.stage]).toEqual([0.5, "active"]);

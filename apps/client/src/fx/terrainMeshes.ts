@@ -1,5 +1,5 @@
 import { BoxGeometry, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Matrix4, PlaneGeometry, Quaternion, Vector3, type ShaderMaterial } from "three";
-import type { AABB, Terrain } from "@doodlemagic/sim";
+import { TICK_HZ, type AABB, type Terrain } from "@doodlemagic/sim";
 import { createInkMaterial } from "../render/gbuffer";
 import { INK } from "../render/palette";
 import { FX_ORDER, createFxMaterial, type FxGBuffer, type TimeUniform } from "./fxShader";
@@ -7,6 +7,9 @@ import { FX_COLOR } from "./presets";
 
 /** В последние столько тиков рельеф уходит обратно в землю. */
 export const TERRAIN_SINK_TICKS = 15;
+/** Столб и стена перелетают по высоте на 8 % и садятся за 80 мс (round3/01, A2): только вид, коллизия прежняя. */
+export const TERRAIN_OVERSHOOT = 0.08;
+const SETTLE_TICKS = 0.08 * TICK_HZ;
 
 /**
  * Видимый бокс рельефа на тике nowTick (дробный — между тиками): растёт из земли за growTicks с ease-out,
@@ -16,11 +19,13 @@ export function terrainVisualBox(t: Terrain, nowTick: number): AABB {
   const h = t.box.max.y - t.box.min.y;
   const age = nowTick - t.bornTick;
   const g = t.growTicks > 0 ? Math.min(1, Math.max(0, age / t.growTicks)) : age >= 0 ? 1 : 0;
-  const grow = 1 - (1 - g) ** 3;
+  // растёт с ease-out до 108 %, потом садится на 100 % за SETTLE_TICKS
+  const settle = Math.min(1, Math.max(0, (age - t.growTicks) / SETTLE_TICKS));
+  const grow = (1 - (1 - g) ** 3) * (1 + TERRAIN_OVERSHOOT * (1 - settle * settle * (3 - 2 * settle)));
   const left = Math.min(1, Math.max(0, (t.endTick - nowTick) / TERRAIN_SINK_TICKS));
   const sink = left * left * (3 - 2 * left);
   const k = grow * sink;
-  return { min: { ...t.box.min }, max: { x: t.box.max.x, y: k >= 1 ? t.box.max.y : t.box.min.y + h * k, z: t.box.max.z } };
+  return { min: { ...t.box.min }, max: { x: t.box.max.x, y: k === 1 ? t.box.max.y : t.box.min.y + h * k, z: t.box.max.z } };
 }
 
 /** Рельеф в G-буфер: экземпляры единичного бокса чернилами terrain, один draw call. */
