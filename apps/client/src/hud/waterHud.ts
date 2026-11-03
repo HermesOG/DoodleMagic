@@ -39,18 +39,29 @@ export const createWaterWidget: KitWidgetFactory = (kitRoot): KitWidget => {
   track.append(fill);
   box.append(label, track);
   kitRoot.prepend(box);
+  // DOM трогаем только при смене: надпись, её прозрачность и полоска (как у виджета Воздуха)
+  const NO_ANSWER = answerLabel(0);
   let shown = "";
+  let hidden = true;
+  let left = -1;
   return {
     update(me, now) {
       const s = wardWidget(me, now);
-      box.hidden = s === null;
+      if ((s === null) !== hidden) {
+        hidden = s === null;
+        box.hidden = hidden;
+      }
       if (!s) return;
       if (s.text !== shown) {
         label.textContent = s.text;
+        label.style.opacity = s.text === NO_ANSWER ? "0.6" : "1";
         shown = s.text;
       }
-      label.style.opacity = s.text === answerLabel(0) ? "0.6" : "1";
-      fill.style.transform = `scaleX(${s.left01.toFixed(3)})`;
+      const q = Math.round(s.left01 * 1000);
+      if (q !== left) {
+        left = q;
+        fill.style.transform = `scaleX(${(q / 1000).toFixed(3)})`;
+      }
     },
     dispose() {
       box.remove();

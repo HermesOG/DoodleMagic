@@ -33,6 +33,12 @@ export type Sheet =
   | { type: 1; centre: Vec3; normal: Vec3; radius: number; intensity: number; seed: number; bright: number; ringOnly: boolean }
   | { type: 2; centre: Vec3; radius: number; intensity: number; seed: number; spread: number; enemy: boolean };
 
+/** Струи частиц с накоплением: ключ — id (канат, зона, юнит) × 4 + вид; для любых целых id ключи не совпадают. */
+const STREAM = { tow: 0, spring: 1, steam: 2, wet: 3 } as const;
+export const streamKey = (kind: number, id: number): number => id * 4 + kind;
+/** Жгутов в полёте нет — общий пустой список, без нового массива в кадре. */
+const NO_GRABS: readonly { pr: Projectile; pos: Vec3 }[] = [];
+
 const lerpV = (a: Vec3, b: Vec3, t: number): Vec3 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t });
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -278,8 +284,15 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
   mesh.visible = false;
 
   const arcs: Arc[] = [];
-  const acc = new Map<string, number>();
+  /** Дробные остатки частот частиц по ключу streamKey; live — ключи этого кадра. */
+  const acc = new Map<number, number>();
+  const live = new Set<number>();
   const camDir = new Vector3();
+  // покадровые контейнеры — одни на эффектник: кадр их очищает, а не создаёт
+  const out: ParticleSpec[] = [];
+  const byId = new Map<UnitId, { pos: Vec3; u: Unit }>();
+  const prevGrabs: Projectile[] = [];
+  const curGrabs: Projectile[] = [];
   let n = 0;
 
   const push = (s: Sheet): void => {
@@ -302,8 +315,8 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
   const strip = (pts: readonly Vec3[], width: number, intensity: number, seed: number): void => {
     for (let i = 0; i + 1 < pts.length; i++) push({ type: 0, a: pts[i]!, b: pts[i + 1]!, width, intensity, seed: seed + i * 0.13 });
   };
-  /** Сколько частиц выпустить за кадр при частоте rate, с накоплением по ключу. */
-  const due = (key: string, rate: number, dt: number, live: Set<string>): number => {
+  /** Сколько частиц выпустить за кадр при частоте rate, с накоплением по ключу (числовому: без строк в кадре). */
+  const due = (key: number, rate: number, dt: number): number => {
     live.add(key);
     const v = (acc.get(key) ?? Math.random()) + rate * dt;
     const k = Math.floor(v);
@@ -322,11 +335,11 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
     },
     sync(f: ElementVfxFrame) {
       n = 0;
-      const out: ParticleSpec[] = [];
-      const live = new Set<string>();
+      out.length = 0;
+      live.clear();
+      byId.clear();
       const rng = Math.random;
       const tick = f.tick;
-      const byId = new Map<UnitId, { pos: Vec3; u: Unit }>();
       for (const it of f.units) byId.set(it.id, it);
       const poseOf = (id: UnitId) => f.mages.find((m) => m.id === id);
       /** Рука юнита в мире: свой — правая ладонь, чужой — правая рука фигуры, манекен — грудь. */
@@ -338,16 +351,21 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
         return it ? { x: it.pos.x, y: it.pos.y + 1.2, z: it.pos.z } : null;
       };
 
-      // канаты: жгут в полёте и натянутый буксир
-      const projectiles = lerpById<Projectile>(f.prev.projectiles, f.cur.projectiles, f.alpha)
-        .filter((pr) => pr.ability === "waterGrab")
-        .map((pr) => {
-          // свой жгут первые 0,15 с выходит из ладони, как его ядро (vfx.ts)
-          const k = pr.owner === f.localId ? muzzleBlend(Math.max(0, (tick - pr.bornTick) / TICK_HZ)) : 0;
-          if (k <= 0) return { pr, pos: pr.pos };
-          const pw = f.palmWorld("right");
-          return { pr, pos: { x: pr.pos.x + (pw.x - f.eye.x) * k, y: pr.pos.y + (pw.y - f.eye.y) * k, z: pr.pos.z + (pw.z - f.eye.z) * k } };
-        });
+      // канаты: жгут в полёте и натянутый буксир; между тиками ведём только жгуты — прочие снаряды не трогаем
+      prevGrabs.length = 0;
+      curGrabs.length = 0;
+      for (const pr of f.prev.projectiles) if (pr.ability === "waterGrab") prevGrabs.push(pr);
+      for (const pr of f.cur.projectiles) if (pr.ability === "waterGrab") curGrabs.push(pr);
+      const projectiles =
+        curGrabs.length === 0
+          ? NO_GRABS
+          : lerpById<Projectile>(prevGrabs, curGrabs, f.alpha).map((pr) => {
+              // свой жгут первые 0,15 с выходит из ладони, как его ядро (vfx.ts)
+              const k = pr.owner === f.localId ? muzzleBlend(Math.max(0, (tick - pr.bornTick) / TICK_HZ)) : 0;
+              if (k <= 0) return { pr, pos: pr.pos };
+              const pw = f.palmWorld("right");
+              return { pr, pos: { x: pr.pos.x + (pw.x - f.eye.x) * k, y: pr.pos.y + (pw.y - f.eye.y) * k, z: pr.pos.z + (pw.z - f.eye.z) * k } };
+            });
       for (const r of waterRopes(projectiles, f.units, tick, hand)) {
         const len = dist(r.from, r.to);
         // в полёте канат вьётся и провисает, волна гаснет; натянутый — дрожит
@@ -355,7 +373,7 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
         const pts = ropePoints(r.from, r.to, ROPE_SEGMENTS, wave, f.nowS * (r.taut ? 40 : 18) + r.key, r.taut ? 0 : Math.min(0.25, len * 0.02));
         strip(pts, r.taut ? 0.05 : 0.04, 1, (r.key * 0.71) % 7);
         if (r.taut) {
-          for (let i = due(`tow${r.key}`, RATE.towSpray, f.dt, live); i > 0; i--) out.push(spawn(WATER_STREAM.spray, lerpV(r.from, r.to, rng()), UP, rng));
+          for (let i = due(streamKey(STREAM.tow, r.key), RATE.towSpray, f.dt); i > 0; i--) out.push(spawn(WATER_STREAM.spray, lerpV(r.from, r.to, rng()), UP, rng));
           f.glow({ pos: lerpV(r.from, r.to, 0.5), color: FX_COLOR.water, halo: 0, light: 2, intensity: 0.5, core: 0 }, 2);
         }
       }
@@ -410,14 +428,14 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
           push(pool);
           f.glow({ pos: { x: pool.centre.x, y: pool.centre.y + 0.4, z: pool.centre.z }, color: FX_COLOR.water, halo: 0, light: pool.radius + 1, intensity: 0.55 * pool.intensity, core: 0 }, 1);
           const r = pool.radius * pool.spread;
-          for (let i = due(`spring${z.id}`, RATE.bubbles, f.dt, live); i > 0; i--) {
+          for (let i = due(streamKey(STREAM.spring, z.id), RATE.bubbles, f.dt); i > 0; i--) {
             const phi = rng() * Math.PI * 2;
             const d = r * Math.sqrt(rng());
             out.push(spawn(WATER_STREAM.bubble, { x: pool.centre.x + Math.cos(phi) * d, y: pool.centre.y + 0.05, z: pool.centre.z + Math.sin(phi) * d }, UP, rng));
           }
         } else if (z.kind === "steam" && z.shape.type === "disc" && tick < z.endTick) {
           const c = z.shape.center;
-          for (let i = due(`steam${z.id}`, RATE.steam, f.dt, live); i > 0; i--) {
+          for (let i = due(streamKey(STREAM.steam, z.id), RATE.steam, f.dt); i > 0; i--) {
             const phi = rng() * Math.PI * 2;
             const d = z.shape.radius * Math.sqrt(rng());
             out.push(spawn(WATER_STREAM.mist, { x: c.x + Math.cos(phi) * d, y: c.y + rng() * 1.6, z: c.z + Math.sin(phi) * d }, UP, rng));
@@ -428,7 +446,7 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
       // Мокрые: капли с тела (свой — с ладоней), в том числе у манекенов
       for (const it of f.units) {
         if (it.u.status.wetUntil <= f.cur.tick) continue;
-        for (let i = due(`wet${it.id}`, RATE.drips, f.dt, live); i > 0; i--) {
+        for (let i = due(streamKey(STREAM.wet, it.id), RATE.drips, f.dt); i > 0; i--) {
           const p =
             it.id === f.localId
               ? f.palmWorld(rng() < 0.5 ? "left" : "right")

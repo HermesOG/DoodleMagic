@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NOBODY, createMageUnit, createMatchState, type MatchEvent, type MatchState, type Unit, type Zone } from "@doodlemagic/sim";
 import { SOUND_LABELS } from "../audio/audition";
 import { RECIPES, SOUND_ELEMENT, recipeLength } from "../audio/recipes";
 import { WATER_RECIPES, WATER_SOUND_LABELS } from "../audio/waterRecipes";
 import { WATER_BURSTS } from "../fx/presets.water";
 import { createGestures, startGesture, stepGestures } from "../hands/gestures";
-import { answerLabel, wardWidget } from "../hud/waterHud";
+import { answerLabel, createWaterWidget, wardWidget } from "../hud/waterHud";
 import type { Effect } from "./effects";
 import { ABSORB_TONE_AT, HEAL_CHIME_TICKS, SPRING_GRAIN_S, absorbSound, createWaterEffects, waterEffects, waterFrame } from "./waterFx";
 import { WATER_BURST_PRESETS, WATER_SOUND_IDS } from "./waterIds";
@@ -248,5 +248,40 @@ describe("Water's HUD widget: «Ответ N» while the disc stands", () => {
     expect(wardWidget(me, 70)).toBeNull();
     me.alive = false;
     expect(wardWidget(me, 20)).toBeNull();
+  });
+
+  it("touches the DOM only when something changes", () => {
+    // DOM в тестах нет: элементы-заглушки пишут в журнал каждую запись в style, hidden и textContent
+    const writes: string[] = [];
+    const el = () => {
+      const style = new Proxy({} as Record<string, string>, { set: (t, k, v) => ((t[k as string] = v), k === "cssText" || writes.push(String(k)), true) });
+      const node = { style, append() {}, prepend() {}, remove() {}, className: "" };
+      let hidden = false;
+      let text = "";
+      Object.defineProperty(node, "hidden", { get: () => hidden, set: (v: boolean) => ((hidden = v), writes.push("hidden")) });
+      Object.defineProperty(node, "textContent", { get: () => text, set: (v: string) => ((text = v), writes.push("text")) });
+      return node;
+    };
+    vi.stubGlobal("document", { createElement: el });
+    try {
+      const w = createWaterWidget(el() as unknown as HTMLElement);
+      writes.length = 0;
+      const me: Unit = structuredClone(view.state.units[0]!);
+      me.mage!.ward = { endTick: 70, absorbed: 0 };
+      w.update(me, 10, 0);
+      expect(writes.sort()).toEqual(["hidden", "opacity", "text", "transform"]);
+      writes.length = 0;
+      w.update(me, 10, 0.01);
+      expect(writes).toEqual([]);
+      w.update(me, 11, 0.02);
+      expect(writes).toEqual(["transform"]);
+      writes.length = 0;
+      me.mage!.ward.absorbed = 25;
+      w.update(me, 11, 0.03);
+      expect(writes.sort()).toEqual(["opacity", "text"]);
+      w.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

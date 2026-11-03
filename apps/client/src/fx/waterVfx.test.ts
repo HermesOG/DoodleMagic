@@ -4,7 +4,7 @@ import { NOBODY, createMageUnit, createMatchState, type MatchState, type Project
 import type { ElementVfxFrame } from "./elementVfx";
 import type { FxGBuffer } from "./fxShader";
 import type { ParticleSpec } from "./particleKit";
-import { ARC_SEGMENTS, RATE, ROPE_SEGMENTS, arcPoints, createWaterVfx, ropePoints, springPool, wardBrightness, wardShown, waterRopes } from "./waterVfx";
+import { ARC_SEGMENTS, RATE, ROPE_SEGMENTS, arcPoints, createWaterVfx, ropePoints, springPool, streamKey, wardBrightness, wardShown, waterRopes } from "./waterVfx";
 
 const V = (x = 0, y = 0, z = 0): Vec3 => ({ x, y, z });
 const ME = 1;
@@ -85,6 +85,12 @@ describe("ward disc and spring pool", () => {
     expect(springPool(z, 475, ME)!.intensity).toBeLessThan(1);
     expect(springPool(z, 484, ME)).toBeNull();
     expect([springPool(z, 300, FOE)!.enemy, springPool(z, 300, NOBODY)!.enemy]).toEqual([false, false]);
+  });
+
+  it("particle stream keys are numbers, distinct for every kind and id (tow keys are negative)", () => {
+    const keys = new Set<number>();
+    for (let id = -20; id <= 20; id++) for (let kind = 0; kind < 4; kind++) keys.add(streamKey(kind, id));
+    expect(keys.size).toBe(41 * 4);
   });
 });
 
