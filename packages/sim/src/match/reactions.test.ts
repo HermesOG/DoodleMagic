@@ -460,6 +460,18 @@ describe("reaction «Песчаный смерч» (Earth on an armed tornado)",
     expect(early.s.zones.find((q) => q.kind === "sandTornado")?.owner).toBe(SAND_AIR);
   });
 
+  it("a stone wall standing in the cylinder (raised after the tornado) also sands it, owned by the Earth mage", () => {
+    const { s, log } = sandPlay((s, t) => {
+      tornadoAt(s, t);
+      s.terrain.push({
+        id: s.nextId++, owner: SAND_EARTH, kind: "wall", box: aabb(-4, 0, -3.25, -2, 2, -2.75),
+        bornTick: s.tick, solidTick: s.tick, endTick: s.tick + 600, growTicks: 0, solid: true, hp: 100, maxHp: 100,
+      });
+    });
+    expect(evs(log, "reaction")[0]!.e).toMatchObject({ kind: "sandTornado", owner: SAND_EARTH });
+    expect(s.terrain).toHaveLength(1); // стена не поглощается
+  });
+
   it("no reaction on a tornado still growing (telegraph) or with no Earth around", () => {
     expect(evs(sandPlay((s, t) => { tornadoAt(s, t, 5); stoneIn(s); }).log, "reaction")).toHaveLength(0);
     expect(evs(sandPlay((s, t) => tornadoAt(s, t), 3).log, "reaction")).toHaveLength(0);
