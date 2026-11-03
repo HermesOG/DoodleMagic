@@ -1,19 +1,164 @@
-import type { MatchEvent, Unit } from "@doodlemagic/sim";
-import type { Effect } from "./effects";
+import { NOBODY, forwardXZ, unitById, type AbilityId, type MatchEvent, type ProjectileKind, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
+import type { BurstPreset, Effect, SoundId } from "./effects";
 import type { FrameView } from "./elementFx";
 import type { EventView } from "./eventMap";
 
 /*
- * Ощущение Воды: события Воды → эффекты и покадровые зёрна (журчание Родника). Заглушка до задачи 6: ничего не
- * берёт — всё идёт по общей карте. Задача 6 правит только этот файл.
+ * Ощущение Воды (03-water, «Читается»): события Воды → эффекты и покадровые зёрна журчания Родника.
+ * Чистые функции, как общая карта: частицы, звук, камеру, руки и HUD исполняют результат сами.
+ * Попадание (hit), смерть и статусы остаются общей карте: хитмаркер, цифры и отклик жертвы там одни на все стихии.
  */
 
-/** Событие Воды → эффекты; null — не Воды (дальше общая карта). */
-export function waterEffects(_ev: MatchEvent, _view: EventView, _me: Unit | undefined): Effect[] | null {
-  return null;
+const UP: Vec3 = { x: 0, y: 1, z: 0 };
+const WATER_ABILITIES: readonly AbilityId[] = ["waterWhip", "waterGrab", "waterWard", "spring"];
+const isWater = (a: AbilityId): boolean => WATER_ABILITIES.includes(a);
+/** Своё попадание слышно не тише этого и издалека (как OWN_HIT_FLOOR общей карты, round3/01 H3). */
+const OWN_HIT_FLOOR = 0.6;
+/** Зерно журчания Родника: раз в 0,6 с, длина 0,5 с (Р15). */
+export const SPRING_GRAIN_S = 0.6;
+/** Впитанное, с которого звон впитывания идёт тоном выше: средний и высокий (Ответ 20…60). */
+export const ABSORB_TONE_AT = { mid: 25, high: 45 } as const;
+/** Огненные снаряды гаснут на диске с шипением (только вид). */
+const FIERY: readonly ProjectileKind[] = ["fireFists", "fireball"];
+
+const sound = (id: SoundId, pos: Vec3 | null = null, gain = 1): Effect => ({ kind: "sound", id, pos, gain });
+/** Своё — у уха, чужое — в точке мира. */
+const at = (id: SoundId, pos: Vec3, own: boolean, gain = 1): Effect => sound(id, own ? null : pos, gain);
+/** Попадание в мире; своё — не тише OWN_HIT_FLOOR и издалека. */
+const hitSound = (id: SoundId, pos: Vec3, own: boolean): Effect => (own ? { kind: "sound", id, pos, gain: 1, floor: OWN_HIT_FLOOR } : sound(id, pos));
+const burst = (preset: BurstPreset, pos: Vec3, dir: Vec3 = UP, scale = 1): Effect => ({ kind: "burst", preset, pos, dir, scale });
+const sub = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+const unitDir = (v: Vec3): Vec3 => {
+  const l = Math.hypot(v.x, v.y, v.z);
+  return l > 1e-6 ? { x: v.x / l, y: v.y / l, z: v.z / l } : UP;
+};
+/** Середина диска Отражения в мире: 0,9 м перед Водой по взгляду, на высоте груди (как его рисует waterVfx). */
+export function wardCentre(u: Unit): Vec3 {
+  const f = forwardXZ(u.move.yaw);
+  return { x: u.move.body.pos.x + f.x * 0.9, y: u.move.body.pos.y + 1.2, z: u.move.body.pos.z + f.z * 0.9 };
+}
+/** Звон впитывания по сумме впитанного: чем больше, тем выше. */
+export function absorbSound(total: number): SoundId {
+  return total >= ABSORB_TONE_AT.high ? "wardAbsorbHigh" : total >= ABSORB_TONE_AT.mid ? "wardAbsorbMid" : "wardAbsorb";
 }
 
-/** Раз в кадр: непрерывные звуки и частицы Воды. */
-export function waterFrame(_f: FrameView): Effect[] {
-  return [];
+/**
+ * Звук каста — у меня у уха, у чужого — там, где он кастует (как у всех стихий): хлыст — тихий «вжик» замаха (щелчок
+ * придёт с дугой), Хват — нарастающий «вшух», Отражение — «водяной колокол», Родник — разлив.
+ */
+const CAST_SOUND: Readonly<Record<"waterWhip" | "waterGrab" | "waterWard" | "spring", SoundId>> = {
+  waterWhip: "whipSwish", waterGrab: "grabWindup", waterWard: "wardUp", spring: "springSpread",
+};
+
+/** Мой каст Воды: жест, ладонь, звук, отдача. */
+function ownCast(a: keyof typeof CAST_SOUND): Effect[] {
+  const hand = a === "waterWhip" || a === "waterGrab" ? "right" : "both";
+  const out: Effect[] = [{ kind: "gesture", ability: a }, { kind: "palm", hand, element: "water", preset: "flash" }, sound(CAST_SOUND[a])];
+  // ЛКМ — 0,2° (малая ступень); Родник — ладони вниз, к луже; остальное — 0,6°
+  if (a === "spring") out.push({ kind: "kick", pitchDeg: -0.8, yawDeg: 0, rollDeg: 0, dropM: 0.02 });
+  else out.push({ kind: "kick", pitchDeg: a === "waterWhip" ? 0.2 : 0.6, yawDeg: 0, rollDeg: 0 });
+  return out;
+}
+
+/** Событие Воды → эффекты; null — не Воды (дальше общая карта). */
+export function waterEffects(ev: MatchEvent, view: EventView, _me: Unit | undefined): Effect[] | null {
+  const mine = (id: UnitId): boolean => id === view.localId;
+  switch (ev.type) {
+    case "cast": {
+      if (!isWater(ev.ability)) return null;
+      const a = ev.ability as keyof typeof CAST_SOUND;
+      // чужой каст: только звук в точке каста — без жестов, ладоней и толчка моей камеры
+      return mine(ev.unit) ? ownCast(a) : [sound(CAST_SOUND[a], ev.pos)];
+    }
+    case "release":
+      if (!isWater(ev.ability)) return null;
+      if (ev.ability === "waterGrab")
+        return mine(ev.unit) ? [sound("grabThrow"), { kind: "kick", pitchDeg: 0.8, yawDeg: 0, rollDeg: 0 }] : [sound("grabThrow", ev.pos)];
+      // у Отражения выпуск — это Ответ
+      if (ev.ability === "waterWard")
+        return mine(ev.unit)
+          ? [sound("answerThrow"), { kind: "kick", pitchDeg: 1, yawDeg: 0, rollDeg: 0 }, { kind: "fov", deg: 2 }]
+          : [sound("answerThrow", ev.pos)];
+      // хлыст: щелчок и дуга — по beam того же тика
+      return [];
+    case "beam": {
+      if (ev.ability !== "waterWhip") return null;
+      const own = mine(ev.unit);
+      // whipArc: pos — конец дуги, dir — вектор от конца к глазам кастующего (не единичный): по нему waterVfx
+      // находит руку, из которой рисовать дугу; общий пул нормирует dir и бросает капли к Воде
+      const out: Effect[] = [burst("whipArc", ev.to, sub(ev.from, ev.to)), at("whipCrack", ev.from, own)];
+      if (ev.target !== NOBODY) out.push(burst("whipSplash", ev.to, unitDir(sub(ev.from, ev.to))), hitSound("whipHit", ev.to, own));
+      return out;
+    }
+    case "impact": {
+      if (ev.ability !== "waterGrab" && ev.ability !== "waterWard") return null;
+      const grab = ev.ability === "waterGrab";
+      const hit = ev.target !== NOBODY;
+      return [
+        burst(grab ? "grabSplash" : "answerSplash", ev.pos, ev.normal, hit ? 1 : 0.6),
+        hitSound(grab ? "grabHit" : "answerHit", ev.pos, mine(ev.owner) && hit),
+      ];
+    }
+    case "absorb": {
+      const own = mine(ev.unit);
+      const out: Effect[] = [burst("wardAbsorb", ev.pos, UP, 0.8), at(absorbSound(ev.total), ev.pos, own)];
+      // огненное гаснет на воде с шипением — только вид, не реакция «Пар»
+      if (FIERY.includes(ev.kind)) out.push(burst("steamPuff", ev.pos, UP, 0.5), sound("steamHiss", ev.pos, 0.6));
+      return out;
+    }
+    case "ward": {
+      // колокол диска звучит кастом того же тика (CAST_SOUND)
+      if (ev.phase === "up") return [];
+      const u = unitById(view.state, ev.unit);
+      if (!u) return [];
+      const own = mine(ev.unit);
+      // диск обрушивается: чем больше впитал, тем больше воды
+      const c = wardCentre(u);
+      return [burst("wardBurst", c, UP, 0.6 + Math.min(60, ev.absorbed) / 60), at("wardDown", c, own)];
+    }
+    case "tow":
+      if (ev.phase === "start") {
+        // тащат меня или тащу я — у уха; иначе — у цели
+        const ear = mine(ev.target) || mine(ev.source);
+        return [at("towPull", ev.pos, ear, mine(ev.source) ? 0.8 : 1)];
+      }
+      return [burst("grabSplash", ev.pos, UP, 0.5)];
+    case "heal":
+      // своё лечение — искры сходятся к ладоням и мягкий звон; чужое — искры у тела
+      if (mine(ev.target)) return [{ kind: "palm", hand: "both", element: "water", preset: "charge" }, sound("heal", null, 0.45)];
+      return [burst("healMotes", ev.pos, UP, 0.6)];
+    case "zone": {
+      if (ev.kind === "steam") return [];
+      if (ev.kind !== "spring") return null;
+      if (ev.phase !== "telegraph") return [];
+      const z = view.state.zones.find((q) => q.id === ev.zone);
+      if (!z || z.shape.type !== "disc") return [];
+      const c = z.shape.center;
+      // разлив звучит кастом у кастующего; у самой лужи — первое журчание, по нему слышно, где она
+      return [burst("springRing", c, UP, 1), sound("springBubble", c)];
+    }
+    case "reaction": {
+      if (ev.kind !== "steam") return null;
+      const out: Effect[] = [burst("steamPuff", ev.pos, UP, 1.3), sound("steamHiss", ev.pos)];
+      if (mine(ev.owner)) out.push({ kind: "toast", text: "Пар!" });
+      return out;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Раз в кадр: журчание Родника зёрнами (Р15) — раз в SPRING_GRAIN_S у каждой взведённой лужи, в её центре.
+ * Фаза зерна — от id зоны: две лужи не журчат в такт.
+ */
+export function waterFrame(f: FrameView): Effect[] {
+  let out: Effect[] | null = null;
+  for (const z of f.cur.zones) {
+    if (z.kind !== "spring" || z.shape.type !== "disc" || f.cur.tick < z.armTick || f.cur.tick >= z.endTick) continue;
+    const ph = (z.id * 0.37) % SPRING_GRAIN_S;
+    if (Math.floor((f.nowS + ph) / SPRING_GRAIN_S) <= Math.floor((f.nowS - f.dtS + ph) / SPRING_GRAIN_S)) continue;
+    (out ??= []).push(sound("springBubble", z.shape.center, z.owner === f.localId ? 0.5 : 0.6));
+  }
+  return out ?? [];
 }

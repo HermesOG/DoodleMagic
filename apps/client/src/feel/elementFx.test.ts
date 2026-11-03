@@ -129,6 +129,8 @@ describe("elementEffects", () => {
       { type: "charge", unit: ME, slot: "e", charges: 2 },
     ] as MatchEvent[])
       expect(elementEffects(ev, view, view.state.units[0]), ev.type).not.toBeNull();
+    // события Воды отвечает её файл (задача 6): здесь проверяется только общая карта
+    vi.spyOn(waterFx, "waterEffects").mockReturnValue(null);
     const quiet: MatchEvent[] = [
       { type: "beam", unit: ME, ability: "gust", from: V(), to: V(0, 0, -7), target: 2 },
       { type: "ward", unit: 2, phase: "up", absorbed: 0 },
