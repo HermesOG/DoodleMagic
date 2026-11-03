@@ -307,6 +307,43 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     }
     return a;
   };
+  // кадр стихий и общие списки кадра — одни на всё время, обнуляются length = 0
+  const glowList: GlowEntry[] = [];
+  const decalList: { spec: DecalSpec; seed: number; intensity: number }[] = [];
+  const roots: RootRing[] = [];
+  const liveUnits: { id: UnitId; pos: Vec3; u: Unit }[] = [];
+  const liveMages: { id: UnitId; pose: MagePose; u: Unit }[] = [];
+  let frameCam: PerspectiveCamera | null = null;
+  let frameNowT = 0;
+  const frameEye = { x: 0, y: 0, z: 0 };
+  const palmWorld = (h: "left" | "right" | "both"): Vec3 => {
+    if (h === "both") {
+      const r = palmWorld("right");
+      const l = palmWorld("left");
+      return { x: (r.x + l.x) / 2, y: (r.y + l.y) / 2, z: (r.z + l.z) / 2 };
+    }
+    const q = handToWorldView(palms[h], HANDS_FOV, WORLD_FOV);
+    frameCam?.localToWorld(tmp.set(q.x, q.y, q.z));
+    return { x: tmp.x, y: tmp.y, z: tmp.z };
+  };
+  const frame: ElementVfxFrame = {
+    prev: null as unknown as MatchState,
+    cur: null as unknown as MatchState,
+    alpha: 0,
+    tick: 0,
+    nowS: 0,
+    dt: 0,
+    camera: null as unknown as PerspectiveCamera,
+    eye: frameEye,
+    localId: 0 as UnitId,
+    units: liveUnits,
+    mages: liveMages,
+    palmWorld,
+    emit: (specs) => emitWorld(specs, frameNowT),
+    glow: (g, prio) => glowList.push({ ...g, prio }),
+    decal: (spec, seed, intensity = 1) => decalList.push({ spec, seed, intensity }),
+  };
+
   const viewportH = (): number => {
     const img = gbuffer.surface.image as { height?: number } | null;
     return img?.height && img.height > 1 ? img.height : 1080;
@@ -376,23 +413,15 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       lastNowS = v.nowS;
       const tick = renderTick(v.prev, v.cur, v.alpha);
       const cam = v.camera;
+      frameCam = cam;
+      frameNowT = nowT;
       cam.updateMatrixWorld();
       cam.getWorldPosition(eye);
       palms.right.copy(v.palms.right);
       palms.left.copy(v.palms.left);
-      const palmWorld = (h: "left" | "right" | "both"): Vec3 => {
-        if (h === "both") {
-          const r = palmWorld("right");
-          const l = palmWorld("left");
-          return { x: (r.x + l.x) / 2, y: (r.y + l.y) / 2, z: (r.z + l.z) / 2 };
-        }
-        const q = handToWorldView(palms[h], HANDS_FOV, WORLD_FOV);
-        cam.localToWorld(tmp.set(q.x, q.y, q.z));
-        return { x: tmp.x, y: tmp.y, z: tmp.z };
-      };
-      const glowList: GlowEntry[] = [];
-      const decalList: { spec: DecalSpec; seed: number; intensity: number }[] = [];
-      const roots: RootRing[] = [];
+      glowList.length = 0;
+      decalList.length = 0;
+      roots.length = 0;
 
       // юниты: манекены и чужие маги (поза, ореол, вспышка), горение и обездвиживание у всех
       for (const a of anims.values()) a.seen = false;
@@ -403,8 +432,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       for (const u of v.prev.units) prevUnits.set(u.id, u);
       const views: DummyView[] = [];
       const mageViews: MagePose[] = [];
-      const liveUnits: { id: UnitId; pos: Vec3; u: Unit }[] = [];
-      const liveMages: { id: UnitId; pose: MagePose; u: Unit }[] = [];
+      liveUnits.length = 0;
+      liveMages.length = 0;
       for (const it of lerpById(unitsOf(v.prev), unitsOf(v.cur), v.alpha)) {
         const u = it.u;
         if (!u.alive) continue;
@@ -659,23 +688,18 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       walls.update(sheets);
 
       // стихии фазы 4: свои меши и логика поверх общих пулов — до декалей и разбора свечений
-      const frame: ElementVfxFrame = {
-        prev: v.prev,
-        cur: v.cur,
-        alpha: v.alpha,
-        tick,
-        nowS: v.nowS,
-        dt,
-        camera: cam,
-        eye: { x: eye.x, y: eye.y, z: eye.z },
-        localId: v.localId,
-        units: liveUnits,
-        mages: liveMages,
-        palmWorld,
-        emit: (specs) => emitWorld(specs, nowT),
-        glow: (g, prio) => glowList.push({ ...g, prio }),
-        decal: (spec, seed, intensity = 1) => decalList.push({ spec, seed, intensity }),
-      };
+      // один объект кадра на всё время: поля меняются, замыкания и массивы — те же (без мусора за кадр)
+      frame.prev = v.prev;
+      frame.cur = v.cur;
+      frame.alpha = v.alpha;
+      frame.tick = tick;
+      frame.nowS = v.nowS;
+      frame.dt = dt;
+      frame.camera = cam;
+      frameEye.x = eye.x;
+      frameEye.y = eye.y;
+      frameEye.z = eye.z;
+      frame.localId = v.localId;
       for (const el of elements) el.sync(frame);
       // следы ударов на полу: подпалины и трещины
       for (let i = marks.length - 1; i >= 0; i--) {
