@@ -7,7 +7,7 @@ import { WATER_BURSTS } from "../fx/presets.water";
 import { createGestures, startGesture, stepGestures } from "../hands/gestures";
 import { answerLabel, wardWidget } from "../hud/waterHud";
 import type { Effect } from "./effects";
-import { ABSORB_TONE_AT, SPRING_GRAIN_S, absorbSound, waterEffects, waterFrame } from "./waterFx";
+import { ABSORB_TONE_AT, HEAL_CHIME_TICKS, SPRING_GRAIN_S, absorbSound, createWaterEffects, waterEffects, waterFrame } from "./waterFx";
 import { WATER_BURST_PRESETS, WATER_SOUND_IDS } from "./waterIds";
 
 const V = (x = 0, y = 0, z = 0) => ({ x, y, z });
@@ -166,6 +166,19 @@ describe("waterEffects: the ward, the tow, healing, the spring and steam", () =>
       { kind: "sound", id: "heal", pos: null, gain: 0.45 },
     ]);
     expect(kinds(fx({ type: "heal", target: FOE, source: FOE, amount: 3, pos: V(0, 0.9, -10) }))).toEqual(["burst:healMotes"]);
+  });
+
+  it("heal in my spring: palms every pulse, the chime on the first pulse and then at most once a second", () => {
+    const fresh = createWaterEffects();
+    const healAt = (tick: number) => {
+      const st = { ...state(), tick };
+      return kinds(fresh({ type: "heal", target: ME, source: ME, amount: 3, pos: V(0, 0.9, 0) }, { localId: ME, state: st }, st.units[0]));
+    };
+    // 4 импульса в секунду: звон на первом и через секунду; после перерыва (вышла из лужи) — снова сразу
+    const ticks = [100, 115, 130, 145, 160, 175, 190, 205, 220, 300, 315];
+    const chimed = ticks.filter((t) => healAt(t).includes("sound:heal"));
+    expect(chimed).toEqual([100, 100 + HEAL_CHIME_TICKS, 220, 300]);
+    expect(healAt(330)).toEqual(["palm"]);
   });
 
   it("the spring spreads a ring on its telegraph and first babbles at the pool; arm and end and steam zones are quiet", () => {

@@ -1,4 +1,4 @@
-import { NOBODY, forwardXZ, unitById, type AbilityId, type MatchEvent, type ProjectileKind, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
+import { NOBODY, TICK_HZ, WATER, forwardXZ, unitById, type AbilityId, type MatchEvent, type ProjectileKind, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
 import type { BurstPreset, Effect, SoundId } from "./effects";
 import type { FrameView } from "./elementFx";
 import type { EventView } from "./eventMap";
@@ -20,6 +20,9 @@ export const SPRING_GRAIN_S = 0.6;
 export const ABSORB_TONE_AT = { mid: 25, high: 45 } as const;
 /** Огненные снаряды гаснут на диске с шипением (только вид). */
 const FIERY: readonly ProjectileKind[] = ["fireFists", "fireball"];
+/** Импульс лечения Родника — 0,25 с (15 тиков); свой звон — на первом импульсе подряд и потом не чаще раза в 1 с. */
+const HEAL_PULSE_TICKS = Math.round(WATER.spring.healPulseS * TICK_HZ);
+export const HEAL_CHIME_TICKS = TICK_HZ;
 
 const sound = (id: SoundId, pos: Vec3 | null = null, gain = 1): Effect => ({ kind: "sound", id, pos, gain });
 /** Своё — у уха, чужое — в точке мира. */
@@ -60,8 +63,28 @@ function ownCast(a: keyof typeof CAST_SOUND): Effect[] {
   return out;
 }
 
-/** Событие Воды → эффекты; null — не Воды (дальше общая карта). */
-export function waterEffects(ev: MatchEvent, view: EventView, _me: Unit | undefined): Effect[] | null {
+/** Память своего звона лечения: тик прошлого импульса и прошлого звона. */
+interface HealChime { pulse: number; chime: number }
+
+/**
+ * Звенеть ли своему импульсу лечения на тике tick: первый импульс подряд (прошлый был дальше одного шага — вышла
+ * из лужи или HP было полным; или время пошло назад) звенит всегда, дальше — не чаще раза в HEAL_CHIME_TICKS.
+ */
+function healChime(m: HealChime, tick: number): boolean {
+  const first = tick < m.pulse || tick - m.pulse > HEAL_PULSE_TICKS;
+  m.pulse = tick;
+  if (!first && tick - m.chime < HEAL_CHIME_TICKS) return false;
+  m.chime = tick;
+  return true;
+}
+
+/** Событие Воды → эффекты со своей памятью (звон лечения); null — не Воды (дальше общая карта). */
+export function createWaterEffects(): (ev: MatchEvent, view: EventView, me: Unit | undefined) => Effect[] | null {
+  const heal: HealChime = { pulse: -Infinity, chime: -Infinity };
+  return (ev, view, me) => waterEffectsWith(heal, ev, view, me);
+}
+
+function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _me: Unit | undefined): Effect[] | null {
   const mine = (id: UnitId): boolean => id === view.localId;
   switch (ev.type) {
     case "cast": {
@@ -124,8 +147,11 @@ export function waterEffects(ev: MatchEvent, view: EventView, _me: Unit | undefi
       }
       return [burst("grabSplash", ev.pos, UP, 0.5)];
     case "heal":
-      // своё лечение — искры сходятся к ладоням и мягкий звон; чужое — искры у тела
-      if (mine(ev.target)) return [{ kind: "palm", hand: "both", element: "water", preset: "charge" }, sound("heal", null, 0.45)];
+      // своё лечение — искры сходятся к ладоням (каждый импульс) и мягкий звон (первый и раз в секунду); чужое — искры у тела
+      if (mine(ev.target)) {
+        const palm: Effect = { kind: "palm", hand: "both", element: "water", preset: "charge" };
+        return healChime(healMem, view.state.tick) ? [palm, sound("heal", null, 0.45)] : [palm];
+      }
       return [burst("healMotes", ev.pos, UP, 0.6)];
     case "zone": {
       if (ev.kind === "steam") return [];
@@ -147,6 +173,9 @@ export function waterEffects(ev: MatchEvent, view: EventView, _me: Unit | undefi
       return null;
   }
 }
+
+/** Событие Воды → эффекты; null — не Воды (дальше общая карта). Один на клиент: звон лечения помнит прошлый. */
+export const waterEffects = createWaterEffects();
 
 /**
  * Раз в кадр: журчание Родника зёрнами (Р15) — раз в SPRING_GRAIN_S у каждой взведённой лужи, в её центре.
