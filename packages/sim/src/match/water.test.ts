@@ -341,13 +341,13 @@ describe("Water and fire: steam", () => {
     expect([evs(log, "reaction").map(({ t, e }) => [t, e.kind, e.owner]), u(s, 2).status.burnPulses]).toEqual([[[7, "steam", 1]], 0]);
   });
 
-  it("a fireball at a target standing in a spring: steam, no burning", () => {
+  it("a fireball at a target standing in a spring: steam, no burning; the spring boils off", () => {
     const { s, log } = play(
       { mages: [water(), { element: "fire", spawn: spot(8, -8, Math.PI / 2) }], dummies: [at(-8)] }, 90,
       (k) => ({ 1: { c: k === 0, pitch: Math.atan2(0.5 - 1.6, 8) }, 2: { q: k === 30, pitch: Math.atan2(0.9 - 1.6, 8) } }),
     );
     const fb = hitsOn(log, 3).filter(({ e }) => e.ability === "fireball");
-    expect([fb.length, evs(log, "reaction").map(({ e }) => [e.kind, e.owner]), u(s, 3).status.burnPulses, hitsOn(log, 3).filter(({ e }) => e.ability === "burning").length]).toEqual([1, [["steam", 2]], 0, 0]);
+    expect([fb.length, evs(log, "reaction").map(({ e }) => [e.kind, e.owner]), u(s, 3).status.burnPulses, hitsOn(log, 3).filter(({ e }) => e.ability === "burning").length]).toEqual([1, [["steam", 2], ["boilOff", 2]], 0, 0]);
   });
 });
 

@@ -10,6 +10,7 @@ import { terrainAt } from "./dynamic";
 import { NO_HOOKS, type SimHooks } from "./hooks";
 import { horizontalDir } from "./kit";
 import { unitById } from "./state";
+import { boilOffByBlast } from "./steam";
 import { damageTerrain } from "./terrain";
 import { NOBODY, type MatchState, type Projectile, type ProjectileKind, type TickCtx, type Unit, type UnitId } from "./types";
 
@@ -216,7 +217,7 @@ const closestOnBox = (b: AABB, p: Vec3): Vec3 => ({ x: clamp(p.x, b.min.x, b.max
  * у прямого попадания (direct) — 0. Кроме прямого попадания, взрыв не бьёт сквозь стену: нужен свободный луч "shot"
  * до ближайшей точки тела. Прямое попадание толкает по горизонтали полёта шара travelDir: цель уходит туда, куда
  * целились, даже если шар задел её краем. Остальных — от взрыва к центру тела, ровно над или под ним — по travelDir.
- * Рельеф в радиусе получает урон с тем же спадом.
+ * Рельеф в радиусе получает урон с тем же спадом. Взведённый Родник в радиусе выкипает (boilOffByBlast, steam.ts).
  */
 export function explodeFireball(s: MatchState, t: TickCtx, owner: UnitId, pos: Vec3, direct: UnitId, travelDir: { x: number; z: number }): void {
   const travel = travelDir.x !== 0 || travelDir.z !== 0;
@@ -251,4 +252,5 @@ export function explodeFireball(s: MatchState, t: TickCtx, owner: UnitId, pos: V
     const d = length(sub(q, pos));
     if (d <= R) damageTerrain(s, t, tr.id, fb.damageCenter * falloff(d), q);
   }
+  boilOffByBlast(s, t, owner, "fireball", pos, R);
 }

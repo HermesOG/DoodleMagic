@@ -9,6 +9,7 @@ import { BOG, EARTH, FIRE, LIMITS, RAMPART, STATUS, WATER, ticks } from "./defs"
 import { NO_HOOKS, type SimHooks } from "./hooks";
 import { horizontalDir } from "./kit";
 import { clonePlain, unitById } from "./state";
+import { boilOffByWall } from "./steam";
 import { spawnTerrain } from "./terrain";
 import type { MatchState, TickCtx, Unit, Zone, ZoneShape } from "./types";
 
@@ -299,6 +300,7 @@ export function stepZones(s: MatchState, t: TickCtx, hooks: SimHooks = NO_HOOKS)
     else if (z.kind === "fireWall") {
       driveWall(t, z);
       contact(s, t, z, FIRE.fireWall.contactDamage, FIRE_WALL_REHIT_TICKS, true, false);
+      boilOffByWall(s, t, z);
     }
     else if (z.kind === "fireTrail") contact(s, t, z, TRAIL_PULSE_DAMAGE, TRAIL_PULSE_TICKS, false, true);
     else if (now === z.armTick && z.kind === "pillar") pillarStrike(s, t, z);

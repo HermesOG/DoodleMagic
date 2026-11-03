@@ -34,7 +34,7 @@ export function buildTickWorld(staticWorld: World, s: Readonly<MatchState>): Tic
   for (const z of s.zones) {
     if (z.kind === "steam" && z.shape.type === "disc" && s.tick >= z.armTick && s.tick < z.endTick) {
       const c = z.shape.center;
-      const r = STEAM.radiusM;
+      const r = z.shape.radius; // 2,5 м, у «Выкипания» — 4 м
       dynamic.push({ box: aabb(c.x - r, c.y - STEAM_BELOW_M, c.z - r, c.x + r, c.y + STEAM.heightM, c.z + r), noSight: true, tag: `steam-${z.id}` });
     }
   }

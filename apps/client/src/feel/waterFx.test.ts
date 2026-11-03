@@ -99,6 +99,16 @@ describe("waterEffects: casts and releases of Water's own abilities", () => {
     expect(fx({ type: "reaction", kind: "fireRampart", owner: ME, zone: 3, pos: V() })).toBeNull();
   });
 
+  it("«Выкипание»: spring ring and a thick steam puff with a hiss for everyone; the toast only for its owner", () => {
+    const mineBoil = fx({ type: "reaction", kind: "boilOff", owner: ME, zone: 3, pos: V() })!;
+    expect(mineBoil.filter((e) => e.kind === "burst").map((e) => (e as { preset: string }).preset)).toEqual(["springRing", "steamPuff"]);
+    expect(mineBoil.filter((e) => e.kind === "sound").map((e) => (e as { id: string }).id)).toEqual(["steamHiss", "springBubble"]);
+    expect(mineBoil).toContainEqual({ kind: "toast", text: "Выкипание!" });
+    const foeBoil = fx({ type: "reaction", kind: "boilOff", owner: FOE, zone: 3, pos: V() })!;
+    expect(foeBoil.some((e) => e.kind === "toast")).toBe(false);
+    expect(foeBoil.some((e) => e.kind === "burst")).toBe(true);
+  });
+
   it("«Топь»: quake ring and dark muck with a thud for everyone; the toast only for its owner", () => {
     const mineBog = fx({ type: "reaction", kind: "bog", owner: ME, zone: 3, pos: V() })!;
     expect(mineBog.filter((e) => e.kind === "burst").map((e) => (e as { preset: string }).preset)).toEqual(["quakeRing", "bogMuck"]);

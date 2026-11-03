@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { aabb } from "../aabb";
 import type { Spawn } from "../types";
 import { buildTickWorld } from "./dynamic";
-import { AIR, BOG, CC_LIMITS, EARTH, FIRE, LIMITS, RAMPART, ticks } from "./defs";
+import { AIR, BOG, BOIL_OFF, CC_LIMITS, EARTH, FIRE, LIMITS, RAMPART, STEAM, ticks } from "./defs";
 import { testContext } from "./fixtures";
 import { createMatch, stepMatch } from "./match";
+import { explodeFireball } from "./projectiles";
 import { idleInput, unitById } from "./state";
-import type { Element, MatchContext, MatchEvent, MatchInput, MatchState, TickCtx, UnitId } from "./types";
+import { spawnSteam } from "./steam";
+import { NOBODY, type Element, type MatchContext, type MatchEvent, type MatchInput, type MatchState, type TickCtx, type UnitId } from "./types";
 import { spawnZone } from "./zones";
 
 /**
@@ -304,5 +306,93 @@ describe("reaction «Огненный вал» (gust on a fire wall)", () => {
     const b = gustOnWall({ fire: spot(0, -10) });
     expect(JSON.stringify(b.s)).toBe(JSON.stringify(a.s));
     expect(JSON.stringify(b.log)).toBe(JSON.stringify(a.log));
+  });
+});
+
+// ---------------------------------------------------------------- «Выкипание»
+
+const BOIL_WATER = 1;
+const BOIL_FIRE = 2;
+const boilMages = (): Setup["mages"] => [{ element: "water", spawn: spot(-12, 12) }, { element: "fire", spawn: spot(12, 12) }];
+
+/** Вода (id 1) и Огонь (id 2) в стороне; Родник Воды в (0, 0, 0) взведён, prep ставит что ещё нужно. */
+function boilPlay(prep: (s: MatchState, t: TickCtx) => void, n = 2) {
+  return play({ mages: boilMages(), prep: (s, t) => { springAt()(s, t); prep(s, t); } }, n);
+}
+/** Состояние с Родником (взведён через armIn) — для прямого взрыва шара. */
+const springState = (armIn = 0) => play({ mages: boilMages(), prep: springAt(armIn) }, 0).s;
+function blast(s: MatchState, pos: { x: number; y: number; z: number }) {
+  const ev: MatchEvent[] = [];
+  explodeFireball(s, tickOf(s, ev), BOIL_FIRE, pos, NOBODY, { x: 0, z: 0 });
+  return ev;
+}
+const fireWallOver = (box = aabb(-5, 0, 1.7, 5, FIRE.fireWall.heightM, 2.3)) => (s: MatchState, t: TickCtx) => {
+  spawnZone(s, t, { owner: BOIL_FIRE, kind: "fireWall", ability: "fireWall", shape: { type: "box", box }, bornTick: s.tick - 24, armTick: s.tick, endTick: s.tick + 300 });
+};
+
+describe("reaction «Выкипание» (fire on a spring)", () => {
+  it("a fireball explosion boils an armed spring off: replaced by a 4 m steam cloud owned by Fire (second effect)", () => {
+    const s = springState();
+    const before = s.zones.length;
+    const ev = blast(s, { x: 5, y: 0.3, z: 0 });
+    const r = ev.flatMap((e) => (e.type === "reaction" ? [e] : []));
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ kind: "boilOff", owner: BOIL_FIRE, pos: { x: 0, y: 0, z: 0 } });
+    expect(s.zones.some((z) => z.kind === "spring")).toBe(false);
+    const cloud = s.zones.find((z) => z.kind === "steam")!;
+    expect(cloud.owner).toBe(BOIL_FIRE);
+    expect(cloud.ability).toBe("fireball");
+    expect(cloud.shape).toEqual({ type: "disc", center: { x: 0, y: 0, z: 0 }, radius: BOIL_OFF.radiusM });
+    expect(cloud.endTick - s.tick).toBe(ticks(STEAM.lifeS));
+    expect(r[0]!.zone).toBe(cloud.id);
+    expect(ev.some((e) => e.type === "zone" && e.kind === "spring" && e.phase === "end")).toBe(true);
+    expect(s.zones.length).toBe(before); // замена, а не добавка
+  });
+
+  it("no boil-off from a spring still spreading or out of the blast", () => {
+    expect(blast(springState(5), { x: 0, y: 0.3, z: 0 }).some((e) => e.type === "reaction")).toBe(false);
+    // 4 м Родника + 3 м взрыва < 7,5 м
+    const far = springState();
+    expect(blast(far, { x: 7.5, y: 0.3, z: 0 }).some((e) => e.type === "reaction")).toBe(false);
+    expect(far.zones.some((z) => z.kind === "spring")).toBe(true);
+  });
+
+  it("a fire wall over an armed spring boils it off; the wall burns on, the steam is the wall owner's", () => {
+    const { s, log } = boilPlay(fireWallOver());
+    const r = evs(log, "reaction");
+    expect(r).toHaveLength(1);
+    expect(r[0]!.e).toMatchObject({ kind: "boilOff", owner: BOIL_FIRE });
+    expect(s.zones.some((z) => z.kind === "spring")).toBe(false);
+    expect(s.zones.some((z) => z.kind === "fireWall" && z.owner === BOIL_FIRE)).toBe(true);
+    const cloud = s.zones.find((z) => z.kind === "steam")!;
+    expect(cloud).toMatchObject({ owner: BOIL_FIRE, ability: "fireWall", id: r[0]!.e.zone });
+    // стена в стороне Родник не трогает
+    const away = boilPlay(fireWallOver(aabb(-5, 0, 5.7, 5, FIRE.fireWall.heightM, 6.3)));
+    expect(evs(away.log, "reaction")).toHaveLength(0);
+    expect(away.s.zones.some((z) => z.kind === "spring")).toBe(true);
+  });
+
+  it("respects the steam caps: at most 4 clouds on the arena (the oldest gives way) and one cloud per spring", () => {
+    const s = springState();
+    const t0 = tickOf(s, []);
+    const first = spawnSteam(s, t0, { x: 20, y: 0, z: 20 }, BOIL_WATER, "waterWhip");
+    for (let k = 1; k < STEAM.perArena; k++) spawnSteam(s, t0, { x: 20, y: 0, z: 20 - 6 * k }, BOIL_WATER, "waterWhip");
+    const ev = blast(s, { x: 0, y: 0.3, z: 0 });
+    expect(s.zones.filter((z) => z.kind === "steam")).toHaveLength(STEAM.perArena);
+    expect(s.zones.some((z) => z.id === first)).toBe(false);
+    expect(ev.some((e) => e.type === "zone" && e.zone === first && e.phase === "end")).toBe(true);
+    // второй взрыв тут же: Родника уже нет — второго облака нет
+    expect(blast(s, { x: 0, y: 0.3, z: 0 }).some((e) => e.type === "reaction")).toBe(false);
+  });
+
+  it("is deterministic", () => {
+    const a = boilPlay(fireWallOver(), 60);
+    const b = boilPlay(fireWallOver(), 60);
+    expect(JSON.stringify(b.s)).toBe(JSON.stringify(a.s));
+    expect(JSON.stringify(b.log)).toBe(JSON.stringify(a.log));
+    const x = springState();
+    const y = springState();
+    expect(JSON.stringify(blast(y, { x: 2, y: 0.5, z: 1 }))).toBe(JSON.stringify(blast(x, { x: 2, y: 0.5, z: 1 })));
+    expect(JSON.stringify(y)).toBe(JSON.stringify(x));
   });
 });

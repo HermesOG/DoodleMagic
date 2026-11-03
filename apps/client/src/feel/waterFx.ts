@@ -171,6 +171,12 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
         if (mine(ev.owner)) out.push({ kind: "toast", text: "Топь!" });
         return out;
       }
+      if (ev.kind === "boilOff") {
+        // «Выкипание»: лужа вскипает — кольцо Родника и густой клуб пара во все 4 м; шипение в точке
+        const out: Effect[] = [burst("springRing", ev.pos, UP, 0.6), burst("steamPuff", ev.pos, UP, 2), sound("steamHiss", ev.pos), sound("springBubble", ev.pos, 0.6)];
+        if (mine(ev.owner)) out.push({ kind: "toast", text: "Выкипание!" });
+        return out;
+      }
       if (ev.kind !== "steam") return null;
       const out: Effect[] = [burst("steamPuff", ev.pos, UP, 1.3), sound("steamHiss", ev.pos)];
       if (mine(ev.owner)) out.push({ kind: "toast", text: "Пар!" });

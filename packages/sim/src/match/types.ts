@@ -151,7 +151,7 @@ export interface Terrain {
 /** tick — сколько тиков посчитано (следующий шаг считает тик с этим номером); units по возрастанию id. */
 export interface MatchState { tick: number; units: Unit[]; projectiles: Projectile[]; zones: Zone[]; terrain: Terrain[]; nextId: number }
 
-export type ReactionKind = "steam" | "fireTornado" | "fireRampart" | "bog";
+export type ReactionKind = "steam" | "fireTornado" | "fireRampart" | "bog" | "boilOff";
 export type StatusKind = "burning" | "slow" | "root" | "airborne" | "wet";
 export type RejectReason = "cooldown" | "busy" | "notGrounded" | "noTarget" | "rooted";
 
@@ -191,7 +191,7 @@ export type MatchEvent =
   | { type: "tow"; target: UnitId; source: UnitId; phase: "start" | "end"; pos: Vec3; to: Vec3 }
   /** Лечение: amount — фактически прибавленное. */
   | { type: "heal"; target: UnitId; source: UnitId; amount: number; pos: Vec3 }
-  /** Реакция стихий: облако пара, огненный смерч, «Огненный вал» или «Топь»; zone — её зона. */
+  /** Реакция стихий: облако пара, огненный смерч, «Огненный вал», «Топь» или «Выкипание»; zone — её зона. */
   | { type: "reaction"; kind: ReactionKind; owner: UnitId; zone: number; pos: Vec3 };
 
 export interface MatchStep { state: MatchState; events: MatchEvent[] }
