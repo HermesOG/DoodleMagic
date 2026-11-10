@@ -162,6 +162,14 @@ describe("health orbs (Р1, Р3)", () => {
     expect([take(0.7), take(0.5)]).toEqual([0, 1]);
   });
 
+  it("the rune reaches 0.8 m from the body box: 0.9 m away it stays, 0.7 m away it is taken", () => {
+    const take = (dz: number) => {
+      const r = steps(first(at(pick(RUNE), 0, 0.4 + dz)), 1);
+      return pickupLog(steps(jump(r.s, 2700), 1).log).filter((x) => x[3] === "take").length;
+    };
+    expect([take(0.9), take(0.7)]).toEqual([0, 1]);
+  });
+
   it("a wounded farther mage takes it past a full nearer one", () => {
     const s = createMatch({ mages: [{ element: "fire", spawn: at(pick(ORB)) }, { element: "earth", spawn: at(pick(ORB), 0, 0.7) }], dummies: [] });
     u(s, 2).hp = 50;
@@ -283,6 +291,20 @@ describe("fury (Р4)", () => {
     expect(ofType(r.log, "fury")[0]!.e.pos).toEqual(u(r.s, 1).move.body.pos);
     const ev: MatchEvent[] = [];
     near(applyHit(r.s, tickOf({ ...r.s, tick: 1002 }, ev), hitSpec({ target: 2 })), 20);
+  });
+
+  it("a holder killed by a projectile on the very tick of furyUntil still gets exactly one fury end, no slain", () => {
+    let s = createMatch({ mages: [{ element: "fire", spawn: AWAY }, { element: "earth", spawn: { pos: { x: -35, y: 0, z: -30 }, yaw: 0 } }], dummies: [] });
+    s = jump(steps(s, 1).s, 1000);
+    const me = u(s, 1);
+    me.status.furyUntil = 1000;
+    me.hp = 1;
+    const p = me.move.body.pos;
+    // камень хозяина 2 в полуметре перед грудью летит в мага: смерть в stepProjectiles, раньше объектов на карте
+    s.projectiles.push({ id: 5000, owner: 2, ability: "stoneShot", pos: { x: p.x, y: p.y + 1, z: p.z - 0.5 }, vel: { x: 0, y: 0, z: 30 }, bornTick: 999, endTick: 1100, power: 50 });
+    const r = steps(s, 1);
+    expect(ofType(r.log, "death").map(({ e }) => e.target)).toEqual([1]);
+    expect(furyLog(r.log)).toEqual([[1000, 1, "end", NOBODY]]);
   });
 
   it("a second rune taken in fury restarts it from the new take; no end at the old furyUntil", () => {

@@ -75,7 +75,6 @@ function nextRuneMark(mark: number, now: number): number {
  * Шаг объектов (stepMatch, после stepTerrain, до stepStatuses): по индексу — руна на readyAt − 600 → pickup/warn;
  * на readyAt → pickup/spawn; лежит — касание (Р3) → подбор и pickup/take. Сфера: healUnit(+35), readyAt = now + 900.
  * Руна: furyUntil = now + 720, событие status fury (ticks 720, source — сам маг), readyAt — следующая отметка (Р2).
- * Затем живым магам с furyUntil === now — fury/end.
  */
 export function stepPickups(s: MatchState, t: TickCtx): void {
   const now = t.now;
@@ -96,7 +95,15 @@ export function stepPickups(s: MatchState, t: TickCtx): void {
       p.readyAt = nextRuneMark(p.readyAt, now);
     }
   });
-  // furyUntil 0 — ярости не было (свежий маг на тике 0)
+}
+
+/**
+ * Конец ярости (stepMatch, в самом начале тика — до ввода и урона): живым магам с furyUntil === now — fury/end. На этом
+ * тике ярости уже нет, поэтому смерть позже в том же тике не теряет событие (furyOnDeath молчит: now < furyUntil ложно).
+ * furyUntil 0 — ярости не было (свежий маг на тике 0).
+ */
+export function stepFuryEnd(s: MatchState, t: TickCtx): void {
+  const now = t.now;
   for (const u of s.units) {
     if (!u.alive || !u.mage || u.status.furyUntil !== now || now === 0) continue;
     t.ev.push({ type: "fury", unit: u.id, phase: "end", by: NOBODY, pos: copy(u.move.body.pos) });

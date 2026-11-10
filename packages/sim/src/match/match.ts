@@ -5,7 +5,7 @@ import { stepStatuses } from "./combat";
 import { MATCH, ticks } from "./defs";
 import { buildTickWorld } from "./dynamic";
 import { ELEMENT_SIM, SIM_HOOKS } from "./elements";
-import { initPickups, stepPickups } from "./pickups";
+import { initPickups, stepFuryEnd, stepPickups } from "./pickups";
 import { stepProjectiles } from "./projectiles";
 import { clonePlain, createDummyUnit, createMageUnit, createMatchState, idleInput } from "./state";
 import { stepTerrain } from "./terrain";
@@ -37,7 +37,7 @@ export function createMatch(setup: MatchSetup): MatchState {
 }
 
 /**
- * Один тик. Порядок фиксирован, на нём держится детерминизм: ввод китов (все маги по id) → ульты (stepUlts) → тики
+ * Один тик. Порядок фиксирован, на нём держится детерминизм: конец ярости (stepFuryEnd) → ввод китов (все маги по id) → ульты (stepUlts) → тики
  * китов → движение юнитов → снаряды → зоны → рельеф → объекты на карте (stepPickups) → статусы → жизнь. Мир тика —
  * статика с рельефом и стенами огня на начало тика.
  * Объекты заводятся лениво: число в состоянии не совпало с числом в ctx.pickups (полигон, разминка PvP) — initPickups
@@ -55,6 +55,7 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
     spawns: ctx.spawns !== undefined && ctx.spawns.length > 0 ? ctx.spawns : null, mageRespawnTicks: ticks(ctx.mageRespawnS ?? MATCH.mageRespawnS), spawnShieldTicks: ticks(ctx.spawnShieldS ?? 0),
     ultChargeMul: ctx.ultChargeMul ?? 1,
   };
+  stepFuryEnd(s, t);
   const clean: Partial<Record<UnitId, MatchInput>> = {};
   for (const u of s.units) {
     const m = u.mage;
