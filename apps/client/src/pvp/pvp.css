@@ -14,6 +14,22 @@
   gap: 8px;
   align-items: center;
 }
+/* строка ботов хоста под составом (фаза 8) */
+.pvp-bots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.pvp-bots .pvp-bot-btn {
+  padding: 6px 12px;
+}
+.pvp-bot-count {
+  min-width: 1.2em;
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .pvp-link-row .pvp-link {
   flex: 1 1 220px;
   width: auto;

@@ -1,10 +1,10 @@
 import {
-  NOBODY, PVP, TICK_DT, unitById,
-  type Element, type GameState, type MatchContext, type MatchEvent, type MatchInput, type UnitId,
+  ELEMENTS, NOBODY, PVP, TICK_DT, unitById,
+  type BotLevel, type Element, type GameState, type MatchContext, type MatchEvent, type MatchInput, type UnitId,
 } from "@doodlemagic/sim";
 import type { Driver, Frame, TickOut } from "../game/driver";
 import { encodeBinary } from "../net/codec";
-import { LOCAL_PEER, createHostCore } from "../net/hostCore";
+import { LOCAL_PEER, createHostCore, rarestElement } from "../net/hostCore";
 import { openHostLink, type Conn, type HostLink, type LagOptions } from "../net/link";
 import { NET_VERSION, hostText, parseClientMsg } from "../net/protocol";
 import { newRoomCode } from "../net/room";
@@ -35,6 +35,18 @@ export interface PvpDriver extends Driver {
 export interface HostDriver extends PvpDriver {
   /** «Войти»: маг хоста встаёт в комнату, его ввод идёт в тики с этого момента. Повторно — ничего. */
   enter(name: string, element: Element): void;
+  /**
+   * Бот в комнату (Р16 фазы 8): стихия — самая редкая среди магов. Только в разминке и на итогах (посреди боя бот
+   * сломал бы лимит очков); место хоста держится, пока он не вошёл. false — нельзя.
+   */
+  addBot(level: BotLevel): boolean;
+  /** Последний добавленный бот уходит (разминка и итоги); false — ботов нет или идёт бой. */
+  removeBot(): boolean;
+  botCount(): number;
+  /** Есть место для бота и фаза позволяет. */
+  canAddBot(): boolean;
+  /** Сложность всех ботов комнаты. */
+  setBotLevel(level: BotLevel): void;
 }
 
 export interface HostOptions {
@@ -63,7 +75,7 @@ const isIdTaken = (err: unknown): boolean => (err as { type?: unknown } | null)?
  * один раз и уходит всем вошедшим. Сигналинг недоступен — reject.
  */
 export async function startHost(o: HostOptions): Promise<HostDriver> {
-  const core = createHostCore(o.ctx);
+  const core = createHostCore(o.ctx, { seed: Math.floor(Math.random() * 2 ** 31) });
   /** Вошедшие игроки по id канала (он же peer в ядре). */
   const joined = new Map<string, Conn>();
   let code = "";
@@ -200,6 +212,10 @@ export async function startHost(o: HostOptions): Promise<HostDriver> {
   };
   const stopTicker = startTicker(pulse);
 
+  const botPhase = (): boolean => core.game.phase === "warmup" || core.game.phase === "results";
+  // место хоста держится до его входа, как для игроков
+  const canAddBot = (): boolean => !closed && botPhase() && core.names().size < PVP.maxPlayers - (localId === NOBODY ? 1 : 0);
+
   const dispose = (): void => {
     if (closed) return;
     closed = true;
@@ -269,6 +285,22 @@ export async function startHost(o: HostOptions): Promise<HostDriver> {
     link: () => (closed ? "closed" : "ok"),
     start() {
       core.start();
+    },
+    addBot(level) {
+      if (!canAddBot()) return false;
+      const ok = core.addBot(rarestElement(core.game, ELEMENTS), level).ok;
+      if (ok) rosterChanged();
+      return ok;
+    },
+    removeBot() {
+      if (closed || !botPhase() || !core.removeBot()) return false;
+      rosterChanged();
+      return true;
+    },
+    botCount: () => core.bots().length,
+    canAddBot,
+    setBotLevel(level) {
+      core.setBotLevel(level);
     },
   };
 }

@@ -103,6 +103,8 @@ export interface LobbyOptions {
   name: string;
   element: Element;
   onEnter(name: string, element: Element): void;
+  /** Хост (Р16 фазы 8): строка «Боты: − N + · Маг» под составом; сложность — щелчок по ней. */
+  bots?: { onAdd(): void; onRemove(): void; onLevel(): void };
 }
 
 export interface Lobby {
@@ -110,6 +112,8 @@ export interface Lobby {
   setRoom(code: string, link: string): void;
   /** Хост: кто уже в комнате. */
   setRoster(names: readonly string[]): void;
+  /** Хост: строка ботов — сколько, сложность, можно ли добавить. */
+  setBots(count: number, level: string, canAdd: boolean): void;
   /** Строка под «Войти»: «Подключаюсь…», «Вхожу…»; "" — пусто. */
   setStatus(text: string): void;
   /** «Войти» доступна или нет (хост — пока комната открывается, игрок — после нажатия). */
@@ -141,6 +145,14 @@ export function createLobby(o: LobbyOptions): Lobby {
           <button class="btn secondary pvp-copy" type="button">Скопировать ссылку</button>
         </div>
         <p class="muted small pvp-roster"></p>
+        <div class="pvp-bots" hidden>
+          <span class="muted small">Боты:</span>
+          <button class="btn secondary pvp-bot-btn pvp-bot-minus" type="button" aria-label="Убрать бота">−</button>
+          <span class="pvp-bot-count">0</span>
+          <button class="btn secondary pvp-bot-btn pvp-bot-plus" type="button" aria-label="Добавить бота">+</button>
+          <span class="muted small">·</span>
+          <button class="btn secondary pvp-bot-btn pvp-bot-level" type="button" title="Сложность ботов: щелчок — следующая"></button>
+        </div>
       </div>
       <form class="pvp-form">
         <label>Имя <input class="pvp-name" type="text" maxlength="${NAME_MAX}" autocomplete="nickname" spellcheck="false" /></label>
@@ -223,6 +235,17 @@ export function createLobby(o: LobbyOptions): Lobby {
   link.addEventListener("focus", () => link.select());
   el(o.root, ".pvp-again").addEventListener("click", () => location.reload());
 
+  const botsRow = el(o.root, ".pvp-bots");
+  const botMinus = el<HTMLButtonElement>(o.root, ".pvp-bot-minus");
+  const botPlus = el<HTMLButtonElement>(o.root, ".pvp-bot-plus");
+  const botLevel = el<HTMLButtonElement>(o.root, ".pvp-bot-level");
+  const bots = o.bots;
+  if (bots) {
+    botMinus.addEventListener("click", () => bots.onRemove());
+    botPlus.addEventListener("click", () => bots.onAdd());
+    botLevel.addEventListener("click", () => bots.onLevel());
+  }
+
   return {
     setRoom(code, url) {
       title.textContent = `Комната ${code}`;
@@ -231,6 +254,13 @@ export function createLobby(o: LobbyOptions): Lobby {
     },
     setRoster(names) {
       roster.textContent = rosterText(names);
+    },
+    setBots(count, level, canAdd) {
+      botsRow.hidden = !bots;
+      el(o.root, ".pvp-bot-count").textContent = String(count);
+      botMinus.disabled = count === 0;
+      botPlus.disabled = !canAdd;
+      botLevel.textContent = level;
     },
     setStatus(text) {
       status.textContent = text;
