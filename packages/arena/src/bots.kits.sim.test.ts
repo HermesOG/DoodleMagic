@@ -59,14 +59,15 @@ function tick(sc: Scene, script?: (id: UnitId, t: number) => MatchInput | null):
 }
 
 describe("element characters on the gallery", () => {
-  // открыто: сброс Порывом выходит не на каждом сиде (0–1 из 3): Воздух сперва ставит Смерч, цель уезжает — разобрать
-  it.skip("Air blows a mage standing 4 m from the gorge kerb with Gust from 5 m, and the fall is credited to Air", () => {
+  // Порыв идёт раньше Смерча (Смерч утаскивал цель с линии толчка). Сцена — у открытой кромки: при x = −4 Воздух
+  // стоял за ширмой (z −12,2…−10,6, цели не видно), а толчок упирался в фонарь у кромки (x −6…−3)
+  it("Air blows a mage standing 2.5 m from the gorge kerb with Gust, and the fall is credited to Air", () => {
     let ok = 0;
     for (let seed = 1; seed <= 3; seed++) {
-      // цель в 4 м от северной кромки, Воздух в 5 м за ней (лицом к ущелью), между ними открыто
-      const sc = scene([{ element: "air", at: { x: -4, y: 0, z: -12.5 }, yaw: FACE_PZ, bot: "mage" }, { element: "water", at: { x: -4, y: 0, z: -9 }, yaw: FACE_NZ }], seed);
+      // цель в 2,5 м от северной кромки в просвете между мостом и фонарём (x 1,5…3,3), Воздух в 2,8 м за ней
+      const sc = scene([{ element: "air", at: { x: 2.4, y: 0, z: -10.3 }, yaw: FACE_PZ, bot: "mage" }, { element: "water", at: { x: 2.4, y: 0, z: -7.5 }, yaw: FACE_NZ }], seed);
       const [air, target] = sc.ids as [UnitId, UnitId];
-      expect(voidDistM(nav, { x: -4, y: 0, z: -9 })).toBeLessThan(5);
+      expect(voidDistM(nav, { x: 2.4, y: 0, z: -7.5 })).toBeLessThan(5);
       let fell = false;
       for (let t = 0; t < 600 && !fell; t++) {
         for (const e of tick(sc)) if (e.type === "fall" && e.target === target) fell = e.credit === air;
@@ -74,11 +75,11 @@ describe("element characters on the gallery", () => {
       if (fell) ok++;
     }
     report(`gust ring-outs ${ok}/3`);
-    expect(ok).toBeGreaterThanOrEqual(1);
+    expect(ok).toBeGreaterThanOrEqual(2);
   }, LONG);
 
-  // открыто: первый столб ложится в ~3 м перед ботом, а не под цель (луч прицела на земле) — разобрать
-  it.skip("Earth puts a pillar under a mage standing 15 m away", () => {
+  // столб ложился под самого бота: в бою он отступал за укрытие и жал Q в стену перед собой — теперь ждёт точку у цели
+  it("Earth puts a pillar under a mage standing 15 m away", () => {
     const sc = scene([{ element: "earth", at: { x: 8, y: 0, z: -10 }, yaw: Math.PI / 2, bot: "mage" }, { element: "fire", at: { x: -7, y: 0, z: -10 } }]);
     let pillarAt: Vec3 | null = null;
     for (let t = 0; t < 600 && !pillarAt; t++) {
