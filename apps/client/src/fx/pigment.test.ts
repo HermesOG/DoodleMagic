@@ -5,9 +5,11 @@ import { INK, INK_STYLE, PAPER, luminance, saturation, type RGB } from "../rende
 import { createFireWallMeshes, fireWallSheet } from "./fireWalls";
 import { FX_COMMON, GLAZE, GLAZE_TINT, glazeAlpha, glazeOver } from "./fxShader";
 import { BURN_ALPHA, createGlowMeshes, cullGlows } from "./glows";
-import { AIR_STROKE_ALPHA, FX_COLOR, KIND, RIM, markSide, particle, sideOf } from "./particleKit";
-import { FLAG, createParticlePool, packGravity, unpackGravity } from "./particles";
-import { BURN_SMOKE_S, burnSmoke, burstParticles } from "./presets";
+import type { ElementVfxFrame } from "./elementVfx";
+import { AIR_STROKE_ALPHA, FX_COLOR, INK_STROKE_ALPHA, KIND, RIM, markSide, particle, sideOf, type ParticleSpec } from "./particleKit";
+import { CLEAR_DEG, FLAG, createParticlePool, packGravity, unpackGravity } from "./particles";
+import { BREATH_PALM_RATE, BURN_SMOKE_S, BURST_SHARE, INK_STRIKE, breathPalmTongue, burnSmoke, burstParticles, inkStrike } from "./presets";
+import { OWN_BREATH, createUltVfx } from "./ultVfx";
 import { burnEdge, createVfx } from "./vfx";
 
 /*
@@ -232,5 +234,116 @@ describe("V5: burning along the contour, warm halo", () => {
     cam.updateMatrixWorld();
     expect(cullGlows([{ pos: V(0, 0, -6), color: FX_COLOR.fire, halo: 0, light: 0, intensity: 1, core: 0, rim: 1.6 }], cam).length).toBe(1);
     vfx.dispose();
+  });
+});
+
+describe("V4: my own dragon breath from inside", () => {
+  const ultFrame = (s: MatchState, tick: number, nowS: number, sink: ParticleSpec[]): ElementVfxFrame => {
+    const units = s.units.map((u) => ({ id: u.id, pos: u.move.body.pos, u }));
+    const camera = new PerspectiveCamera(70, 16 / 9, 0.05, 200);
+    camera.position.set(0, 1.6, 0);
+    camera.updateMatrixWorld();
+    return {
+      prev: s, cur: s, alpha: 1, tick, nowS, dt: 1 / 60, camera, eye: V(0, 1.6, 0), localId: ME, units, mages: [],
+      palmWorld: () => V(0, 1.35, -0.6), emit: (specs) => sink.push(...specs), glow: () => {}, decal: () => {},
+    };
+  };
+  const breathingMe = (): MatchState => {
+    const u = createMageUnit(ME, "fire", { pos: V(), yaw: 0 });
+    u.mage!.ult.cast = { ability: "dragonBreath", startTick: 100, releaseTick: 136, endTick: 316, zone: NOBODY };
+    return createMatchState([u]);
+  };
+
+  it("streams 120/s in a ring 6–15° off the look, crosshair-clear, bigger (1.4–2 m), unthinned by the preset share", () => {
+    for (const preset of ["high", "low"] as const) {
+      const vfx = createUltVfx({ gbuffer: gbuffer as never, time: { value: 0 } });
+      vfx.setPreset?.(preset);
+      const s = breathingMe();
+      const sink: ParticleSpec[] = [];
+      for (let i = 0; i < 60; i++) vfx.sync(ultFrame(s, 160 + i, 3 + i / 60, sink));
+      // эффектник кладёт в общий пул столько, чтобы после доли пресета осталось 120/с
+      expect(Math.round(sink.length * BURST_SHARE[preset])).toBeGreaterThan(OWN_BREATH.rate - 4);
+      expect(Math.round(sink.length * BURST_SHARE[preset])).toBeLessThanOrEqual(OWN_BREATH.rate + 1);
+      const k = preset === "low" ? OWN_BREATH.lowSize : 1;
+      for (const p of sink) {
+        const v = Math.hypot(p.vel.x, p.vel.y, p.vel.z);
+        const deg = (Math.acos(Math.min(1, -p.vel.z / v)) * 180) / Math.PI;
+        expect(deg >= 6 - 1e-6 && deg <= 15 + 1e-6, `${deg}`).toBe(true);
+        expect([p.own, p.clear, p.foe]).toEqual([true, true, undefined]);
+      }
+      const flames = sink.filter((p) => p.alpha > 0);
+      expect(flames.every((p) => p.size1 >= 1.4 * k - 1e-9 && p.size1 <= 2 * k + 1e-9)).toBe(true);
+      vfx.dispose();
+    }
+  });
+
+  it("my sheet is denser (0.55), starts 0.3 m from the palms and keeps the 6° centre clear", () => {
+    const vfx = createUltVfx({ gbuffer: gbuffer as never, time: { value: 0 } });
+    const m = (vfx.light as unknown as { material: { defines: Record<string, string>; fragmentShader: string } }).material;
+    expect([m.defines.OWN_ALPHA, m.defines.OWN_FROM]).toEqual(["0.55", "0.3"]);
+    expect(Number(m.defines.CLEAR_TAN0)).toBeCloseTo(Math.tan((CLEAR_DEG[0] * Math.PI) / 180), 9);
+    expect(CLEAR_DEG[0]).toBeLessThanOrEqual(6);
+    expect(m.fragmentShader).toContain("smoothstep(CLEAR_TAN0, CLEAR_TAN1, length(vView.xy) / max(-vView.z, 1e-3))");
+    const pool = createParticlePool({ name: "t", maxCap: 4, cap: 4, gbuffer, time }).mesh.material;
+    expect(pool.fragmentShader).toContain("(flags & FLAG_CLEAR) != 0");
+    vfx.dispose();
+  });
+
+  it("tongues leave both palms for the lower corners of the frame, 0.08 → 0.3 m, 40/s, × 0.7 on low", () => {
+    expect(BREATH_PALM_RATE).toBe(40);
+    const r = rng(3);
+    for (const side of [1, -1] as const) {
+      for (let i = 0; i < 40; i++) {
+        const p = breathPalmTongue(V(0.26 * side, -0.25, -0.62), side, 1, r);
+        expect(Math.sign(p.vel.x)).toBe(side);
+        expect(p.vel.y).toBeLessThan(0);
+        expect(p.size0 >= 0.07 && p.size0 <= 0.09 && p.size1 >= 0.26 && p.size1 <= 0.32 && p.alpha > 0 && p.own).toBe(true);
+      }
+    }
+    expect(breathPalmTongue(V(), 1, OWN_BREATH.lowSize, () => 0.5).size1).toBeCloseTo(0.29 * 0.7, 9);
+  });
+});
+
+describe("V7: ink strike on a hit", () => {
+  it("medium — 4 strokes 0.6 m for 0.1 s, large — 6 strokes 1.1 m for 0.14 s, a flash of the element in the centre; ≤ 12", () => {
+    const at = V(0, 1.2, -8);
+    const eye = V(0, 1.6, 0);
+    for (const tier of ["medium", "large"] as const) {
+      const out = inkStrike(at, eye, tier, "water", rng());
+      const s = INK_STRIKE[tier];
+      expect(out.length).toBeLessThanOrEqual(12);
+      const strokes = out.filter((p) => p.stroke);
+      expect(strokes.length).toBe(s.strokes);
+      for (const p of strokes) {
+        expect([p.color, p.alpha, p.life]).toEqual([expect.anything(), INK_STROKE_ALPHA, s.lifeS]);
+        expect(luminance(p.color)).toBeLessThan(0.15);
+        expect(p.size1).toBeGreaterThanOrEqual(s.lenM * 0.8 - 1e-9);
+        expect(p.size1).toBeLessThanOrEqual(s.lenM * 1.2 + 1e-9);
+        // по экрану: поперёк взгляда, перед телом
+        const v = Math.hypot(p.vel.x, p.vel.y, p.vel.z);
+        expect(Math.abs(p.vel.z) / v).toBeLessThan(0.1);
+        expect(p.pos.z).toBeGreaterThan(at.z);
+      }
+      const flash = out.filter((p) => !p.stroke);
+      expect(flash.length).toBe(s.flashes);
+      expect(flash.every((p) => p.alpha === 0 && p.color === FX_COLOR.water)).toBe(true);
+    }
+    expect(inkStrike(at, eye, "medium", "earth", rng()).find((p) => !p.stroke)!.color).toBe(FX_COLOR.jade);
+  });
+
+  it("vfx puts the strokes into the pool for my medium and large hits, not for a small one", () => {
+    const strokes = (amount: number) => {
+      const { vfx, mesh, sync } = harness();
+      const s = createMatchState([createMageUnit(ME, "fire", { pos: V(), yaw: 0 }), createMageUnit(OTHER, "earth", { pos: V(0, 0, -8), yaw: Math.PI })]);
+      sync(s, 1);
+      vfx.apply({ kind: "number", target: OTHER, amount: 20, pos: V(0, 1.2, -7.7), dot: false, air: false }, 1.01, "right");
+      vfx.apply({ kind: "flash", target: OTHER }, 1.01, "right");
+      vfx.apply({ kind: "flinch", target: OTHER, dir: V(0, 0, -1), amount }, 1.01, "right");
+      const pool = mesh("fx-particles");
+      const n = Array.from({ length: 64 }, (_, i) => flagsOf(pool, i)).filter((f) => (f & FLAG.stroke) !== 0).length;
+      vfx.dispose();
+      return n;
+    };
+    expect([strokes(0.1), strokes(0.2), strokes(0.8)]).toEqual([0, INK_STRIKE.medium.strokes, INK_STRIKE.large.strokes]);
   });
 });

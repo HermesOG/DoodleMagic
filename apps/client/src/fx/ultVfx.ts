@@ -8,7 +8,10 @@ import { INK } from "../render/palette";
 import { glslFloat } from "../render/stylePass";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
 import { FX_ORDER, createFxMaterial } from "./fxShader";
-import { FX_COLOR, RIM, particle, randomCone, type ParticleSpec, type Rng } from "./particleKit";
+import { FX_COLOR, RIM, particle, randomCone, randomRing, type ParticleSpec, type Rng } from "./particleKit";
+import { CLEAR_DEG } from "./particles";
+import { BURST_SHARE } from "./presets";
+import type { PresetId } from "../render/quality";
 
 /*
  * Ульты Огня и Земли (фаза 5) поверх общих пулов эффектника:
@@ -29,6 +32,12 @@ const BREATH_HALF = (DB.halfAngleDeg * Math.PI) / 180;
 const BREATH_TAN = Math.tan(BREATH_HALF);
 /** Частиц потока в секунду на мага. */
 export const BREATH_RATE = 90;
+/**
+ * Своё Дыхание изнутри (V4): поток гуще (120/с, доля пресета его не прореживает) и крупнее к концу (1,4–2 м), рождается
+ * в кольце 6–15° от оси взгляда — центр у прицела чист; лист плотнее (α 0,55) и начинается с 0,3 м. На «Низком» —
+ * размер × 0,7 (перерисовка у камеры).
+ */
+export const OWN_BREATH = { rate: 120, ringDeg: [6, 15], size1: [1.4, 2], sheetAlpha: 0.55, sheetFromM: 0.3, lowSize: 0.7 } as const;
 /** Свет огня потока, м. */
 export const BREATH_LIGHT_M = 7.5;
 /** Конус дорастает до 12 м за столько секунд выдоха и гаснет за столько до конца потока. */
@@ -58,6 +67,31 @@ const part = particle;
 export function breathParticle(apex: Vec3, dir: Vec3, len: number, rng: Rng): ParticleSpec {
   const s0 = rng() * 1.2;
   const u = randomCone(dir, BREATH_HALF * 0.85, rng);
+  return breathFrom(apex, dir, u, s0, len, rng);
+}
+
+/**
+ * Своя частица потока (V4): летит в кольце 6–15° от оси взгляда, крупнее к концу; у прицела — чисто (флаг clear),
+ * size — множитель пресета (на «Низком» 0,7).
+ */
+export function ownBreathParticle(apex: Vec3, dir: Vec3, len: number, size: number, rng: Rng): ParticleSpec {
+  const s0 = 0.3 + rng() * 0.9;
+  const a0 = (OWN_BREATH.ringDeg[0] * Math.PI) / 180;
+  const a1 = (OWN_BREATH.ringDeg[1] * Math.PI) / 180;
+  const u = randomRing(dir, a0, a1, rng);
+  const p = breathFrom(apex, dir, u, s0, len, rng);
+  const big = OWN_BREATH.size1[0] + rng() * (OWN_BREATH.size1[1] - OWN_BREATH.size1[0]);
+  // пламя — до 1,4–2 м, свет — на треть меньше, угли — как были
+  if (p.alpha > 0) p.size1 = big;
+  else if (p.size1 > 0.1) p.size1 = big * 0.7;
+  p.size0 *= size;
+  p.size1 *= size;
+  p.own = true;
+  p.clear = true;
+  return p;
+}
+
+function breathFrom(apex: Vec3, dir: Vec3, u: Vec3, s0: number, len: number, rng: Rng): ParticleSpec {
   const speed = 14 + rng() * 5;
   const life = Math.max(0.12, ((Math.max(len, 1.5) - s0) / speed) * (0.75 + 0.25 * rng()));
   const pos = { x: apex.x + dir.x * s0, y: apex.y + dir.y * s0, z: apex.z + dir.z * s0 };
@@ -126,6 +160,7 @@ attribute vec4 aB1; // ось (x, y, z), длина, м
 attribute vec4 aB2; // плотность (гаснет к концу потока), свой (1), чужой (1), 0
 varying vec3 vRel;
 varying vec4 vInfo;
+varying vec3 vView;
 void main() {
   vec3 ax = normalize(aB1.xyz);
   vec3 ref = abs(ax.y) > 0.95 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
@@ -138,7 +173,9 @@ void main() {
   vec3 w = aB0.xyz + ax * d + sx * c.x + sy * c.y;
   vRel = vec3(c, d);
   vInfo = vec4(len, aB2.x, aB0.w, aB2.y + 2.0 * aB2.z);
-  gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
+  vec4 mv = viewMatrix * vec4(w, 1.0);
+  vView = mv.xyz;
+  gl_Position = projectionMatrix * mv;
 }
 `;
 
@@ -152,6 +189,7 @@ uniform vec3 uRimOwn;
 uniform vec3 uRimFoe;
 varying vec3 vRel;
 varying vec4 vInfo;
+varying vec3 vView;
 void main() {
   float vis = fxVisibility(0.3);
   if (vis <= 0.0) discard;
@@ -167,7 +205,8 @@ void main() {
   float n2 = fxNoise(vec2(vRel.y * 1.6 - vRel.x * 0.5 - seed, d * 1.1 - t * 7.0));
   float flame = 0.62 + (n - 0.5) * 1.3 + (n2 - 0.5) * 0.5 - a01 * 0.45;
   float tip = 1.0 - smoothstep(0.7, 1.0, d / len + (n2 - 0.5) * 0.25);
-  float root = own ? smoothstep(0.06, 0.2, a01) : smoothstep(0.0, 0.05, a01);
+  // свой лист — с 0,3 м от ладоней, центр кадра у прицела чист (V4)
+  float root = own ? smoothstep(OWN_FROM, OWN_FROM + 0.6, d) * smoothstep(CLEAR_TAN0, CLEAR_TAN1, length(vView.xy) / max(-vView.z, 1e-3)) : smoothstep(0.0, 0.05, a01);
   float body = tip * root * fade;
   float dens = smoothstep(0.1, 0.45, flame) * body;
   // кайма по краю языков: чужая — шум втрое чаще и тёмная тушь, своя — гладкая оранжевая
@@ -181,7 +220,7 @@ void main() {
   vec3 col = mix(uEmber, uShade, smoothstep(0.0, 0.18, heat));
   col = mix(col, uFire, smoothstep(0.18, 0.5, heat));
   col = mix(col, uCore, smoothstep(0.62, 1.0, heat));
-  float a = dens * (own ? 0.35 : 0.6) * fxDense(vis);
+  float a = dens * (own ? OWN_ALPHA : 0.6) * fxDense(vis);
   vec3 glow = col * heat * 0.55 * dens * vis;
   float ra = rim * fxDense(vis);
   vec3 rc = foe ? uRimFoe : uRimOwn;
@@ -210,7 +249,16 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
     vertexShader: BREATH_VERT,
     fragmentShader: BREATH_FRAG,
     gbuffer,
-    defines: { BREATH_TAN: glslFloat(BREATH_TAN), BREATH_LEN: glslFloat(BREATH_LEN_M), RIM_OWN_A: glslFloat(RIM.own.alpha), RIM_FOE_A: glslFloat(RIM.foe.alpha) },
+    defines: {
+      BREATH_TAN: glslFloat(BREATH_TAN),
+      BREATH_LEN: glslFloat(BREATH_LEN_M),
+      RIM_OWN_A: glslFloat(RIM.own.alpha),
+      RIM_FOE_A: glslFloat(RIM.foe.alpha),
+      OWN_ALPHA: glslFloat(OWN_BREATH.sheetAlpha),
+      OWN_FROM: glslFloat(OWN_BREATH.sheetFromM),
+      CLEAR_TAN0: glslFloat(Math.tan((CLEAR_DEG[0] * Math.PI) / 180)),
+      CLEAR_TAN1: glslFloat(Math.tan((CLEAR_DEG[1] * Math.PI) / 180)),
+    },
     uniforms: {
       uTime: time,
       uFire: { value: new Vector3(...FX_COLOR.fire) },
@@ -238,6 +286,8 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
   spikes.visible = false;
 
   const rng: Rng = Math.random;
+  /** Пресет: своё Дыхание не прореживается долей пресета (темп делится на неё заранее), на «Низком» — меньше. */
+  let preset: PresetId = "high";
   // покадровое — одно на эффектник: кадр переписывает, а не создаёт
   const apex = new Vector3();
   const axis = new Vector3();
@@ -323,14 +373,14 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
       b1.setXYZW(n, axis.x, axis.y, axis.z, len);
       b2.setXYZW(n, fade, own ? 1 : 0, foe ? 1 : 0, 0);
       n++;
-      // частицы огня по конусу ≤ 90/с
-      const m = due(flowAcc, it.id, BREATH_RATE, f.dt);
+      // частицы огня по конусу ≤ 90/с; своё — 120/с в кольце у прицела (V4)
+      const m = due(flowAcc, it.id, own ? OWN_BREATH.rate / BURST_SHARE[preset] : BREATH_RATE, f.dt);
       if (m > 0) {
         specs.length = 0;
+        const size = preset === "low" ? OWN_BREATH.lowSize : 1;
         for (let i = 0; i < m; i++) {
-          const p = breathParticle(apex, axis, len, rng);
-          if (own) p.own = true;
-          else if (foe) p.foe = true;
+          const p = own ? ownBreathParticle(apex, axis, len, size, rng) : breathParticle(apex, axis, len, rng);
+          if (foe) p.foe = true;
           specs.push(p);
         }
         f.emit(specs);
@@ -410,6 +460,7 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
       drawRifts(f);
     },
     setPreset(p) {
+      preset = p;
       // «Низкое» и «Среднее»: шум пламени в две октавы (FX_CHEAP), как у стены огня
       const cheap = p !== "high";
       if (("FX_CHEAP" in coneMat.defines) === cheap) return;

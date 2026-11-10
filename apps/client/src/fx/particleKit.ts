@@ -169,9 +169,15 @@ export function randomUnit(rng: Rng): Vec3 {
 
 /** Направление в конусе вокруг d с полууглом a (равномерно по телесному углу). */
 export function randomCone(d: Vec3, a: number, rng: Rng): Vec3 {
+  return randomRing(d, 0, a, rng);
+}
+
+/** Направление в кольце между углами a0 и a1 от оси d (равномерно по телесному углу). */
+export function randomRing(d: Vec3, a0: number, a1: number, rng: Rng): Vec3 {
   const t = normalizeOr(Math.abs(d.y) < 0.9 ? { x: d.z, y: 0, z: -d.x } : { x: 0, y: -d.z, z: d.y }, { x: 1, y: 0, z: 0 });
   const b = { x: d.y * t.z - d.z * t.y, y: d.z * t.x - d.x * t.z, z: d.x * t.y - d.y * t.x };
-  const cosT = 1 - rng() * (1 - Math.cos(a));
+  const c0 = Math.cos(a0);
+  const cosT = c0 - rng() * (c0 - Math.cos(a1));
   const sinT = Math.sqrt(Math.max(0, 1 - cosT * cosT));
   const phi = 2 * Math.PI * rng();
   const c = Math.cos(phi) * sinT;

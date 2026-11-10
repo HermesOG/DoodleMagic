@@ -1,7 +1,7 @@
 import { Group, Scene, Vector3, type PerspectiveCamera } from "three";
 import { EARTH, ELEMENT_INFO, NOBODY, TICK_HZ, statusFlags, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
 import type { BurstPreset, Effect, FeelTier } from "../feel/effects";
-import { TIERS } from "../feel/eventMap";
+import { TIERS, breathStreaming } from "../feel/eventMap";
 import { stepSpring, type Spring } from "../hands/spring";
 import type { PresetId } from "../render/quality";
 import { HANDS_FOV, WORLD_FOV, type FxLayers, type StyleRenderer } from "../render/styleRenderer";
@@ -18,12 +18,12 @@ import { createParticlePool } from "./particles";
 import { createPickupVfx } from "./pickupVfx";
 import { markSide, sideOf } from "./particleKit";
 import {
-  BURN_SMOKE_S, BURST_SHARE, FX_COLOR, IDLE_PALM_RATE, KNOCK_DUST_RATE, MAGIC_LIGHTS, PEBBLE_RATE, burnSmoke, burstParticles, idlePalmParticle, knockDust, lineFlames,
-  palmParticles, pebbleParticle, poolCaps, thinParticles, trailParticles, type ParticleSpec,
+  BREATH_PALM_RATE, BURN_SMOKE_S, BURST_SHARE, FX_COLOR, IDLE_PALM_RATE, KNOCK_DUST_RATE, MAGIC_LIGHTS, PEBBLE_RATE, breathPalmTongue, burnSmoke, burstParticles,
+  idlePalmParticle, inkStrike, knockDust, lineFlames, palmParticles, pebbleParticle, poolCaps, thinParticles, trailParticles, type ParticleSpec,
 } from "./presets";
 import { PROJECTILE_LOOK, createProjectileMeshes, type ProjectileDraw } from "./projectileMeshes";
 import { createTerrainMeshes, createVeinMeshes, terrainVisualBox, veinFaces, type VeinFace } from "./terrainMeshes";
-import { createUltVfx } from "./ultVfx";
+import { OWN_BREATH, createUltVfx } from "./ultVfx";
 
 /** Что видит эффектник за кадр. Ладони — в пространстве камеры рук (как их ставят руки). */
 export interface VfxView {
@@ -275,6 +275,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     if (epoch === null) epoch = nowS;
     return nowS - epoch;
   };
+  let presetNow = preset;
   let caps = poolCaps(preset);
   let lights = MAGIC_LIGHTS[preset];
   let share = BURST_SHARE[preset];
@@ -328,6 +329,12 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   let localElement: Element | null = null;
   /** Стихия у своих ладоней (A5): накопители частиц и камешков, замах своего мага. */
   let localWindup = false;
+  /** Своё Дыхание идёт (V4): языки от ладоней к нижним углам кадра, накопитель и чья ладонь следующая. */
+  let localBreath = false;
+  let breathAcc = 0;
+  let breathSide: 1 | -1 = 1;
+  /** Точка последнего попадания по цели (событие number) — откуда бьёт удар тушью (V7). */
+  const hitAt = new Map<UnitId, { pos: Vec3; nowS: number }>();
   let idleAcc = 0;
   let pebbleAcc = 0;
   let lastNowS: number | null = null;
@@ -434,6 +441,10 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           lastPalmHand = hands[hands.length - 1]!;
           break;
         }
+        case "number": {
+          hitAt.set(e.target, { pos: { ...e.pos }, nowS });
+          break;
+        }
         case "flash": {
           const a = anim(e.target);
           a.flashAt = nowS;
@@ -447,7 +458,11 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             const h = hitFreeze(e.amount, localElement);
             a.flashUntil = Math.max(a.flashUntil, nowS + h.flashS);
             if (h.freezeS > 0) a.freezeUntil = Math.max(a.freezeUntil, nowS + h.freezeS);
+            // удар тушью (V7): средняя и крупная ступень — тёмные штрихи от точки попадания (≤ 12, мимо доли пресета)
+            const hp = hitAt.get(e.target);
+            if (h.tier !== "small" && hp && hp.nowS === nowS) worldPool.emit(inkStrike(hp.pos, eye, h.tier === "large" ? "large" : "medium", localElement, Math.random), t);
           }
+          hitAt.delete(e.target);
           const l = Math.hypot(e.dir.x, e.dir.z);
           const dx = l > 1e-6 ? e.dir.x / l : 0;
           const dz = l > 1e-6 ? e.dir.z / l : -1;
@@ -487,6 +502,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       for (const a of anims.values()) a.seen = false;
       localElement = null;
       localWindup = false;
+      localBreath = false;
       const unitsOf = (s: MatchState) => s.units.map((u) => ({ id: u.id, pos: u.move.body.pos, u }));
       const prevUnits = new Map<UnitId, Unit>();
       for (const u of v.prev.units) prevUnits.set(u.id, u);
@@ -504,6 +520,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         if (u.id === v.localId) {
           localElement = u.mage?.element ?? null;
           localWindup = !!u.mage?.windup;
+          const cast = u.mage?.ult.cast;
+          localBreath = !!cast && cast.ability === "dragonBreath" && breathStreaming(cast, tick);
         }
         // свой маг — руки от первого лица, его фигуры нет
         if (mage && (u.id === v.localId || mageViews.length >= MAX_MAGES)) continue;
@@ -663,6 +681,16 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           }
         }
       } else idleAcc = pebbleAcc = 0;
+      // своё Дыхание изнутри (V4): языки от ладоней к нижним углам кадра, попеременно с рук; на «Низком» — меньше
+      if (localBreath) {
+        breathAcc += dt * BREATH_PALM_RATE;
+        const size = presetNow === "low" ? OWN_BREATH.lowSize : 1;
+        while (breathAcc >= 1) {
+          breathAcc -= 1;
+          palmPool.emit([breathPalmTongue(breathSide > 0 ? palms.right : palms.left, breathSide, size, Math.random)], nowT);
+          breathSide = breathSide > 0 ? -1 : 1;
+        }
+      } else breathAcc = 0;
       const vh = viewportH();
       dummies.update(views, vh, WORLD_FOV);
       mages.update(mageViews, mageLineScale(vh, WORLD_FOV), { x: eye.x, y: eye.y, z: eye.z });
@@ -830,6 +858,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     },
 
     setPreset(p) {
+      presetNow = p;
       caps = poolCaps(p);
       lights = MAGIC_LIGHTS[p];
       share = BURST_SHARE[p];
