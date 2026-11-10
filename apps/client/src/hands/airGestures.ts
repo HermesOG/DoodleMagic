@@ -4,7 +4,19 @@ import { O, both, right, type GestureDef } from "./gestureKeys";
  * Жесты Воздуха (02-air, «Читается»). У обеих рук левая задана явно: x у неё зеркальный (вбок — наружу).
  * Последняя поза каждого жеста — покой.
  */
-export const AIR_GESTURES: Readonly<Record<"airSickle" | "gust" | "swoop" | "tornado", GestureDef>> = {
+/** Смерч: ладони вниз и вверх по кругу — вихрь поднимается следом. */
+const TORNADO: GestureDef = {
+  durS: 0.6,
+  hand: "both",
+  keys: [
+    both(0, O),
+    { t: 0.15, r: [0.1, -0.12, 0, -0.25], l: [-0.1, -0.12, 0, -0.25] },
+    { t: 0.35, r: [-0.06, 0.12, -0.05, 0.3], l: [0.06, 0.12, -0.05, 0.3] },
+    both(0.6, O),
+  ],
+};
+
+export const AIR_GESTURES: Readonly<Record<"airSickle" | "gust" | "swoop" | "tornado" | "hurricane", GestureDef>> = {
   // серп: руки по очереди, режущий взмах наискось — наружу и вверх, затем поперёк к центру
   airSickle: {
     durS: 0.3,
@@ -24,15 +36,7 @@ export const AIR_GESTURES: Readonly<Record<"airSickle" | "gust" | "swoop" | "tor
   },
   // Взмах: обе руки резко назад-вниз, ветер толкает вперёд
   swoop: { durS: 0.35, hand: "both", keys: [both(0, O), both(0.06, [0, -0.08, 0.12, 0.3]), both(0.35, O)] },
-  // Смерч: ладони вниз и вверх по кругу — вихрь поднимается следом
-  tornado: {
-    durS: 0.6,
-    hand: "both",
-    keys: [
-      both(0, O),
-      { t: 0.15, r: [0.1, -0.12, 0, -0.25], l: [-0.1, -0.12, 0, -0.25] },
-      { t: 0.35, r: [-0.06, 0.12, -0.05, 0.3], l: [0.06, 0.12, -0.05, 0.3] },
-      both(0.6, O),
-    ],
-  },
+  tornado: TORNADO,
+  // Ураган (ульта, фаза 5): заглушка — жест Смерча; свой даст задача 6
+  hurricane: TORNADO,
 };

@@ -58,11 +58,10 @@ const GESTURES: Readonly<Record<AbilityId, GestureDef>> = {
   // Воздух и Вода — своими таблицами (airGestures.ts, waterGestures.ts)
   ...AIR_GESTURES,
   ...WATER_GESTURES,
-  // ульты (фаза 5): заглушки — руки в покое; свои жесты дадут задачи 4–6
-  dragonBreath: { durS: 0.6, hand: "both", keys: [both(0, O), both(0.6, O)] },
-  tectonicRift: { durS: 0.8, hand: "both", keys: [both(0, O), both(0.8, O)] },
-  hurricane: { durS: 0.8, hand: "both", keys: [both(0, O), both(0.8, O)] },
-  tsunami: { durS: 0.8, hand: "both", keys: [both(0, O), both(0.8, O)] },
+  // ульты Огня и Земли (фаза 5): заглушки — копия жеста C своей стихии (Стена огня, Землетрясение); свои даст задача 5.
+  // Ураган и Цунами — в таблицах Воздуха и Воды
+  dragonBreath: { durS: 0.55, hand: "right", keys: [right(0, O), right(0.08, [0.1, 0, 0, 0]), right(0.3, [-0.25, 0, 0, -0.2]), right(0.55, O)] },
+  tectonicRift: { durS: 0.8, hand: "both", keys: [both(0, O), both(0.4, [0, 0.08, 0, 0.2]), both(0.46, [0, -0.18, 0, -0.35]), both(0.8, O)] },
 };
 
 /** Жест «кулака»: бьёт рукой очереди, и ладонь с hand "auto" вспыхивает на ней. */

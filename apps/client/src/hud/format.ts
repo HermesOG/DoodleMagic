@@ -1,4 +1,4 @@
-import { FIRE, MAGE_REGEN, slotCooldownTicks, type MageState, type Slot, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
+import { FIRE, MAGE_REGEN, ULT_CHARGE, slotCooldownTicks, type MageState, type Slot, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
 
 /** Цифра урона: целое, не меньше 1; воздушное попадание (+15 %, GDD 4.6) — со стрелкой вверх. */
 export function formatDamage(n: number, air: boolean): string {
@@ -63,6 +63,17 @@ const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.ma
 /** Сколько перезарядки слота осталось, 0…1 (now — тик): 1 — только что, 0 — готов. */
 export function cooldownFraction(m: MageState, slot: Slot, now: number): number {
   return clamp01((m.ready[slot] - now) / slotCooldownTicks(m.element, slot));
+}
+
+/** Доля заряда ульты 0…1 для кольца X. */
+export function ultFraction(m: MageState): number {
+  return clamp01(m.ult.charge / ULT_CHARGE.max);
+}
+
+/** Заряд ульты целым числом процентов 0…100, вниз: «100%» — только полная (73,4 → 73). */
+export function ultPercent(m: MageState): number {
+  const c = m.ult.charge;
+  return Number.isFinite(c) ? Math.floor(Math.min(ULT_CHARGE.max, Math.max(0, c))) : 0;
 }
 
 /** Жар Огня 0…1. */

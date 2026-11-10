@@ -117,6 +117,8 @@ export function eventKey(ev: MatchEvent): string {
       return `heal:${ev.source}:${ev.target}`;
     case "reaction":
       return `reaction:${ev.owner}:${ev.kind}`;
+    case "ult":
+      return `ult:${ev.unit}:${ev.ability}:${ev.phase}`;
     default:
       return String((ev as { type: unknown }).type); // чужая версия хоста: вид без подробностей
   }
@@ -143,7 +145,7 @@ function lookInputs(s: SnapshotMsg, localId: UnitId, still = false): Partial<Rec
   const out: Partial<Record<UnitId, MatchInput>> = {};
   for (const [id, moveX, moveZ, yaw, pitch, j] of s.looks) {
     if (id === localId) continue;
-    out[id] = { moveX: still ? 0 : moveX, moveZ: still ? 0 : moveZ, yaw, pitch, jump: j === 1, primary: false, q: false, e: false, c: false };
+    out[id] = { moveX: still ? 0 : moveX, moveZ: still ? 0 : moveZ, yaw, pitch, jump: j === 1, primary: false, q: false, e: false, c: false, x: false };
   }
   return out;
 }

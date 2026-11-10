@@ -16,7 +16,8 @@ export function mountSandbox(root: HTMLElement): void {
   const element = loadPrefs().element;
   const variant = new URLSearchParams(location.search).get("arena") === "compact" ? "compact" : "full";
   const arena = buildGallery(variant);
-  const ctx = matchContext(arena);
+  // заряд ульты на полигоне копится ×10 (Р12 фазы 5): иначе ульту не проверить за минуту
+  const ctx = { ...matchContext(arena), ultChargeMul: 10 };
   const match = createMatch({ mages: [{ element, spawn: TRAINING.spawn }], dummies: [...TRAINING.dummies] });
   const driver = createSoloDriver(ctx, match, LOCAL);
   const view = mountGameView({ root, arena, ctx, driver, element, selectOnStart: true });

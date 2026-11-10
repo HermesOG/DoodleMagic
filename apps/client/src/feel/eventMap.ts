@@ -4,6 +4,7 @@ import {
   ELEMENT_OF,
   NOBODY,
   forwardXZ,
+  isUlt,
   rightXZ,
   unitById,
   type AbilityId,
@@ -44,10 +45,11 @@ export const TIERS: Readonly<Record<FeelTier, { trauma: number; kickDeg: number;
   medium: { trauma: 0.5, kickDeg: 1.25, hitstopMs: 60, confirm: "hitHeavy" },
   large: { trauma: 0.8, kickDeg: 2, hitstopMs: 90, confirm: null }, // убийство звучит «kill» из события death
 };
-/** Ступень попадания: урон по времени — нет; ЛКМ — малая; остальное — средняя; убийство — крупная. */
+/** Ступень попадания: урон по времени — нет; ЛКМ — малая; остальное — средняя; убийство и ульта — крупная. */
 export function hitTier(ev: Pick<Extract<MatchEvent, { type: "hit" }>, "ability" | "dot" | "killed">): FeelTier {
   if (ev.killed) return "large";
   if (ev.dot || ev.ability === "jetDash" || ev.ability === "burning") return "none";
+  if (isUlt(ev.ability)) return "large";
   return isPrimary(ev.ability) ? "small" : "medium";
 }
 /**
@@ -81,6 +83,8 @@ const CAST_SOUND: Readonly<Record<AbilityId, SoundId>> = {
   stoneShot: "stoneCast", stonePillar: "pillarTelegraph", stoneWall: "wallRise", earthquake: "quakeWindup",
   airSickle: "sickleThrow", gust: "gustWindup", swoop: "swoop", tornado: "tornadoRise",
   waterWhip: "whipCrack", waterGrab: "grabWindup", waterWard: "wardUp", spring: "springSpread",
+  // ульты (фаза 5): заглушки — звук каста C своей стихии; свои дадут задачи 5–6
+  dragonBreath: "fireWallTelegraph", tectonicRift: "quakeWindup", hurricane: "tornadoCast", tsunami: "springSpread",
 };
 /**
  * Отдача камеры у кастующего на нажатии, градусы: ЛКМ (кулаки, камень, серп, хлыст) 0,2° (у камня ещё 0,6° на броске,
@@ -96,6 +100,8 @@ const HIT_SOUND: Readonly<Record<DamageSource, SoundId>> = {
   stoneShot: "stoneImpact", stonePillar: "pillarStrike", stoneWall: "terrainHit", earthquake: "quakeStrike",
   airSickle: "sickleHit", gust: "airBlown", swoop: "airBlown", tornado: "airBlown",
   waterWhip: "whipHit", waterGrab: "grabHit", waterWard: "answerHit", spring: "springBubble",
+  // ульты (фаза 5): заглушки — удар C своей стихии
+  dragonBreath: "fireWallIgnite", tectonicRift: "quakeStrike", hurricane: "airBlown", tsunami: "springBubble",
 };
 /** Выпуск снаряда или удара в конце замаха (A1): звук у меня у уха, у чужого — там, где он бросил. */
 const RELEASE_SOUND: Readonly<Partial<Record<AbilityId, SoundId>>> = {
@@ -240,9 +246,16 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
  * Событие матча → эффекты ощущения (round1/03, round2/03, GDD 5). Чистая функция: частицы, звук, камера, руки
  * и HUD исполняют результат сами. Мой каст отзывается на кадре нажатия; в эффектах каста gesture всегда раньше
  * palm — по нему интеграция узнаёт, какой рукой бьёт кулак. Чужой каст слышно там, где он кастует; чужой рывок —
- * пламя за его спиной, без моей камеры.
+ * пламя за его спиной, без моей камеры. Чужая ульта (каст X) — ещё и гул ultWarn без позиции, на всю карту.
  */
 export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
+  const fx = mapEvent(ev, view);
+  // чужая ульта слышна на всю карту (GDD 2.2, Р5) — гул до эффектов стихии, они его не отменят; свою оформляет стихия
+  return ev.type === "cast" && ev.slot === "x" && ev.unit !== view.localId ? [sound("ultWarn"), ...fx] : fx;
+}
+
+/** Событие → эффекты: сначала файл своей стихии (Воздух, Вода), потом общая карта. */
+function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
   const me = unitById(view.state, view.localId);
   // событие своей стихии (Воздух, Вода) — её файл; null — общая карта
   const own = elementEffects(ev, view, me);
@@ -345,6 +358,9 @@ export function effectsFor(ev: MatchEvent, view: EventView): Effect[] {
     case "status":
       // статусы HUD и частицы читают из состояния
       return [];
+    case "ult":
+      // заряд полон: своему — щелчки «готово», ячейку X толкает HUD по заряду; выпуск, конец и чужое — дело стихий
+      return ev.phase === "ready" && mine(ev.unit) ? [sound("ultReady")] : [];
     // события фазы 4 без общего отклика: их рисуют файлы стихий (elementEffects)
     case "beam":
     case "blown":

@@ -210,6 +210,15 @@ export const RECIPES: Record<SoundId, Recipe> = {
       tone("triangle", f, f * 1.01, i === 3 ? 0.4 : 0.35, 0.22, { delay: i * 0.05, attack: 0.006 }),
     ),
   },
+  // ульта (фаза 5), заглушки — финал даст задача 5. Чужая ульта: низкий гул 120 → 60 Гц, 0,6 с, на всю карту
+  ultWarn: {
+    reverb: REVERB_SEND.large,
+    layers: [tone("sine", 120, 60, 0.6, 0.8, { attack: 0.08, drive: 1.5 }), tone("triangle", 240, 120, 0.6, 0.2, { attack: 0.1 })],
+  },
+  // свой заряд полон: два щелчка 1,5 кГц за 0,2 с
+  ultReady: {
+    layers: [tone("sine", 1500, 1500, 0.05, 0.5, { attack: 0.001 }), tone("sine", 1500, 1500, 0.06, 0.5, { delay: 0.14, attack: 0.001 })],
+  },
 
   // ── Движение (M2): тихо, коротко, без подписи стихии ──
   // шаг — шум bandpass 700 → 250 Гц, 45 мс
@@ -261,6 +270,8 @@ export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
   fall: null,
   fizzle: null,
   courage: null,
+  ultWarn: null,
+  ultReady: null,
   step: null,
   jump: null,
   land: null,

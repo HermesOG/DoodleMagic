@@ -4,7 +4,19 @@ import { O, both, right, type GestureDef } from "./gestureKeys";
  * Жесты Воды — плавные, по дуге (03-water, «Читается»): не тычок, а круг кистью. Последняя поза каждого — покой.
  * Наклон кисти: замах к себе (> 0), удар верхом вперёд (< 0), как у соседних таблиц.
  */
-export const WATER_GESTURES: Readonly<Record<"waterWhip" | "waterGrab" | "waterWard" | "spring", GestureDef>> = {
+/** Родник: ладони поднимаются и разводят воду по кругу вниз и в стороны. */
+const SPRING: GestureDef = {
+  durS: 0.7,
+  hand: "both",
+  keys: [
+    both(0, O),
+    { t: 0.15, r: [0.05, 0.05, -0.05, 0.25], l: [-0.05, 0.05, -0.05, 0.25] },
+    { t: 0.34, r: [0.12, -0.12, -0.08, -0.35], l: [-0.12, -0.12, -0.08, -0.35] },
+    both(0.7, O),
+  ],
+};
+
+export const WATER_GESTURES: Readonly<Record<"waterWhip" | "waterGrab" | "waterWard" | "spring" | "tsunami", GestureDef>> = {
   // хлыст: правая уходит вверх-вправо за 0,12 с (замах) и хлещет по дуге вниз-влево
   waterWhip: {
     durS: 0.4,
@@ -29,15 +41,7 @@ export const WATER_GESTURES: Readonly<Record<"waterWhip" | "waterGrab" | "waterW
       both(1.15, O),
     ],
   },
-  // Родник: ладони поднимаются и разводят воду по кругу вниз и в стороны
-  spring: {
-    durS: 0.7,
-    hand: "both",
-    keys: [
-      both(0, O),
-      { t: 0.15, r: [0.05, 0.05, -0.05, 0.25], l: [-0.05, 0.05, -0.05, 0.25] },
-      { t: 0.34, r: [0.12, -0.12, -0.08, -0.35], l: [-0.12, -0.12, -0.08, -0.35] },
-      both(0.7, O),
-    ],
-  },
+  spring: SPRING,
+  // Цунами (ульта, фаза 5): заглушка — жест Родника; свой даст задача 6
+  tsunami: SPRING,
 };

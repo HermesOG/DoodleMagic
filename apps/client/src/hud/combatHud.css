@@ -359,25 +359,43 @@
   opacity: 0;
   will-change: transform, opacity;
 }
-.ch-cell.is-soon {
-  opacity: 0.55;
-}
-.ch-cell.is-soon .ghost {
-  stroke-dasharray: 3 5;
-}
-.ch-cell.is-soon .enso {
-  display: none;
-}
-.ch-soon {
+/* X — ульта: заряд в процентах ярлычком на нижнем краю кольца, имя под ним стоит вровень с соседями */
+.ch-pct {
   position: absolute;
-  top: -6px;
-  right: 2px;
-  padding: 1px 5px 2px;
+  top: 45px;
+  left: 50%;
+  padding: 0 4px;
   border-radius: 3px;
-  background: var(--ch-muted);
-  color: var(--ch-paper);
-  font: 700 10px/1.2 var(--ch-ui);
-  transform: rotate(6deg);
+  background: var(--ch-paper-wash);
+  color: var(--ch-muted);
+  font: 700 10px/1.25 var(--ch-ui);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+/* полная: кольцо цветом стихии толще, буква и проценты — тушью стихии; кольцо медленно дышит (1,2 с) */
+.ch-cell.is-ult-ready .enso {
+  stroke-width: 5.5;
+}
+.ch-cell.is-ult-ready .seat {
+  fill: var(--ch-paper);
+}
+.ch-cell.is-ult-ready .ch-glyph,
+.ch-cell.is-ult-ready .ch-pct {
+  color: var(--ch-el, var(--ch-ink));
+}
+.ch-cell.is-ult-ready svg {
+  transform-origin: 28px 28px;
+  animation: ch-ult-pulse 1.2s ease-in-out infinite;
+}
+@keyframes ch-ult-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+/* идёт своя ульта: подложка ячейки — краской стихии */
+.ch-cell.is-active .seat {
+  fill: var(--ch-el, var(--ch-ink));
+  fill-opacity: 0.35;
 }
 
 /* ---------------------------------------------------------------- над манекенами */
@@ -601,5 +619,8 @@
   .ch-heat.is-hot .ch-heat-fill {
     animation: none;
     opacity: 0.6;
+  }
+  .ch-cell.is-ult-ready svg {
+    animation: none;
   }
 }

@@ -30,6 +30,8 @@ const STYLE: Readonly<Record<ZoneKind, DecalSpec["style"] | null>> = {
   tornado: "tornado", fireTornado: "fireTornado", sandTornado: "tornado", spring: "spring", steam: null,
   // «Топь» — круги Родника; у врага хозяина (и у самой Воды) — с вражеской кромкой
   bog: "spring",
+  // ульты (фаза 5): Разлом и волна Цунами рисуются своими мешами (задачи 5–6), не декалью
+  rift: null, tsunami: null,
 };
 /** Разовые зоны бьют ровно на armTick: после взвода декали нет, удар рисует всплеск. */
 const ONE_SHOT: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["pillar", "quake"]);

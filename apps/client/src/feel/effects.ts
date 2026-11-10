@@ -17,6 +17,8 @@ export const SOUND_IDS = [
   "fireFist", "fireballCharge", "fireballBoom", "dash", "fireWallTelegraph", "fireWallIgnite", "stoneCast", "stoneImpact", "pillarTelegraph", "pillarStrike",
   "wallRise", "quakeWindup", "quakeStrike", "terrainHit", "terrainBreak", "hitLight", "hitHeavy", "kill", "fall", "fizzle", "overheat", "courage",
   "fireballLaunch", "stoneThrow", "fistHit", "step", "jump", "land", "knockWhoosh",
+  // ульта (фаза 5): гул чужой ульты на всю карту и «заряд полон» — общие, без подписи стихии
+  "ultWarn", "ultReady",
   ...AIR_SOUND_IDS, ...WATER_SOUND_IDS,
 ] as const;
 export type SoundId = (typeof SOUND_IDS)[number];

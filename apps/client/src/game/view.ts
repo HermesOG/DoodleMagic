@@ -286,11 +286,6 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   });
   input.onLockError(() => hud.showLockRefused());
   input.onPress(KEYS.debug, () => hud.toggleDebug());
-  input.onPress(KEYS.ult, () => {
-    if (!input.locked) return;
-    const element = unitById(cur, driver.localId)?.mage?.element ?? prefs.element;
-    route({ kind: "toast", text: `${ELEMENT_INFO[element].ult} — скоро` }, performance.now() / 1000);
-  });
   hud.onPlay(play);
   hud.onChangeElement(openElementSelect);
   hud.onQuality((q) => {

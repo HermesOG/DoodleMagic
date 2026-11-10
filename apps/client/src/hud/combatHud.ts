@@ -18,7 +18,9 @@ import type { Effect, FeelTier } from "../feel/effects";
 import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
 import { KIT_WIDGETS, type KitWidget } from "./kitWidgets";
-import { NUMBER_LIFE_S, cooldownFraction, formatDamage, heatFraction, hpBar, mergeNumbers, numberAnim, type FloatingNumber } from "./format";
+import {
+  NUMBER_LIFE_S, cooldownFraction, formatDamage, heatFraction, hpBar, mergeNumbers, numberAnim, ultFraction, ultPercent, type FloatingNumber,
+} from "./format";
 
 /** Что HUD видит в кадре: два последних состояния и доля между ними, камера мира, часы и проверка видимости точки. */
 export interface HudView {
@@ -72,7 +74,7 @@ const HEAD_M = 1.75;
 const BAR_ABOVE_M = 0.45;
 /** У мага полоса — над шляпой. */
 const MAGE_BAR_M = MAGE_TOP_M + 0.15;
-const KEY_LABEL: Readonly<Record<Slot, string>> = { primary: "ЛКМ", q: "Q", e: "E", c: "C" };
+const KEY_LABEL: Readonly<Record<Slot, string>> = { primary: "ЛКМ", q: "Q", e: "E", c: "C", x: "X" };
 const ELEMENT_COLOR: Readonly<Record<Elem, string>> = { fire: "var(--ch-fire)", earth: "var(--ch-earth)", air: "var(--ch-air)", water: "var(--ch-water)" };
 const ENSO_R = 22;
 const ENSO_LEN = 2 * Math.PI * ENSO_R;
@@ -183,7 +185,9 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   const ensoSvg = `<svg viewBox="0 0 56 56" aria-hidden="true"><circle class="seat" cx="28" cy="28" r="${ENSO_R + 4}"/><circle class="ghost" cx="28" cy="28" r="${ENSO_R}"/><circle class="enso" cx="28" cy="28" r="${ENSO_R}" stroke-dasharray="${ENSO_LEN.toFixed(2)}"/></svg>`;
   const cells = {} as Record<Slot, Cell>;
   for (const slot of SLOTS) {
-    const c = div("ch-cell", `<div class="ch-flash"></div>${ensoSvg}<div class="ch-glyph"></div><div class="ch-name"></div>`);
+    // у X под кольцом — заряд ульты в процентах
+    const pct = slot === "x" ? `<div class="ch-pct"></div>` : "";
+    const c = div("ch-cell", `<div class="ch-flash"></div>${ensoSvg}<div class="ch-glyph"></div>${pct}<div class="ch-name"></div>`);
     c.dataset.slot = slot;
     cells[slot] = {
       root: c,
@@ -197,10 +201,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     };
     cellsBox.append(c);
   }
-  // X — ульта вне этой фазы: серая ячейка «скоро»
-  const ult = div("ch-cell is-soon", `${ensoSvg}<div class="ch-glyph">X</div><div class="ch-name"></div><span class="ch-soon">скоро</span>`);
-  const ultName = pick<HTMLDivElement>(ult, ".ch-name");
-  cellsBox.append(ult);
+  const ultPct = pick<HTMLDivElement>(cells.x.root, ".ch-pct");
   hud.append(vignette, barsLayer, numbersLayer, cross, toastsBox, score, life, kit);
   root.append(hud);
 
@@ -270,11 +271,11 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     setText(elemName, ELEMENT_INFO[e].name);
     for (const slot of SLOTS) {
       const c = cells[slot];
-      setText(c.name, ABILITY_NAME[ABILITY_OF[e][slot]]);
+      // у X — имя ульты стихии
+      setText(c.name, slot === "x" ? ELEMENT_INFO[e].ult : ABILITY_NAME[ABILITY_OF[e][slot]]);
       c.root.style.setProperty("--ch-el", ELEMENT_COLOR[e]);
       c.prevFrac = 0;
     }
-    setText(ultName, ELEMENT_INFO[e].ult);
     setHidden(heat, e !== "fire");
     // смена стихии: виджет прежней — долой, новой — в кит
     widget?.dispose();
@@ -296,19 +297,23 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     setElement(m.element);
     // замах ЛКМ (камень, 0,2 с ≈ 1,9 раза в секунду) ячейки не гасит: иначе при зажатой ЛКМ мигали бы три ячейки
     const busy = m.windup !== null && m.windup.slot !== "primary";
+    // идёт своя ульта: прочие слоты заняты до её конца (Р3)
+    const ulting = m.ult.cast !== null;
     for (const slot of SLOTS) {
       const c = cells[slot];
-      const frac = cooldownFraction(m, slot, now);
+      const ult = slot === "x";
+      // X ждёт не перезарядку, а заряд ульты: кольцо заливается по мере заряда, полное — готова
+      const frac = ult ? 1 - ultFraction(m) : cooldownFraction(m, slot, now);
       setStyle(c.enso, "strokeDashoffset", (ENSO_LEN * frac).toFixed(1));
       const ready = frac <= 0;
       c.root.classList.toggle("is-ready", ready);
-      // замах шара не даёт стрелять ЛКМ, Q и C (Р14): ячейки бледнеют
-      c.root.classList.toggle("is-busy", busy && slot !== "e");
-      // секунды до готовности — у Q / E / C; у ЛКМ перезарядка — доли секунды
-      const counting = !ready && slot !== "primary";
+      // замах шара не даёт стрелять ЛКМ, Q, C и X (Р14): ячейки бледнеют
+      c.root.classList.toggle("is-busy", (busy && slot !== "e") || (ulting && !ult));
+      // секунды до готовности — у Q / E / C; у ЛКМ перезарядка — доли секунды, у X — проценты под кольцом
+      const counting = !ready && slot !== "primary" && !ult;
       c.glyph.classList.toggle("is-count", counting);
       setText(c.glyph, counting ? String(Math.ceil((m.ready[slot] - now) / TICK_HZ)) : KEY_LABEL[slot]);
-      // готовность — короткая вспышка ячейки (у ЛКМ 5 раз/с — без вспышки)
+      // готовность — короткая вспышка ячейки (у ЛКМ 5 раз/с — без вспышки); у X — толчок на полном заряде (ult/ready)
       if (ready && c.prevFrac > 0 && slot !== "primary") c.flashAt = nowS;
       c.prevFrac = frac;
       const fa = nowS - c.flashAt;
@@ -322,6 +327,10 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       const shake = da >= 0 && da < DENY_S ? 5 * Math.sin(da * 2 * Math.PI * 22) * (1 - da / DENY_S) : 0;
       setStyle(c.root, "transform", shake ? `translateX(${shake.toFixed(2)}px)` : "");
     }
+    // X: заряд целыми процентами; полная — ярче и медленно пульсирует; идёт своя ульта — is-active
+    setText(ultPct, `${ultPercent(m)}%`);
+    cells.x.root.classList.toggle("is-ult-ready", ultFraction(m) >= 1);
+    cells.x.root.classList.toggle("is-active", ulting);
     if (m.element === "fire") {
       setStyle(heatFill, "transform", `scaleX(${heatFraction(m).toFixed(4)})`);
       heat.classList.toggle("is-hot", now < m.overheatUntil);

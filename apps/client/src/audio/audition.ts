@@ -33,6 +33,8 @@ export const SOUND_LABELS: Record<SoundId, string> = {
   fall: "Падение",
   fizzle: "Пшик",
   courage: "Кураж",
+  ultWarn: "Ульта врага: гул",
+  ultReady: "Ульта: заряд полон",
   fireballLaunch: "Шар: выпуск",
   stoneThrow: "Камень: выпуск",
   fistHit: "Кулак: попадание",
