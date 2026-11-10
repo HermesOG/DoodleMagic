@@ -57,6 +57,8 @@ export interface GameViewOptions {
   onFrame?: (f: Frame, nowS: number) => void;
   /** Имена магов (сеть): над полосой HP чужого мага. */
   names?: () => ReadonlyMap<UnitId, string>;
+  /** Узел над карточками экрана «Выбери стихию» (панель режима на «/», фаза 8). */
+  selectTop?: () => HTMLElement | null;
 }
 export interface GameView {
   readonly hud: Hud;
@@ -247,7 +249,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     selecting = true;
     hud.setSelecting(true);
     const initial = unitById(cur, driver.localId)?.mage?.element ?? prefs.element;
-    void showElementSelect(root, initial).then(({ element, byClick }) => {
+    void showElementSelect(root, initial, undefined, o.selectTop?.() ?? null).then(({ element, byClick }) => {
       selecting = false;
       hud.setSelecting(false);
       guard.run("select", () => chooseElement(element), undefined);

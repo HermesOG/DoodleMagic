@@ -1,0 +1,111 @@
+/*
+ * Панель режима на экране «Выбери стихию» (фаза 8, Р15): вкладки «Бой с ботами» · «Полигон», число ботов,
+ * сложность, стихии ботов. Шрифты и цвета — экрана стихий (combatHud.css), рамки — как у карточек.
+ */
+.bm {
+  margin: 0 0 18px;
+  text-align: center;
+}
+.bm-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.bm-tab {
+  padding: 8px 16px;
+  border: 2px solid #d9d3c3;
+  border-radius: 6px 10px 8px 12px / 10px 6px 12px 8px;
+  background: #fffdf7;
+  color: var(--ch-ink);
+  font: 700 20px/1.1 var(--ch-head);
+  cursor: pointer;
+}
+.bm-tab:hover {
+  border-color: var(--ch-muted);
+}
+.bm-tab.is-on {
+  border-color: var(--ch-ink);
+  box-shadow: 0 4px 0 -2px var(--ch-ink-soft);
+}
+.bm-friends {
+  margin-left: 10px;
+  color: var(--ch-ink);
+  font-weight: 600;
+}
+.bm-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+}
+.bm-label {
+  color: var(--ch-muted);
+  font-weight: 600;
+}
+.bm-step {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1.5px solid #d9d3c3;
+  border-radius: 50%;
+  background: #fffdf7;
+  color: var(--ch-ink);
+  font: 700 18px/1 var(--ch-ui);
+  cursor: pointer;
+}
+.bm-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.bm-count {
+  min-width: 1.4em;
+  font: 700 24px/1 var(--ch-head);
+  font-variant-numeric: tabular-nums;
+}
+.bm-gap {
+  width: 14px;
+}
+.bm-chip {
+  padding: 5px 11px;
+  border: 1.5px solid #d9d3c3;
+  border-radius: 999px;
+  background: #fffdf7;
+  color: var(--ch-ink);
+  font: 600 15px/1.2 var(--ch-ui);
+  cursor: pointer;
+}
+.bm-chip:hover {
+  border-color: var(--ch-muted);
+}
+.bm-chip.is-on {
+  border-color: var(--ch-ink);
+  background: var(--ch-ink);
+  color: #fffdf7;
+}
+.bm-tab:focus-visible,
+.bm-step:focus-visible,
+.bm-chip:focus-visible {
+  outline: 3px solid var(--ch-ink);
+  outline-offset: 2px;
+}
+.bm-hint {
+  margin: 6px 0 10px;
+  color: #3a372f;
+  font-size: 15px;
+}
+.bm-els .bm-chip {
+  font-size: 14px;
+}
+.bm-rules {
+  margin: 8px 0 0;
+  color: var(--ch-muted);
+  font-size: 13px;
+}
+/* игрок трогал панель: таймер подсвеченной карточки встал */
+.es-held .es-card.is-on .es-timer {
+  animation: none;
+}

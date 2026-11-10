@@ -7,6 +7,8 @@ import { ELEMENTS, type Element, type MatchInput, type UnitId } from "@doodlemag
  */
 export const NET_VERSION = 4;
 export const NAME_MAX = 16;
+/** Пинг бота в составе комнаты: игроки видят «бот» (Р13 фазы 8). Протокол не меняется. */
+export const BOT_PING = -2;
 /** Предел текстового сообщения игрока, знаков. */
 export const MAX_TEXT_CHARS = 4096;
 /** Сколько последних вводов несёт пакет игрока: пропавший пакет покрывают следующие. */

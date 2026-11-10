@@ -4,7 +4,7 @@ import {
   type DamageSource, type Element, type GameState, type MatchEvent, type UnitId,
 } from "@doodlemagic/sim";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, formatClock, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+  BOT_TIPS, ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, deathTip, feedLine, formatClock, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
   withKnownNames,
 } from "./format";
 
@@ -248,5 +248,34 @@ describe("results and board texts", () => {
       { code: "Digit3", element: "air", label: "3 — Воздух" },
       { code: "Digit4", element: "water", label: "4 — Вода" },
     ]);
+  });
+});
+
+describe("bots in the match texts (phase 8)", () => {
+  const BOT = -2;
+
+  it("a bot's ping reads «бот» in the table", () => {
+    const g = game("live", [{ id: 1, kills: 2 }, { id: 2, el: "air" }]);
+    const rows = scoreRows(g, new Map([[1, "Искра 42"], [2, "Перо · бот"]]), new Map([[1, 0], [2, BOT]]), 1);
+    expect(rows.map((r) => [r.name, r.ping])).toEqual([["Искра 42", "0"], ["Перо · бот", "бот"]]);
+  });
+
+  it("the board title without a room is the bot fight", () => {
+    expect(boardTitle("", 0)).toBe("Бой с ботами");
+  });
+
+  it("warmup line of the bot fight: «Играть» starts it", () => {
+    expect(topLine(game("warmup", [{ id: 1 }, { id: 2 }]), 1, NAMES, true, 1000, true)).toBe("Разминка · магов: 2 · «Играть» — в бой");
+  });
+
+  it("death screen: a tip against the bot's element; none for a human or a slip", () => {
+    const g = game("live", [{ id: 1, el: "water" }, { id: 2, alive: false, hp: 0 }, { id: 3, el: "earth" }]);
+    const pings = new Map([[1, BOT], [2, 0], [3, 40]]);
+    expect(deathTip({ type: "death", target: 2, killer: 1, ability: "fireball", pos }, g, pings)).toBe(BOT_TIPS.water);
+    expect(deathTip({ type: "fall", target: 2, credit: 1, pos }, g, pings)).toBe(BOT_TIPS.water);
+    expect(deathTip({ type: "death", target: 2, killer: 3, ability: "stoneShot", pos }, g, pings)).toBe("");
+    expect(deathTip({ type: "fall", target: 2, credit: NOBODY, pos }, g, pings)).toBe("");
+    expect(deathTip(null, g, pings)).toBe("");
+    for (const t of Object.values(BOT_TIPS)) expect(t.length).toBeLessThan(80);
   });
 });

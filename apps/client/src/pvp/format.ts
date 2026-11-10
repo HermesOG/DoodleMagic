@@ -2,6 +2,7 @@ import {
   ABILITY_NAME, ELEMENTS, ELEMENT_INFO, NOBODY, PICKUPS, PVP, TICK_HZ, scoreLimitFor, standings, unitById,
   type DamageSource, type Element, type GameState, type MatchEvent, type Standing, type UnitId,
 } from "@doodlemagic/sim";
+import { BOT_PING } from "../net/protocol";
 
 /**
  * Тексты интерфейса матча (задача 8): чистые функции под тесты. Без родовых окончаний — пол игрока неизвестен
@@ -43,10 +44,14 @@ function leaderText(st: readonly Standing[], localId: UnitId, names: ReadonlyMap
  * Строка сверху по фазе. now — тик, от которого идут часы боя: у игрока — предсказанный (часы тикают плавно между
  * снапшотами), а счёт и фаза — из подтверждённого g. Без now — тик g.
  */
-export function topLine(g: GameState, localId: UnitId, names: ReadonlyMap<UnitId, string>, isHost: boolean, now = g.match.tick): string {
+export function topLine(
+  g: GameState, localId: UnitId, names: ReadonlyMap<UnitId, string>, isHost: boolean, now = g.match.tick, offline = false,
+): string {
   const n = magesIn(g);
   switch (g.phase) {
     case "warmup":
+      // бой с ботами (offline): отсчёт начинает первое «Играть»
+      if (offline) return `Разминка · магов: ${n} · «Играть» — в бой`;
       return `Разминка · магов: ${n} · ${isHost ? "Esc → «Начать матч»" : "хост начнёт матч"}`;
     case "countdown":
       // лимит боя считает старт по числу магов (startLive): в отсчёте он ещё может быть прежним
@@ -126,7 +131,26 @@ export function deathLine(ev: MatchEvent | null, g: GameState, names: ReadonlyMa
   return "";
 }
 
-/** Строка таблицы. element — стихия мага сейчас (вышел — null); ping — «34» или «—», пока неизвестен. */
+/** Совет против стихии бота на экране смерти (Р17 фазы 8): одна короткая фраза. */
+export const BOT_TIPS: Readonly<Record<Element, string>> = Object.freeze({
+  fire: "Против Огня: держись дальше 20 м, от шара — шаг вбок",
+  earth: "Против Земли: отходи и стреляй, от камня — шаг вбок",
+  air: "Против Воздуха: не стой между ним и краем, дави — у него 130 HP",
+  water: "Против Воды: держись дальше 15 м, в Отражение секунду не стреляй",
+});
+
+/**
+ * Вторая строка экрана смерти: убил или сбросил бот (пинг BOT_PING — настоящий признак, метка в имени — только для
+ * глаз) — совет против его стихии сейчас. Иначе "".
+ */
+export function deathTip(ev: MatchEvent | null, g: GameState, pings: ReadonlyMap<UnitId, number>): string {
+  const by = ev?.type === "death" ? ev.killer : ev?.type === "fall" ? ev.credit : NOBODY;
+  if (by === NOBODY || pings.get(by) !== BOT_PING) return "";
+  const element = unitById(g.match, by)?.mage?.element;
+  return element ? BOT_TIPS[element] : "";
+}
+
+/** Строка таблицы. element — стихия мага сейчас (вышел — null); ping — «34», «бот» или «—», пока неизвестен. */
 export interface ScoreRow {
   place: number;
   id: UnitId;
@@ -160,7 +184,7 @@ export function scoreRows(g: GameState, names: ReadonlyMap<UnitId, string>, ping
       kills: s.kills,
       falls: s.falls,
       deaths: s.deaths,
-      ping: ping < 0 ? "—" : String(Math.round(ping)),
+      ping: ping === BOT_PING ? "бот" : ping < 0 ? "—" : String(Math.round(ping)),
       mine: s.id === localId,
     };
   });
@@ -189,8 +213,9 @@ export function resultsHint(isHost: boolean): string {
   return isHost ? "R или Esc → «Ещё раз»" : "Ждём, когда хост начнёт снова";
 }
 
-/** Шапка таблицы по Tab: комната и свой пинг (у хоста 0, неизвестен — «—»). */
+/** Шапка таблицы по Tab: комната и свой пинг (у хоста 0, неизвестен — «—»); без комнаты — бой с ботами. */
 export function boardTitle(code: string, ping: number): string {
+  if (code === "") return "Бой с ботами";
   return `Комната ${code} · пинг ${ping < 0 ? "—" : `${Math.round(ping)} мс`}`;
 }
 

@@ -2,7 +2,8 @@ import { ELEMENT_INFO, PVP, TICK_HZ, statusFlags, unitById, type Element, type G
 import type { Frame } from "../game/driver";
 import type { GameView } from "../game/view";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine, withKnownNames,
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, deathTip, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+  withKnownNames,
   type ScoreRow,
 } from "./format";
 import type { PvpDriver } from "./hostDriver";
@@ -111,6 +112,9 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   death.hidden = true;
   const cause = div("mh-death-cause");
   const respawn = div("mh-death-respawn");
+  // совет против стихии бота (Р17 фазы 8) — тем же мелким шрифтом, что «Возрождение через»
+  const tip = div("mh-death-respawn mh-death-tip");
+  tip.hidden = true;
   const choice = div("mh-death-els");
   const chips = ELEMENT_KEYS.map((k, i) => {
     if (i > 0) {
@@ -126,7 +130,7 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     choice.append(s);
     return { el: s, element: k.element };
   });
-  death.append(cause, respawn, choice);
+  death.append(cause, tip, respawn, choice);
   const board = div("mh-board");
   board.hidden = true;
   const boardCard = div("mh-card");
@@ -159,6 +163,7 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   let feed: FeedItem[] = [];
   /** Причина последней смерти своего мага: считается один раз, по событию (HP убийцы — на тот момент). */
   let deathText = "";
+  let tipText = "";
   /** Стихия, выбранная на экране смерти: подсвечена сразу, хост применит её при возрождении. */
   let picked: Element | null = null;
   let deadShown = false;
@@ -244,7 +249,7 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     topFor = c;
     topSec = sec;
     topNames = names;
-    setText(top, topLine(c, driver.localId, names, driver.isHost, now));
+    setText(top, topLine(c, driver.localId, names, driver.isHost, now, driver.roomCode === ""));
   };
 
   return {
@@ -273,7 +278,10 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
         if (!line) continue;
         feed.unshift({ text: line.text, mine: line.mine, at: nowS });
         fresh = true;
-        if ((ev.type === "death" || ev.type === "fall") && ev.target === id) deathText = deathLine(ev, c, names);
+        if ((ev.type === "death" || ev.type === "fall") && ev.target === id) {
+          deathText = deathLine(ev, c, names);
+          tipText = deathTip(ev, c, driver.pings());
+        }
       }
       if (feed.length > FEED_LINES) feed.length = FEED_LINES;
       renderFeed(nowS);
@@ -308,9 +316,14 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       if (dead && me) {
         setText(cause, deathText);
         setHidden(cause, deathText === "");
+        setText(tip, tipText);
+        setHidden(tip, tipText === "");
         setText(respawn, respawnLine(me.respawnTick, now));
         renderChoice(picked ?? me.mage?.element ?? null);
-      } else deathText = "";
+      } else {
+        deathText = "";
+        tipText = "";
+      }
 
       // таблица по Tab или итоги: пересборка не чаще BOARD_EVERY_S; имена — всех за сессию (вышедший — не «Маг»)
       const kind = over ? "results" : boardHeld ? "board" : null;
