@@ -1,6 +1,6 @@
 import {
   PVP, TICK_DT, TICK_HZ, scoreOf, unitById,
-  type GamePhase, type GameState, type MatchState, type UnitId,
+  type GamePhase, type GameState, type MatchEvent, type MatchState, type UnitId,
 } from "@doodlemagic/sim";
 
 /**
@@ -19,8 +19,8 @@ export type MusicSting = "count" | "fight" | "win" | "lose";
 
 /** Своё событие кадра, уже разобранное для музыки (musicCue, streakCue). */
 export type MusicCue =
-  /** Урон между мной и магом: я нанёс или получил; amount — сколько. */
-  | { kind: "damage"; amount: number }
+  /** Урон между мной и магом: я нанёс или получил; amount — сколько; dot — горение и прочий урон по тикам (без дакинга). */
+  | { kind: "damage"; amount: number; dot: boolean }
   /** Своё попадание или удар по мне, не горение: короткий дакинг. */
   | { kind: "tap" }
   /** Моё убийство или засчитанный сброс. */
@@ -128,55 +128,55 @@ const isMage = (s: MatchState, id: UnitId): boolean => unitById(s, id)?.mage != 
  * Событие sim → своё событие музыки; чужое и неважное — null. state — состояние, в котором событие родилось.
  * Серии (streak) здесь не разбираются: их берут из подтверждённых событий (streakCue).
  */
-export function musicCue(ev: { type: string }, localId: UnitId, state: MatchState): MusicCue | null {
-  const e = ev as { type: string } & Record<string, unknown>;
-  switch (e.type) {
+export function musicCue(ev: MatchEvent, localId: UnitId, state: MatchState): MusicCue | null {
+  switch (ev.type) {
     case "hit": {
-      const source = e.source as UnitId;
-      const target = e.target as UnitId;
-      const mine = source === localId && target !== localId;
-      const onMe = target === localId && source !== localId;
+      const mine = ev.source === localId && ev.target !== localId;
+      const onMe = ev.target === localId && ev.source !== localId;
       if (!mine && !onMe) return null;
-      const other = mine ? target : source;
-      const amount = typeof e.amount === "number" ? e.amount : 0;
       // урон с магом — в бой; по манекену — только короткий дакинг
-      if (amount > 0 && isMage(state, other)) return { kind: "damage", amount };
-      return e.dot ? null : { kind: "tap" };
+      if (ev.amount > 0 && isMage(state, mine ? ev.target : ev.source)) return { kind: "damage", amount: ev.amount, dot: ev.dot };
+      return ev.dot ? null : { kind: "tap" };
     }
     case "death":
-      return e.killer === localId && e.target !== localId ? { kind: "kill" } : null;
+      return ev.killer === localId && ev.target !== localId ? { kind: "kill" } : null;
     case "fall":
-      return e.credit === localId && e.target !== localId ? { kind: "kill" } : null;
+      return ev.credit === localId && ev.target !== localId ? { kind: "kill" } : null;
     case "cast":
-      return e.slot === "x" ? { kind: "ult", mine: e.unit === localId } : null;
+      return ev.slot === "x" ? { kind: "ult", mine: ev.unit === localId } : null;
     case "pickup":
-      if (e.kind !== "rune" || (e.phase !== "warn" && e.phase !== "take")) return null;
-      return { kind: "rune", phase: e.phase };
+      if (ev.kind !== "rune" || ev.phase === "spawn") return null;
+      return { kind: "rune", phase: ev.phase };
     default:
       return null;
   }
 }
 
-/**
- * Событие streak (задача 1: { type: "streak"; unit; multi; streak; … }) — по имени типа, без импорта: в волне 1
- * его ещё нет в типах sim. Только своё.
- */
-export function streakCue(ev: { type: string }, localId: UnitId): MusicCue | null {
-  if (ev.type !== "streak") return null;
-  const e = ev as { type: string } & Record<string, unknown>;
-  if (e.unit !== localId || typeof e.multi !== "number" || typeof e.streak !== "number") return null;
-  return { kind: "streak", multi: e.multi, streak: e.streak };
+/** Своя серия из подтверждённого события streak; прочее — null. */
+export function streakCue(ev: MatchEvent, localId: UnitId): MusicCue | null {
+  if (ev.type !== "streak" || ev.unit !== localId) return null;
+  return { kind: "streak", multi: ev.multi, streak: ev.streak };
+}
+
+/** Пустая ситуация: полигон, никого рядом. Заготовка для readSituation. */
+export function emptySituation(): MusicSituation {
+  return {
+    phase: "training", phaseLeftS: Infinity, suddenDeath: false, myScore: 0, bestOther: 0, scoreLimit: Infinity,
+    near: 0, fury: false, dead: false, respawnInS: 0, enemyUltTelegraph: false, won: false,
+  };
 }
 
 /**
  * Ситуация из состояния: game — подтверждённое (PvP), null — полигон; cur — «сейчас» вида (враги рядом, ярость,
- * смерть, чужая ульта).
+ * смерть, чужая ульта). Пишет в out (вид переиспользует один объект на все кадры) и возвращает его.
  */
-export function readSituation(game: GameState | null, cur: MatchState, localId: UnitId): MusicSituation {
+export function readSituation<T extends MusicSituation>(game: GameState | null, cur: MatchState, localId: UnitId, out: T): T {
   const me = unitById(cur, localId);
   let near = 0;
   let enemyUltTelegraph = false;
-  for (const u of cur.units) {
+  const units = cur.units;
+  for (let i = 0; i < units.length; i++) {
+    const u = units[i]!;
     if (u.id === localId || !u.mage || !u.alive) continue;
     const cast = u.mage.ult.cast;
     if (cast && cur.tick < cast.releaseTick) enemyUltTelegraph = true;
@@ -187,43 +187,43 @@ export function readSituation(game: GameState | null, cur: MatchState, localId: 
     }
   }
   const dead = me ? !me.alive : false;
-  const situation: MusicSituation = {
-    phase: "training",
-    phaseLeftS: Infinity,
-    suddenDeath: false,
-    myScore: 0,
-    bestOther: 0,
-    scoreLimit: Infinity,
-    near,
-    fury: me ? me.alive && cur.tick < me.status.furyUntil : false,
-    dead,
-    respawnInS: dead && me ? Math.max(0, (me.respawnTick - cur.tick) * TICK_DT) : 0,
-    enemyUltTelegraph,
-    won: false,
-  };
-  if (!game) return situation;
+  out.near = near;
+  out.enemyUltTelegraph = enemyUltTelegraph;
+  out.fury = me ? me.alive && cur.tick < me.status.furyUntil : false;
+  out.dead = dead;
+  out.respawnInS = dead && me ? Math.max(0, (me.respawnTick - cur.tick) * TICK_DT) : 0;
+  if (!game) {
+    out.phase = "training";
+    out.phaseLeftS = Infinity;
+    out.suddenDeath = false;
+    out.myScore = 0;
+    out.bestOther = 0;
+    out.scoreLimit = Infinity;
+    out.won = false;
+    return out;
+  }
   let myScore = 0;
   let bestOther = 0;
-  for (const u of game.match.units) {
+  const mages = game.match.units;
+  for (let i = 0; i < mages.length; i++) {
+    const u = mages[i]!;
     if (!u.mage) continue;
     if (u.id === localId) myScore = scoreOf(u);
     else bestOther = Math.max(bestOther, scoreOf(u));
   }
   const timed = game.phase === "countdown" || game.phase === "live";
-  return {
-    ...situation,
-    phase: game.phase,
-    phaseLeftS: timed ? Math.max(0, (game.phaseEnd - game.match.tick) * TICK_DT) : Infinity,
-    suddenDeath: game.suddenDeath,
-    myScore,
-    bestOther,
-    scoreLimit: game.scoreLimit,
-    won: game.phase === "results" && game.results[0]?.id === localId,
-  };
+  out.phase = game.phase;
+  out.phaseLeftS = timed ? Math.max(0, (game.phaseEnd - game.match.tick) * TICK_DT) : Infinity;
+  out.suddenDeath = game.suddenDeath;
+  out.myScore = myScore;
+  out.bestOther = bestOther;
+  out.scoreLimit = game.scoreLimit;
+  out.won = game.phase === "results" && game.results[0]?.id === localId;
+  return out;
 }
 
 /** Тик начала боя: один на всех в комнате, свой у каждого матча. Вне отсчёта и боя — −1. */
-function fightStartTick(game: GameState): number {
+export function fightStartTick(game: GameState): number {
   if (game.phase === "countdown") return game.phaseEnd;
   if (game.phase !== "live") return -1;
   return game.phaseEnd - MATCH_TICKS - (game.suddenDeath ? SUDDEN_DEATH_TICKS : 0);
@@ -241,7 +241,27 @@ export function musicSeed(roomCode: string | null, game: GameState | null): numb
   return h >>> 0;
 }
 
+/**
+ * Зерно для кадра: musicSeed пересчитывается, только когда сменились код комнаты или тик начала боя (строка ключа
+ * не собирается каждый кадр).
+ */
+export function createSeedKeeper(): (roomCode: string | null, game: GameState | null) => number {
+  let room: string | null | undefined;
+  let start = Number.NaN;
+  let seed = TRAINING_SEED;
+  return (roomCode, game) => {
+    const s = game && roomCode !== null ? fightStartTick(game) : -1;
+    if (roomCode !== room || s !== start) {
+      room = roomCode;
+      start = s;
+      seed = musicSeed(roomCode, game);
+    }
+    return seed;
+  };
+}
+
 export interface MusicDirector {
+  /** Выход — один и тот же объект на все кадры (и его stings): читать до следующего step. */
   step(input: DirectorInput): MusicOut;
   readonly level: MusicLevel;
 }
@@ -256,8 +276,9 @@ export function createMusicDirector(): MusicDirector {
   let lastChangeS = -Infinity;
   let lastBurstS = -Infinity;
   let belowSinceS: number | null = null;
-  /** Урон с магами: [время, сколько] за DAMAGE_WINDOW_S. */
-  const damage: [t: number, amount: number][] = [];
+  /** Урон с магами за DAMAGE_WINDOW_S: время и сколько, по порядку. */
+  const damageT: number[] = [];
+  const damageA: number[] = [];
   let lastFightS = -Infinity;
   let boostUntilS = -Infinity;
   let runeSinceS: number | null = null;
@@ -268,8 +289,16 @@ export function createMusicDirector(): MusicDirector {
   let countDigit = 0;
   let wasDead = false;
 
+  /** Выход — один объект на все кадры, stings чистятся в начале step. */
+  const out: MusicOut = {
+    bed: false, level: 0, bpm: MUSIC_BPM, mode: "light", pulse: false, matchPoint: null, final: false,
+    duckDb: 0, muteDb: 0, lowpassHz: null, stings: [],
+  };
+  const stings = out.stings;
+
   const forget = (): void => {
-    damage.length = 0;
+    damageT.length = 0;
+    damageA.length = 0;
     lastFightS = -Infinity;
     boostUntilS = -Infinity;
   };
@@ -280,7 +309,7 @@ export function createMusicDirector(): MusicDirector {
     },
     step(inp) {
       const now = inp.nowS;
-      const stings: MusicSting[] = [];
+      stings.length = 0;
       let forced = false;
       let burst = false;
 
@@ -308,12 +337,16 @@ export function createMusicDirector(): MusicDirector {
       if (!inp.dead && wasDead) forced = true;
       wasDead = inp.dead;
 
-      for (const c of inp.cues) {
+      const cues = inp.cues;
+      for (let i = 0; i < cues.length; i++) {
+        const c = cues[i]!;
         switch (c.kind) {
           case "damage":
-            damage.push([now, c.amount]);
+            damageT.push(now);
+            damageA.push(c.amount);
             lastFightS = now;
-            tapUntilS = now + DUCK.tapHoldS;
+            // урон по тикам (горение, Дыхание, смерч) не дёргает дакинг каждый тик
+            if (!c.dot) tapUntilS = now + DUCK.tapHoldS;
             break;
           case "tap":
             tapUntilS = now + DUCK.tapHoldS;
@@ -343,7 +376,10 @@ export function createMusicDirector(): MusicDirector {
             break;
         }
       }
-      while (damage.length > 0 && now - damage[0]![0] > DAMAGE_WINDOW_S) damage.shift();
+      while (damageT.length > 0 && now - damageT[0]! > DAMAGE_WINDOW_S) {
+        damageT.shift();
+        damageA.shift();
+      }
       if (runeSinceS !== null && now - runeSinceS > RUNE_PULSE_MAX_S) runeSinceS = null;
 
       const p = inp.phase;
@@ -352,7 +388,7 @@ export function createMusicDirector(): MusicDirector {
       const top = Math.max(inp.myScore, inp.bestOther);
       const final = live && (lastMinute || inp.suddenDeath || top >= inp.scoreLimit - 2);
       let d = 0;
-      for (const [, a] of damage) d += a;
+      for (let i = 0; i < damageA.length; i++) d += damageA[i]!;
 
       let raw = levelOf(intensity(d, inp.near, final));
       if (live || p === "warmup" || p === "training") raw = Math.max(raw, 1) as MusicLevel;
@@ -401,19 +437,17 @@ export function createMusicDirector(): MusicDirector {
               : null
           : null;
 
-      return {
-        bed: p !== "countdown",
-        level,
-        bpm: lastMinute || (live && inp.suddenDeath) ? FINAL_BPM : MUSIC_BPM,
-        mode: live && inp.suddenDeath ? "dark" : "light",
-        pulse: runeSinceS !== null && p !== "countdown" && p !== "results",
-        matchPoint,
-        final: lastMinute || (live && inp.suddenDeath),
-        duckDb,
-        muteDb: muffled ? DEATH.db : 0,
-        lowpassHz: muffled ? DEATH.lowpassHz : null,
-        stings,
-      };
+      out.bed = p !== "countdown";
+      out.level = level;
+      out.bpm = lastMinute || (live && inp.suddenDeath) ? FINAL_BPM : MUSIC_BPM;
+      out.mode = live && inp.suddenDeath ? "dark" : "light";
+      out.pulse = runeSinceS !== null && p !== "countdown" && p !== "results";
+      out.matchPoint = matchPoint;
+      out.final = lastMinute || (live && inp.suddenDeath);
+      out.duckDb = duckDb;
+      out.muteDb = muffled ? DEATH.db : 0;
+      out.lowpassHz = muffled ? DEATH.lowpassHz : null;
+      return out;
     },
   };
 }

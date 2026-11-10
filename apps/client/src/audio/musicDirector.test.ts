@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NOBODY, createDummyUnit, createGame, createMageUnit, createMatchState, type GameState, type MatchEvent } from "@doodlemagic/sim";
 import {
   DEATH, DUCK, FINAL_BPM, MUSIC_BPM, TRAINING_SEED,
-  createMusicDirector, intensity, levelOf, musicCue, musicSeed, readSituation, streakCue,
+  createMusicDirector, createSeedKeeper, emptySituation, intensity, levelOf, musicCue, musicSeed, readSituation, streakCue,
   type DirectorInput, type MusicCue, type MusicDirector, type MusicOut,
 } from "./musicDirector";
 
@@ -22,7 +22,7 @@ function run(d: MusicDirector, from: number, to: number, patch: Partial<Director
   return out;
 }
 
-const hit = (amount: number): MusicCue => ({ kind: "damage", amount });
+const hit = (amount: number, dot = false): MusicCue => ({ kind: "damage", amount, dot });
 
 describe("intensity and levels", () => {
   it("adds damage over 90 (capped at 0,5), nearby foes and the final, then cuts at 0,15 / 0,4 / 0,7", () => {
@@ -112,6 +112,10 @@ describe("music director", () => {
     run(d, 0, 1);
     expect(d.step(base({ nowS: 1, cues: [{ kind: "tap" }] })).duckDb).toBe(DUCK.tapDb);
     expect(d.step(base({ nowS: 1.2 })).duckDb).toBe(0);
+    // горение и прочий урон по тикам — бой, но без дакинга на каждом тике
+    const burn = d.step(base({ nowS: 1.5, cues: [hit(4, true)] }));
+    expect(burn.duckDb).toBe(0);
+    expect(d.step(base({ nowS: 1.6 }))).toBe(burn);
     expect(d.step(base({ nowS: 2, cues: [{ kind: "kill" }] })).duckDb).toBe(DUCK.heavyDb);
     expect(d.step(base({ nowS: 2.7 })).duckDb).toBe(DUCK.heavyDb);
     expect(d.step(base({ nowS: 2.85 })).duckDb).toBe(0);
@@ -148,8 +152,9 @@ describe("music cues", () => {
   });
 
   it("a hit with a mage is fight damage, with a dummy only a short duck; someone else's hit is nothing", () => {
-    expect(musicCue(hitEv(ME, FOE), ME, state)).toEqual({ kind: "damage", amount: 15 });
-    expect(musicCue(hitEv(FOE, ME), ME, state)).toEqual({ kind: "damage", amount: 15 });
+    expect(musicCue(hitEv(ME, FOE), ME, state)).toEqual({ kind: "damage", amount: 15, dot: false });
+    expect(musicCue(hitEv(FOE, ME), ME, state)).toEqual({ kind: "damage", amount: 15, dot: false });
+    expect(musicCue(hitEv(FOE, ME, true), ME, state)).toEqual({ kind: "damage", amount: 15, dot: true });
     expect(musicCue(hitEv(ME, DUMMY), ME, state)).toEqual({ kind: "tap" });
     expect(musicCue(hitEv(ME, DUMMY, true), ME, state)).toBe(null);
     expect(musicCue(hitEv(FOE, DUMMY), ME, state)).toBe(null);
@@ -164,10 +169,10 @@ describe("music cues", () => {
     expect(musicCue(warn, ME, state)).toEqual({ kind: "rune", phase: "warn" });
     const orb: MatchEvent = { ...warn, kind: "orb", phase: "take" };
     expect(musicCue(orb, ME, state)).toBe(null);
-    const streak = { type: "streak", unit: ME, multi: 2, streak: 3, broke: NOBODY, brokeStreak: 0 };
+    const streak: MatchEvent = { type: "streak", unit: ME, multi: 2, streak: 3, broke: NOBODY, brokeStreak: 0 };
     expect(musicCue(streak, ME, state)).toBe(null);
     expect(streakCue(streak, ME)).toEqual({ kind: "streak", multi: 2, streak: 3 });
-    const foreign = { ...streak, unit: FOE };
+    const foreign: MatchEvent = { type: "streak", unit: FOE, multi: 2, streak: 3, broke: NOBODY, brokeStreak: 0 };
     expect(streakCue(foreign, ME)).toBe(null);
   });
 
@@ -175,15 +180,19 @@ describe("music cues", () => {
     const cur = structuredClone(state);
     cur.tick = 100;
     cur.units[0]!.status.furyUntil = 200;
-    expect(readSituation(null, cur, ME)).toMatchObject({ phase: "training", near: 1, fury: true, dead: false, scoreLimit: Infinity });
+    // пишет в один и тот же объект
+    const into = emptySituation();
+    expect(readSituation(null, cur, ME, into)).toBe(into);
+    expect(into).toMatchObject({ phase: "training", near: 1, fury: true, dead: false, scoreLimit: Infinity });
     cur.units[0]!.alive = false;
     cur.units[0]!.respawnTick = 160;
-    expect(readSituation(null, cur, ME)).toMatchObject({ near: 0, fury: false, dead: true, respawnInS: 1 });
+    expect(readSituation(null, cur, ME, into)).toMatchObject({ near: 0, fury: false, dead: true, respawnInS: 1 });
     const match = structuredClone(state);
     match.tick = 1000;
     match.units[1]!.mage!.stats.kills = 4;
     const game: GameState = { ...createGame(), phase: "live", phaseEnd: 1000 + 30 * 60, scoreLimit: 10, match };
-    expect(readSituation(game, cur, ME)).toMatchObject({ phase: "live", phaseLeftS: 30, bestOther: 4, myScore: 0, scoreLimit: 10 });
+    expect(readSituation(game, cur, ME, into)).toMatchObject({ phase: "live", phaseLeftS: 30, bestOther: 4, myScore: 0, scoreLimit: 10 });
+    expect(readSituation(null, cur, ME, into)).toMatchObject({ phase: "training", scoreLimit: Infinity, bestOther: 0 });
   });
 
   it("seeds the melody from the room and the match; the training ground is constant", () => {
@@ -194,5 +203,10 @@ describe("music cues", () => {
     // тот же матч, уже в бою — то же зерно, что на отсчёте
     expect(musicSeed("ABCD", { ...g(500), phase: "live", phaseEnd: 500 + 420 * 60 })).toBe(musicSeed("ABCD", g(500)));
     expect(musicSeed(null, null)).toBe(TRAINING_SEED);
+    const keep = createSeedKeeper();
+    expect(keep(null, null)).toBe(TRAINING_SEED);
+    expect(keep("ABCD", g(500))).toBe(musicSeed("ABCD", g(500)));
+    expect(keep("ABCD", { ...g(500), phase: "live", phaseEnd: 500 + 420 * 60 })).toBe(musicSeed("ABCD", g(500)));
+    expect(keep("ABCD", g(900))).toBe(musicSeed("ABCD", g(900)));
   });
 });
