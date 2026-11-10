@@ -4,7 +4,7 @@ import { groundBelow } from "../raycast";
 import type { Vec3 } from "../types";
 import { aimGround } from "./aim";
 import { applyHit } from "./combat";
-import { EARTH, slotCooldownTicks, ticks } from "./defs";
+import { EARTH, ULT_CHARGE, slotCooldownTicks, ticks } from "./defs";
 import type { ElementSim, ZoneStep } from "./hooks";
 import { castAim, castSlots, emitCast, horizontalDir, snappedWallBox, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
@@ -121,12 +121,14 @@ function earthquake(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): Reject
 }
 
 /**
- * X: «Тектонический разлом» (Р7 фазы 5). Только с пола (на полу или в окне «койота»); опору проверяем до startUlt —
- * в воздухе отказ «нет опоры», заряд цел. Линия 25 м по взгляду (не по осям) от 1,5 м перед ступнями, шириной 3 м,
- * на высоте ступней; видна сразу (zone/telegraph), трещина бежит 0,8 с, затем удар и 6 с шипов (stepRift).
+ * X: «Тектонический разлом» (Р7 фазы 5). Только с пола (на полу или в окне «койота»). Нет заряда — «не заряжено» и
+ * в воздухе: пустая ульта важнее опоры. Опору проверяем до startUlt — в воздухе отказ «нет опоры», заряд цел.
+ * Линия 25 м по взгляду (не по осям) от 1,5 м перед ступнями, шириной 3 м, на высоте ступней; видна сразу
+ * (zone/telegraph), трещина бежит 0,8 с, затем удар и 6 с шипов (stepRift).
  */
 function tectonicRift(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
   const mv = u.move;
+  if (u.mage!.ult.charge < ULT_CHARGE.max) return "uncharged";
   if (!mv.onGround && !(mv.coyote > 0)) return "notGrounded";
   const no = startUlt(t, u, inp, "tectonicRift");
   if (no) return no;

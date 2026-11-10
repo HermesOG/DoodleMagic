@@ -192,6 +192,13 @@ describe("«Тектонический разлом» (Earth X, Р7)", () => {
     expect([u(end, 1).mage!.ult, riftZone(end)]).toEqual([{ charge: 100, cast: null }, undefined]);
   });
 
+  it("in the air with an empty ult — reject uncharged, not notGrounded", () => {
+    const s = setup([EARTH_MAGE], []);
+    u(s, 1).mage!.ult.charge = 0;
+    const { log } = run(s, 20, (k) => ({ 1: { yaw: YAW, jump: k === 0, x: k === 5 } }));
+    expect(log.filter(({ e }) => e.type === "reject" || e.type === "cast")).toEqual([{ t: 5, e: { type: "reject", unit: 1, slot: "x", reason: "uncharged" } }]);
+  });
+
   it("on the floor: a 25 m line along the look at 30° to the X axis, 1.5 m ahead; 0.8 s telegraph; 6 s of spikes, then gone", () => {
     const s = setup([EARTH_MAGE], []);
     const T = s.tick;

@@ -55,6 +55,9 @@ const WAVE_STEP_M = TS.speed / ticks(1);
 const WAVE_ROLL_TICKS = ticks(TS.travelM / TS.speed);
 /** Полуширина волны поперёк хода, м. */
 const WAVE_HALF_M = TS.widthM / 2;
+/** Волна встаёт на опору под ступнями Воды: ищем от чуть выше подошвы и не глубже 3 м (каст в прыжке — не над полом). */
+const WAVE_GROUND_PROBE_UP_M = 0.1;
+const WAVE_GROUND_DROP_M = 3;
 /** Огненные зоны, которые волна гасит паром. */
 const quenched = (q: Zone): boolean => q.kind === "fireWall" || q.kind === "fireTrail" || q.kind === "fireTornado";
 
@@ -169,7 +172,8 @@ function dropWard(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
 }
 
 /**
- * X «Цунами» (Р9 фазы 5): ход d — взгляд по XZ, поперёк n = (−d.z, d.x), старт O — подошва Воды на 2 м позади.
+ * X «Цунами» (Р9 фазы 5): ход d — взгляд по XZ, поперёк n = (−d.z, d.x), старт O — на 2 м позади Воды, на высоте
+ * опоры под её ступнями (не глубже 3 м; опоры нет — высота ступней): каст в прыжке не поднимает волну над полом.
  * Каст принят (startUlt) — зона tsunami: отрезок 14 м поперёк хода через O, полутолщина 1 м; поднимается до взвода
  * на releaseTick каста (0,8 с), затем катится 120 тиков (stepTsunami). ult.cast.zone — её id.
  */
@@ -178,7 +182,8 @@ function tsunami(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRea
   const d = { x: f.x + 0, z: f.z + 0 };
   const n = { x: -d.z + 0, z: d.x + 0 };
   const p = u.move.body.pos;
-  const o = { x: p.x - d.x * TS.backM, y: p.y, z: p.z - d.z * TS.backM };
+  const y = groundBelow(t.world, { x: p.x, y: p.y + WAVE_GROUND_PROBE_UP_M, z: p.z }, WAVE_GROUND_DROP_M) ?? p.y;
+  const o = { x: p.x - d.x * TS.backM, y, z: p.z - d.z * TS.backM };
   const r = startUlt(t, u, inp, "tsunami");
   if (r !== null) return r;
   const cast = u.mage!.ult.cast!;
@@ -345,8 +350,9 @@ function groundPoint(z: Zone): Vec3 {
  * d = (n.z, −n.x), точка старта O — середина ab на начало тика минус d · 0,25 · (now − armTick), O.y = a.y.
  * - Отрезок сдвигается на 0,25 м по ходу (15 м/с; 30 м за 120 тиков).
  * - Юнит — живой не-хозяин, ещё не битый этой волной (rehit до endTick): подошва от O.y − 1 до O.y + 2,5 м, по XZ
- *   до отрезка не дальше полутолщины волны и полутела, свободный луч "shot" от линии старта (O + n·s, s — боковая
- *   координата юнита в пределах ±7 м, на высоте O.y + 1,25) до центра тела — укрытие между стартом и целью закрывает.
+ *   до отрезка не дальше полутолщины волны и полутела, свободный луч "shot" от линии Воды (O + d·2 + n·s, s — боковая
+ *   координата юнита в пределах ±7 м, на высоте O.y + 1,25) до центра тела — закрывает укрытие между Водой и целью;
+ *   стена у неё за спиной (там, где волна поднялась) — нет: луч из бокса упёрся бы в него сразу.
  *   Удар: 80 урона, толчок {10, 1} по ходу. «Мокрый», гашение Горения паром и «Круговорот» — в applyHit по стихии.
  * - Стена огня, след рывка и огненный смерч, чья точка у земли попала в полосу волны (по XZ до отрезка не дальше
  *   полутолщины, по высоте — как подошва), уходят (zone/end); на их месте — облако пара хозяйки волны.
@@ -368,7 +374,7 @@ const stepTsunami: ZoneStep = (s, t, z) => {
     if (vb.pos.y < lo || vb.pos.y > hi || distXZToSegment(vb.pos, sh.a, sh.b) > sh.halfW + vb.halfW) continue;
     const c = bodyCenter(v);
     const side = clamp((vb.pos.x - o.x) * n.x + (vb.pos.z - o.z) * n.z, -WAVE_HALF_M, WAVE_HALF_M);
-    const from = { x: o.x + n.x * side, y: o.y + TS.heightM / 2, z: o.z + n.z * side };
+    const from = { x: o.x + d.x * TS.backM + n.x * side, y: o.y + TS.heightM / 2, z: o.z + d.z * TS.backM + n.z * side };
     if (!clearShot(t, from, c)) continue;
     z.rehit.push({ unit: v.id, tick: z.endTick });
     applyHit(s, t, {

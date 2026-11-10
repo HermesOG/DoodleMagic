@@ -71,23 +71,30 @@ export function adoptZone(s: MatchState, t: TickCtx, z: Zone, owner: number): vo
   }
 }
 
+/** Зона ульты (Разлом, Цунами): пределы зон вытесняют её последней. */
+const ultZone = (q: Zone): boolean => q.kind === "rift" || q.kind === "tsunami";
+
+/** Кого вытесняет предел: самая старая из подходящих не-ульт; есть только зоны ульт — самая старая из них. */
+const evictee = (s: MatchState, fits: (q: Zone) => boolean): Zone => s.zones.find((q) => fits(q) && !ultZone(q)) ?? s.zones.find(fits)!;
+
 /**
  * Новая зона. Сначала пределы GDD 7.3–7.4 (пар в них не входит и их не трогает): у владельца уже LIMITS.zonesPerMage —
- * уходит его самая старая; всего LIMITS.zonesTotal — самая старая вообще (обе — событием zone/end).
- * Событие zone/telegraph. Возвращает id.
+ * уходит его самая старая; всего LIMITS.zonesTotal — самая старая вообще (обе — событием zone/end). Зоны ульт
+ * (Разлом, Цунами) уходят по пределу, только если, кроме них, вытеснять некого: топь, землетрясение или столб их не
+ * снимают. Событие zone/telegraph. Возвращает id.
  */
 export function spawnZone(s: MatchState, t: TickCtx, z: NewZone): number {
   if (z.kind !== "steam") {
     let own = 0;
     for (const q of s.zones) if (q.owner === z.owner && limited(q)) own++;
     while (own >= LIMITS.zonesPerMage) {
-      endZone(s, t, s.zones.find((q) => q.owner === z.owner && limited(q))!);
+      endZone(s, t, evictee(s, (q) => q.owner === z.owner && limited(q)));
       own--;
     }
     let total = 0;
     for (const q of s.zones) if (limited(q)) total++;
     while (total >= LIMITS.zonesTotal) {
-      endZone(s, t, s.zones.find(limited)!);
+      endZone(s, t, evictee(s, limited));
       total--;
     }
   }

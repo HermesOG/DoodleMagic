@@ -6,9 +6,9 @@ import { buildTickWorld } from "./dynamic";
 import { testContext } from "./fixtures";
 import { createMatch, stepMatch } from "./match";
 import { spawnProjectile } from "./projectiles";
-import { NO_MATCH_INPUT, idleInput, unitById } from "./state";
+import { NO_MATCH_INPUT, createMatchState, idleInput, unitById } from "./state";
 import { spawnTerrain } from "./terrain";
-import type { DummySpot, Element, MatchContext, MatchEvent, MatchInput, MatchState, TickCtx, UnitId } from "./types";
+import type { AbilityId, DummySpot, Element, MatchContext, MatchEvent, MatchInput, MatchState, TickCtx, UnitId, ZoneKind } from "./types";
 import { spawnZone } from "./zones";
 
 /** Фаза 5, задача 3: «Ураган» Воздуха (Р8) и «Цунами» Воды (Р9) на X. */
@@ -203,7 +203,22 @@ describe("Water «Цунами» (X, Р9)", () => {
     expect(u(r.s, 2).hp).toBe(170 - 80);
   });
 
-  it("misses a dummy behind a box from the start line and one 3 m up; hits one beside the box and one 2.25 m up", () => {
+  it("cast mid-hop: the wave sits on the floor under Water and still hits", () => {
+    const r = play({ mages: [mage("water", 0, 0)], dummies: [at(0, -10)] }, 200, (k) => ({ 1: { jump: k === 0, x: k === 21 } }));
+    expect(pos(r.trace[20]!, 1).y).toBeGreaterThan(1);
+    expect(evs(r.log, "cast").map(({ t, e }) => [t, e.ability])).toEqual([[21, "tsunami"]]);
+    const sh = r.trace[21]!.zones[0]!.shape;
+    expect(sh.type === "segment" ? [sh.a.y, sh.b.y] : null).toEqual([0, 0]);
+    expect(hitsBy(r.log, "tsunami").map(({ e }) => [e.target, e.amount])).toEqual([[2, 80]]);
+  });
+
+  it("Water with her back to a wall still hits the targets in front: only cover between her and the target counts", () => {
+    const c = testContext([{ box: aabb(-8, 0, 1, 8, 3, 3) }]);
+    const r = play({ mages: [mage("water", 0, 0)], dummies: [at(0, -8), at(5, -8)], c }, 170);
+    expect(hitsBy(r.log, "tsunami").map(({ e }) => e.target)).toEqual([2, 3]);
+  });
+
+  it("misses a dummy behind a box between Water and it and one 3 m up; hits one beside the box and one 2.25 m up", () => {
     const c = testContext([{ box: aabb(-1, 0, -5, 1, 3, -4) }, { box: aabb(-6, 0, -9, -2, 3, -7) }, { box: aabb(5, 0, -9, 7, 2.25, -7) }]);
     const r = play({ mages: [mage("water", 0, 0)], dummies: [at(0, -8), at(-4, -8, 3), at(3, -8), at(6, -8, 2.25)], c }, 170);
     expect(hitsBy(r.log, "tsunami").map(({ e }) => e.target)).toEqual([4, 5]);
@@ -248,6 +263,42 @@ describe("Water «Цунами» (X, Р9)", () => {
     const hits = hitsBy(r.log, "tsunami");
     expect(hits.map(({ e }) => [e.target, e.amount, e.knock])).toEqual([[2, 80, { distM: 5, upM: 0.5 }]]);
     expect(Math.abs(moved(r.s, 2, 0, -10).z + 5)).toBeLessThan(0.35);
+  });
+});
+
+describe("zone limits keep ult zones (Разлом, Цунами)", () => {
+  const ABILITY: Partial<Record<ZoneKind, AbilityId>> = { rift: "tectonicRift", tsunami: "tsunami", quake: "earthquake", bog: "earthquake", pillar: "stonePillar", fireWall: "fireWall" };
+  /** Зона вида kind хозяина owner (диск в начале координат, живёт долго); id — в порядке появления. */
+  const add = (s: MatchState, ev: MatchEvent[], owner: UnitId, kind: ZoneKind) =>
+    spawnZone(s, tickOf(s, ev), { owner, kind, ability: ABILITY[kind]!, shape: { type: "disc", center: { x: 0, y: 0, z: 0 }, radius: 1 }, bornTick: 0, armTick: 0, endTick: 10_000 });
+  const ended = (ev: MatchEvent[]) => ev.flatMap((e) => (e.type === "zone" && e.phase === "end" ? [e.zone] : []));
+
+  it("the mage's 3-zone limit evicts the oldest non-ult zone; with only ult zones — the oldest of them", () => {
+    const s = createMatchState([]);
+    const ev: MatchEvent[] = [];
+    const rift = add(s, ev, 1, "rift");
+    const quake = add(s, ev, 1, "quake");
+    const bog = add(s, ev, 1, "bog");
+    const pillar = add(s, ev, 1, "pillar");
+    expect([ended(ev), s.zones.map((z) => z.id)]).toEqual([[quake], [rift, bog, pillar]]);
+
+    const only = createMatchState([]);
+    const ev2: MatchEvent[] = [];
+    const first = add(only, ev2, 2, "tsunami");
+    add(only, ev2, 2, "rift");
+    add(only, ev2, 2, "tsunami");
+    add(only, ev2, 2, "pillar");
+    expect(ended(ev2)).toEqual([first]);
+  });
+
+  it("the arena cap of 16 evicts the oldest non-ult zone", () => {
+    const s = createMatchState([]);
+    const ev: MatchEvent[] = [];
+    const wave = add(s, ev, 1, "tsunami");
+    const walls = Array.from({ length: 15 }, (_, k) => add(s, ev, 10 + k, "fireWall"));
+    add(s, ev, 40, "fireWall");
+    expect(ended(ev)).toEqual([walls[0]]);
+    expect(s.zones.map((z) => z.id)).toContain(wave);
   });
 });
 
