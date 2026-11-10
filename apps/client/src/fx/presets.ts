@@ -181,6 +181,16 @@ const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
     L("ember", 56, "sphere", [4, 9], [0.4, 0.7], [0.05, 0.08], [0.02, 0.03], { up: 2, gravity: 4 }),
     L("glow", 36, "sphere", [1.5, 3.5], [0.5, 0.8], [0.12, 0.18], [0.03, 0.06], { r0: 0.4, gravity: -0.6 }),
   ],
+  // своё взятие — низко, у ног: кольцо света бежит по полу, искры короткие и падают; путь ниже глаз (не в лицо камеры)
+  orbTakeOwn: [
+    L("glow", 12, "ring", [1, 2], [0.3, 0.45], [0.06, 0.1], [0.02, 0.04], { r0: 0.2, r1: 0.5, up: 0.4, gravity: 0.5 }),
+    L("ember", 14, "ring", [1.5, 3], [0.25, 0.4], [0.03, 0.05], [0.015, 0.02], { r0: 0.2, r1: 0.4, up: 1.2, gravity: 6 }),
+  ],
+  runeTakeOwn: [
+    L("core", 3, "ring", [0.2, 0.6], [0.12, 0.2], [0.3, 0.45], [0.6, 0.9], { r0: 0, r1: 0.3, gravity: 0 }),
+    L("glow", 30, "ring", [2, 4], [0.4, 0.6], [0.1, 0.15], [0.03, 0.06], { r0: 0.3, r1: 0.8, up: 0.4, gravity: 0.5 }),
+    L("ember", 30, "ring", [3, 6], [0.3, 0.5], [0.04, 0.06], [0.015, 0.025], { r0: 0.3, r1: 0.7, up: 1.5, gravity: 8 }),
+  ],
   // искра за носителем ярости: одна, всплывает и отстаёт — за бегущим тянется золотой след
   furyMote: [L("ember", 1, "up", [0.3, 0.9], [0.5, 0.8], [0.05, 0.07], [0.015, 0.025], { gravity: -0.8, cone: 0.6 })],
   // Воздух и Вода — своими таблицами (presets.air.ts, presets.water.ts)
@@ -227,7 +237,7 @@ const PALM: Readonly<Record<Element, PalmLayers>> = {
 const ELEMENT_TRAILS: Readonly<Partial<Record<ProjectileKind, TrailFn>>> = { ...AIR_TRAILS, ...WATER_TRAILS };
 
 /** Всплески объектов на карте: их свет — золото (toGold), а не огонь. */
-const GOLD_BURSTS: ReadonlySet<BurstPreset> = new Set<BurstPreset>(["orbSpawn", "orbTake", "runeSpawn", "runeTake", "furyMote"]);
+const GOLD_BURSTS: ReadonlySet<BurstPreset> = new Set<BurstPreset>(["orbSpawn", "orbTake", "orbTakeOwn", "runeSpawn", "runeTake", "runeTakeOwn", "furyMote"]);
 
 /**
  * Частицы всплеска `p` в точке pos. Число — round(n × clamp(scale, 0,5, 3)), не больше MAX_BURST.

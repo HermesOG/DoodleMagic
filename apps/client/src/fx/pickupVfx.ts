@@ -1,5 +1,5 @@
 import { DynamicDrawUsage, Group, InstancedBufferAttribute, InstancedMesh, PlaneGeometry, Vector3, type ShaderMaterial } from "three";
-import { PICKUPS, TICK_HZ, hasFury, pickupPresent, type PickupState, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
+import { NOBODY, PICKUPS, TICK_HZ, hasFury, pickupPresent, type PickupState, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
 import { INK_STYLE, type RGB } from "../render/palette";
 import { glslFloat } from "../render/stylePass";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
@@ -17,13 +17,20 @@ import { GOLD, burstParticles, toGold } from "./presets";
  * - Руна: золотой знак-диск 1,1 м с печатью тушью парит на 1,2 м над площадкой; повёрнут к глазам вокруг вертикали
  *   (ребром не встаёт), печать вращается в плоскости диска; свечение и свет 5 м. Последние 10 с до появления на площадке
  *   тушью дорисовывается круг-печать (доля — прошедшее / 10 с), к центру тянутся золотые искры. Появление — runeSpawn
- *   и вспышка света; взятие — runeTake (своё — у ног, не в лицо).
+ *   и вспышка света; взятие — runeTake; пропала (взята, перенесена отсчётом) — печать тает.
  * - Носитель ярости: золотое свечение у груди, пульс 1,5 Гц (свет 2,5 м; ореол растёт с расстоянием — носитель виден
  *   на любой дистанции боя), за ним — искры furyMote ≤ 20/с; последние 2 с пульс чаще и гаснет. Свой — только искры
  *   у ладоней: ни ореола, ни света у камеры, прицел чист.
+ * - Своё взятие — низко: orbTakeOwn / runeTakeOwn кольцом по полу, путь искр ниже глаз. Ореолы и вспышка у глаз камеры
+ *   гаснут; стоишь в столбе появления руны — столба нет.
  * Мешей два (+2 вызова): тела (сферы и руна) и печати на полу. Частицы — общий пул, свет — общие свечения в лимите
- * пресета. Переходы «лежит → нет» и «нет → лежит» считаются от прошлого увиденного кадра, а не от пары prev / cur:
- * кадр с той же парой тиков всплеск не повторит, а пропущенный тик его не потеряет.
+ * пресета.
+ * Объект смотрится на последнем посчитанном тике состояния (now = tick − 1: на нём родились его события). Появление
+ * и взятие — по самому состоянию на тиках (seenNow, now] с прошлого кадра: срок объекта наступил — появился (так видно
+ * и появление со взятием на одном тике, когда маг ждёт на площадке); сфера взята — её срок стал now + 15 с с тиком
+ * взятия в окне; руну взял маг, у которого furyUntil − 12 с — в окне (так известно, моё ли взятие). Кадр с той же парой
+ * тиков ничего не повторит, пропущенный тик не потеряется; объект, вернувшийся откатом предсказания (срок в прошлом),
+ * встаёт тихо; перенос руны отсчётом и новый бой — не взятие.
  */
 
 /** Точка объекта на арене — на 0,5 м над полом. */
@@ -47,7 +54,7 @@ const ORB_HALO_PER_M = 0.016;
 export const ORB_LIGHT_M = 2;
 const ORB_GLOW = 0.45;
 /** Свет сфер уступает всему (руки магов — 0,6): шесть сфер не съедают бюджет пресета 2/4/8, ореол остаётся. */
-const ORB_PRIO = 0.3;
+export const ORB_PRIO = 0.3;
 
 /** Диск руны, радиус, м (1,1 м в поперечнике); парит на 1,2 м над площадкой. */
 export const RUNE_R_M = 0.55;
@@ -62,25 +69,34 @@ const RUNE_GROW_S = 0.35;
 export const RUNE_SEAL_M = 1.6;
 const RUNE_SEAL_INK = 0.8;
 const RUNE_SEAL_GOLD = 0.45;
-/** Свечение руны: свет 5 м, ореол не меньше 0,9 м; свет — выше рук магов, ниже снарядов. */
+/**
+ * Свечение руны: свет 5 м, ореол не меньше 0,9 м. Свет — выше рук магов (0,6), ниже горения (1): на «Низком»
+ * (2 источника) руна не вытесняет огонь на цели.
+ */
 export const RUNE_LIGHT_M = 5;
 const RUNE_HALO_M = 0.9;
 const RUNE_HALO_PER_M = 0.02;
 const RUNE_GLOW = 0.45;
-const RUNE_PRIO = 1.4;
+export const RUNE_PRIO = 0.8;
 /** Вспышка появления руны: свет 7 м, гаснет за 0,5 с; приоритет — как у вспышек всплесков. */
 export const RUNE_FLASH = { light: 7, halo: 1.6, intensity: 1.5, core: 0.9, life: 0.5, prio: 5 } as const;
 /** Искры к центру печати в объявлении, в секунду: в начале и к появлению. */
 const WARN_SPARKS = [6, 36] as const;
-/** Печать взятой руны тает за столько секунд. */
-const SEAL_FADE_S = 0.6;
-/** Взял руну я: всплеск у ног и в 0,7 силы — не в лицо камеры. */
-const OWN_TAKE_SCALE = 0.7;
-/**
- * Всплеск взятия — только если у точки живой маг (по горизонтали не дальше этого): объекты, заведённые заново на
- * старте боя, исчезают без всплеска.
- */
-const TAKE_NEAR_M = 1.6;
+/** Печать пропавшей руны тает за столько секунд. */
+export const SEAL_FADE_S = 0.6;
+/** Полная печать лежащей руны — с неё тает печать руны, появившейся и взятой в одном кадре. */
+const RUNE_SEAL_FULL: Readonly<SealLook> = { ink: RUNE_SEAL_INK, gold: RUNE_SEAL_GOLD, progress: 1 };
+/** Стоишь в столбе появления (глаза ближе 1,2 м к оси) — столба нет: он прошёл бы сквозь камеру. */
+const COLUMN_R_M = 1.2;
+/** Сферу взял ближний к точке живой маг (не дальше 1,6 м по горизонтали): так видно, моё ли взятие. */
+const ORB_TAKER_M = 1.6;
+const ORB_RESPAWN_TICKS = Math.round(PICKUPS.orb.respawnS * TICK_HZ);
+const FURY_TICKS = Math.round(PICKUPS.rune.furyS * TICK_HZ);
+/** Свет — только при доле яркости ≥ 0,3: почти погасшее свечение не держит источник пресета. */
+const LIT_MIN = 0.3;
+/** Ореол у глаз камеры гаснет: ближе 0,3 м его нет, к 2 м — полный (как ядро снаряда у глаз). */
+const FACE_NEAR_M = 0.3;
+const FACE_FULL_M = 2;
 
 /** Носитель ярости: пульс 1,5 Гц, последние 2 с — 4 Гц и гаснет. */
 export const FURY_HZ = 1.5;
@@ -92,8 +108,8 @@ const FURY_CHEST_M = 1.3;
 const FURY_HALO_M = 0.5;
 const FURY_HALO_PER_M = 0.03;
 const FURY_GLOW = 0.9;
-/** Свет носителя — выше рук магов и горения: носителя ищут глазами. */
-const FURY_PRIO = 1.2;
+/** Свет носителя — ниже рук магов (0,6): носителя видно по ореолу, свет на мир — когда источник свободен. */
+export const FURY_PRIO = 0.5;
 /** Искр за чужим носителем в секунду (≤ 20); своему — у ладоней. */
 export const FURY_MOTE_RATE = 16;
 export const OWN_MOTE_RATE = 10;
@@ -108,6 +124,10 @@ const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 /** Поворот на hz оборотов в секунду к моменту t, рад, — в пределах оборота: cos и sin в шейдере не теряют точность. */
 const turn = (hz: number, t: number): number => ((hz * t) % 1) * 2 * Math.PI;
+/** Свет при доле яркости k: меньше LIT_MIN — 0. */
+const lit = (light: number, k: number): number => (k < LIT_MIN ? 0 : light);
+/** Доля ореола у точки p по расстоянию до глаз: 0 вплотную, 1 с 2 м. */
+export const faceK = (p: Vec3, eye: Vec3): number => clamp01((dist(p, eye) - FACE_NEAR_M) / (FACE_FULL_M - FACE_NEAR_M));
 
 /**
  * Рост из печати: 0 → 1 за durS секунд, ease-out с перелётом ≈ 6 % (язык шипов Разлома). До начала — 0, после — 1.
@@ -419,14 +439,24 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
   const group = new Group();
   group.name = "fx-pickups";
   group.add(seals, bodies);
+  const bodyAttrs = [b0, b1] as const;
+  const sealAttrs = [s0, s1, s2] as const;
 
   const rng: Rng = Math.random;
   // покадровое — одно на эффектник: кадр переписывает, а не создаёт
   const specs: ParticleSpec[] = [];
   /** Свои искры (объявление, ладони) — перекрашиваются в золото разом; всплески приходят золотыми из burstParticles. */
   const raw: ParticleSpec[] = [];
-  /** По номеру объекта: лежал ли в прошлом кадре; когда руна исчезла (печать тает) и появилась (вспышка), с. */
-  let known: boolean[] = [];
+  const camRight = new Vector3();
+  const camUp = new Vector3();
+  /** Последний посчитанный тик прошлого кадра и этого: события кадра — на тиках (seenNow, frameNow]. */
+  let seenNow = 0;
+  let frameNow = 0;
+  /** По номеру объекта: срок в прошлом кадре. */
+  let seenReady: number[] = [];
+  /** По номеру руны: печать прошлого кадра (без угасания); с какой печати и когда она тает; когда появилась (вспышка). */
+  let shown: (SealLook | null)[] = [];
+  let fadeFrom: (Readonly<SealLook> | null)[] = [];
   let goneS: number[] = [];
   let flashS: number[] = [];
   /** Дробные остатки темпа частиц: объявление — по номеру объекта, искры ярости — по магу. */
@@ -437,6 +467,9 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
   let ownHand = false;
   let nb = 0;
   let ns = 0;
+
+  /** Тик t — в окне кадра (seenNow, frameNow]: событие на нём случилось с прошлого кадра. */
+  const inWin = (t: number): boolean => t > seenNow && t <= frameNow;
 
   /** Сколько частиц родить за кадр по темпу rate (остаток копится в acc под ключом id). */
   function due<K>(acc: Map<K, number>, id: K, rate: number, dt: number): number {
@@ -453,7 +486,7 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
     nb++;
   }
 
-  function pushSeal(p: PickupState, floorY: number, look: SealLook, i: number): void {
+  function pushSeal(p: PickupState, floorY: number, look: Readonly<SealLook>, i: number): void {
     if (ns >= MAX_OBJECTS) return;
     const rune = p.kind === "rune";
     s0.setXYZW(ns, p.pos.x, floorY, p.pos.z, rune ? RUNE_SEAL_M : ORB_SEAL_M);
@@ -463,10 +496,10 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
     ns++;
   }
 
-  /** Кто взял объект: ближний живой маг у точки (по горизонтали ≤ TAKE_NEAR_M, по высоте — в рост с запасом). */
-  function takerOf(f: ElementVfxFrame, p: PickupState): UnitId | null {
-    let best: UnitId | null = null;
-    let bestD = TAKE_NEAR_M;
+  /** Кто взял сферу (взятие известно по сроку): ближний к точке живой маг, не дальше ORB_TAKER_M; никого — NOBODY. */
+  function orbTaker(f: ElementVfxFrame, p: PickupState): UnitId {
+    let best: UnitId = NOBODY;
+    let bestD = ORB_TAKER_M;
     for (const it of f.units) {
       if (!it.u.mage) continue;
       const b = it.u.move.body.pos;
@@ -478,73 +511,97 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
     return best;
   }
 
-  /** Объект появился: сфера — кольцо искр из печати, руна — столб искр и вспышка. */
+  /** Кто взял руну: маг, у которого ярость началась в окне кадра (furyUntil − 12 с); никого — NOBODY. */
+  function runeTaker(f: ElementVfxFrame): UnitId {
+    for (const u of f.cur.units) if (u.mage && inWin(u.status.furyUntil - FURY_TICKS)) return u.id;
+    return NOBODY;
+  }
+
+  /** Объект появился: сфера — кольцо искр из печати, руна — столб искр и вспышка (в столбе стоишь — без столба). */
   function appear(f: ElementVfxFrame, i: number, p: PickupState, floorY: number): void {
     const base = { x: p.pos.x, y: floorY + 0.05, z: p.pos.z };
     if (p.kind === "orb") {
       specs.push(...burstParticles("orbSpawn", base, UP, 1, rng));
       return;
     }
-    specs.push(...burstParticles("runeSpawn", base, UP, 1, rng));
     flashS[i] = f.nowS;
+    if (Math.hypot(f.eye.x - p.pos.x, f.eye.z - p.pos.z) < COLUMN_R_M && f.eye.y > floorY) return;
+    specs.push(...burstParticles("runeSpawn", base, UP, 1, rng));
   }
 
-  /** Объект исчез: взят магом — всплеск взятия; рядом никого (заведён заново) — тихо. Печать руны тает в любом случае. */
-  function vanish(f: ElementVfxFrame, i: number, p: PickupState, floorY: number): void {
-    if (p.kind === "rune") goneS[i] = f.nowS;
-    const who = takerOf(f, p);
-    if (who === null) return;
-    if (p.kind === "orb") specs.push(...burstParticles("orbTake", { ...p.pos }, UP, 1, rng));
-    else if (who === f.localId) specs.push(...burstParticles("runeTake", { x: p.pos.x, y: floorY + 0.1, z: p.pos.z }, UP, OWN_TAKE_SCALE, rng));
-    else specs.push(...burstParticles("runeTake", { x: p.pos.x, y: floorY + RUNE_HOVER_M, z: p.pos.z }, UP, 1, rng));
+  /** Объект взят магом who: чужой — искры от объекта; свой — низко, кольцом по полу у ног (путь ниже глаз). */
+  function take(f: ElementVfxFrame, p: PickupState, floorY: number, who: UnitId): void {
+    const own = who !== NOBODY && who === f.localId;
+    const feet = { x: p.pos.x, y: floorY + 0.05, z: p.pos.z };
+    if (p.kind === "orb") specs.push(...burstParticles(own ? "orbTakeOwn" : "orbTake", own ? feet : { ...p.pos }, UP, 1, rng));
+    else specs.push(...burstParticles(own ? "runeTakeOwn" : "runeTake", own ? feet : { x: p.pos.x, y: floorY + RUNE_HOVER_M, z: p.pos.z }, UP, 1, rng));
   }
 
-  function drawOrb(f: ElementVfxFrame, i: number, p: PickupState, here: boolean, floorY: number): void {
-    const look = sealLook(p, f.tick);
+  function drawOrb(f: ElementVfxFrame, i: number, p: PickupState, here: boolean, floorY: number, ft: number): void {
+    const look = sealLook(p, ft);
     if (look) pushSeal(p, floorY, look, i);
     if (!here) return;
     // растёт из печати: поднимается с пола на свою высоту, пока растёт
-    const g = growIn((f.tick - p.readyAt) / TICK_HZ, ORB_GROW_S);
+    const g = growIn((ft - p.readyAt) / TICK_HZ, ORB_GROW_S);
     const up = Math.min(1, g);
     const phase = i * 1.7;
     const w = 2 * Math.PI * ORB_BOB_HZ * f.nowS + phase;
     const c = { x: p.pos.x, y: floorY + (POINT_LIFT_M + ORB_BOB_M * Math.sin(w)) * up, z: p.pos.z };
     const bright = 0.9 + 0.1 * Math.sin(w + 1);
     pushBody(c, false, ORB_R_M * g, turn(ORB_SPIN_HZ, f.nowS) + phase, bright, (i * 1.37) % 7);
-    const halo = Math.max(ORB_HALO_M, dist(c, f.eye) * ORB_HALO_PER_M);
-    f.glow({ pos: c, color: GOLD.light, halo: halo * up, light: ORB_LIGHT_M, intensity: ORB_GLOW * bright * up, core: 0.1 * up }, ORB_PRIO);
+    const near = faceK(c, f.eye);
+    const halo = Math.max(ORB_HALO_M, dist(c, f.eye) * ORB_HALO_PER_M) * up * near;
+    f.glow({ pos: c, color: GOLD.light, halo, light: lit(ORB_LIGHT_M, up), intensity: ORB_GLOW * bright * up, core: 0.1 * up * near }, ORB_PRIO);
   }
 
-  function drawRune(f: ElementVfxFrame, i: number, p: PickupState, here: boolean, floorY: number): void {
+  /** Руна; changed — в этом кадре появилась или взята (печать тает с полной, а не с печати объявления). */
+  function drawRune(f: ElementVfxFrame, i: number, p: PickupState, here: boolean, floorY: number, ft: number, changed: boolean): void {
     const hover = { x: p.pos.x, y: floorY + RUNE_HOVER_M, z: p.pos.z };
-    let look = sealLook(p, f.tick);
+    const seal = sealLook(p, ft);
+    let look: Readonly<SealLook> | null = seal;
+    if (seal) fadeFrom[i] = null;
+    else {
+      // печать пропала (взята, перенесена отсчётом) — тает с той, что была видна
+      if (changed) fadeFrom[i] = RUNE_SEAL_FULL;
+      else if (shown[i]) fadeFrom[i] = shown[i]!;
+      if (changed || shown[i]) goneS[i] = f.nowS;
+      const from = fadeFrom[i];
+      const k = from ? 1 - (f.nowS - goneS[i]!) / SEAL_FADE_S : 0;
+      if (from && k > 0) look = { ink: from.ink * k, gold: from.gold * k, progress: from.progress };
+      else fadeFrom[i] = null;
+    }
+    shown[i] = seal;
     if (here) {
-      const g = growIn((f.tick - p.readyAt) / TICK_HZ, RUNE_GROW_S);
+      const g = growIn((ft - p.readyAt) / TICK_HZ, RUNE_GROW_S);
       const up = Math.min(1, g);
       const pulse = 0.5 + 0.5 * Math.sin(2 * Math.PI * RUNE_PULSE_HZ * f.nowS);
       // поднимается к своей высоте, пока растёт; парит и медленно дышит светом
       const lift = (RUNE_HOVER_M + RUNE_BOB_M * Math.sin(2 * Math.PI * RUNE_BOB_HZ * f.nowS)) * (0.5 + 0.5 * up);
       const c = { x: p.pos.x, y: floorY + lift, z: p.pos.z };
       pushBody(c, true, RUNE_R_M * g, turn(RUNE_SPIN_HZ, f.nowS), pulse, (i * 1.37) % 7);
-      if (look) look = { ...look, gold: look.gold * (0.8 + 0.4 * pulse) };
-      const halo = Math.max(RUNE_HALO_M, dist(c, f.eye) * RUNE_HALO_PER_M);
-      f.glow({ pos: c, color: GOLD.light, halo: halo * up, light: RUNE_LIGHT_M, intensity: RUNE_GLOW * (0.85 + 0.15 * pulse) * up, core: 0 }, RUNE_PRIO);
-    } else if (look) {
-      // объявление: к центру тянутся искры, свет на площадке разгорается
-      const k = look.progress;
+      if (seal) seal.gold *= 0.8 + 0.4 * pulse;
+      const halo = Math.max(RUNE_HALO_M, dist(c, f.eye) * RUNE_HALO_PER_M) * up * faceK(c, f.eye);
+      f.glow({ pos: c, color: GOLD.light, halo, light: lit(RUNE_LIGHT_M, up), intensity: RUNE_GLOW * (0.85 + 0.15 * pulse) * up, core: 0 }, RUNE_PRIO);
+    } else if (seal) {
+      // объявление: к центру тянутся искры, свет на площадке разгорается; ореол у глаз мага в центре гаснет
+      const k = seal.progress;
       liveWarn.add(i);
       for (let n = due(warnAcc, i, WARN_SPARKS[0] + (WARN_SPARKS[1] - WARN_SPARKS[0]) * k, f.dt); n > 0; n--) raw.push(warnSpark(hover, floorY, rng));
-      if (k > 0) f.glow({ pos: hover, color: GOLD.light, halo: 0.6 * k * k, light: 3 * k, intensity: 0.6 * k * k, core: 0 }, RUNE_PRIO);
-    } else {
-      // взятая руна: печать тает
-      const k = 1 - (f.nowS - goneS[i]!) / SEAL_FADE_S;
-      if (k > 0 && k <= 1) look = { ink: RUNE_SEAL_INK * k, gold: RUNE_SEAL_GOLD * k, progress: 1 };
+      if (k > 0) f.glow({ pos: hover, color: GOLD.light, halo: 0.6 * k * k * faceK(hover, f.eye), light: lit(3 * k, k), intensity: 0.6 * k * k, core: 0 }, RUNE_PRIO);
     }
     if (look) pushSeal(p, floorY, look, i);
+    // вспышка появления: у глаз — без ореола и ядра, свет на мир остаётся
     const age = f.nowS - flashS[i]!;
     if (age >= 0 && age < RUNE_FLASH.life) {
       const k = 1 - age / RUNE_FLASH.life;
-      f.glow({ pos: hover, color: GOLD.light, halo: RUNE_FLASH.halo * (0.6 + 0.4 * k), light: RUNE_FLASH.light, intensity: RUNE_FLASH.intensity * k * k, core: RUNE_FLASH.core * k }, RUNE_FLASH.prio);
+      const near = faceK(hover, f.eye);
+      f.glow(
+        {
+          pos: hover, color: GOLD.light, halo: RUNE_FLASH.halo * (0.6 + 0.4 * k) * near, light: lit(RUNE_FLASH.light, k),
+          intensity: RUNE_FLASH.intensity * k * k * (0.35 + 0.65 * near), core: RUNE_FLASH.core * k * near,
+        },
+        RUNE_FLASH.prio,
+      );
     }
   }
 
@@ -556,12 +613,21 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
       if (!fg) continue;
       liveFury.add(it.id);
       if (it.id === f.localId) {
-        // свой: искры у ладоней; идут вместе с руками — к своей скорости прибавлена скорость мага
+        // свой: искры в 8–12 см от ладони наружу и вниз — варежка их не прячет, прицел чист; уходят от ладони наружу
+        // и идут вместе с руками — к своей скорости прибавлена скорость мага
         const v = it.u.move.body.vel;
+        camRight.setFromMatrixColumn(f.camera.matrixWorld, 0);
+        camUp.setFromMatrixColumn(f.camera.matrixWorld, 1);
         for (let n = due(moteAcc, it.id, OWN_MOTE_RATE * (0.4 + 0.6 * fg.fade), f.dt); n > 0; n--) {
           ownHand = !ownHand;
-          const s = spawn(OWN_SPARK, f.palmWorld(ownHand ? "left" : "right"), UP, rng);
-          s.vel = { x: s.vel.x + v.x, y: s.vel.y + v.y, z: s.vel.z + v.z };
+          const side = ownHand ? -1 : 1;
+          const palm = f.palmWorld(ownHand ? "left" : "right");
+          const out = (0.06 + 0.02 * rng()) * side;
+          const down = 0.05 + 0.02 * rng();
+          const at = { x: palm.x + camRight.x * out - camUp.x * down, y: palm.y + camRight.y * out - camUp.y * down, z: palm.z + camRight.z * out - camUp.z * down };
+          const s = spawn(OWN_SPARK, at, UP, rng);
+          const drift = (0.08 + 0.1 * rng()) * side;
+          s.vel = { x: s.vel.x + camRight.x * drift + v.x, y: s.vel.y + camRight.y * drift + v.y, z: s.vel.z + camRight.z * drift + v.z };
           raw.push(s);
         }
         continue;
@@ -575,8 +641,9 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
         }
       const chest = { x: at.x, y: at.y + FURY_CHEST_M, z: at.z };
       const k = fg.fade;
-      const halo = Math.max(FURY_HALO_M, dist(chest, f.eye) * FURY_HALO_PER_M) * (0.85 + 0.15 * fg.pulse);
-      f.glow({ pos: chest, color: GOLD.light, halo, light: FURY_LIGHT_M, intensity: FURY_GLOW * (0.5 + 0.5 * fg.pulse) * k, core: 0.15 * fg.pulse * k }, FURY_PRIO);
+      const near = faceK(chest, f.eye);
+      const halo = Math.max(FURY_HALO_M, dist(chest, f.eye) * FURY_HALO_PER_M) * (0.85 + 0.15 * fg.pulse) * near;
+      f.glow({ pos: chest, color: GOLD.light, halo, light: lit(FURY_LIGHT_M, k), intensity: FURY_GLOW * (0.5 + 0.5 * fg.pulse) * k, core: 0.15 * fg.pulse * k * near }, FURY_PRIO);
       for (let n = due(moteAcc, it.id, FURY_MOTE_RATE * (0.5 + 0.5 * k), f.dt); n > 0; n--) {
         const q = { x: at.x + (rng() - 0.5) * 0.6, y: at.y + 0.8 + rng(), z: at.z + (rng() - 0.5) * 0.6 };
         specs.push(...burstParticles("furyMote", q, UP, 1, rng));
@@ -602,37 +669,56 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
     sync(f) {
       const cur = f.cur;
       const list = cur.pickups;
+      // объект смотрится на последнем посчитанном тике: на нём родились его события
+      frameNow = cur.tick - 1;
+      const ft = f.tick - 1;
       specs.length = 0;
       raw.length = 0;
       liveWarn.clear();
       nb = 0;
       ns = 0;
-      if (known.length !== list.length) {
-        // новый список объектов (первый кадр, другая арена): прошлое — из prev, если в нём тот же список
-        const before = f.prev.pickups.length === list.length ? f.prev : cur;
-        known = list.map((_, i) => pickupPresent(before.pickups[i]!, before.tick));
+      if (seenReady.length !== list.length || frameNow < seenNow) {
+        // новый список объектов (первый кадр, другая арена, новый мир): прошлое — из prev, если он того же мира
+        const base = f.prev.pickups.length === list.length && f.prev.tick <= cur.tick ? f.prev : cur;
+        seenNow = base.tick - 1;
+        seenReady = base.pickups.map((q) => q.readyAt);
+        shown = list.map(() => null);
+        fadeFrom = list.map(() => null);
         goneS = list.map(() => -Infinity);
         flashS = list.map(() => -Infinity);
         warnAcc.clear();
       }
       for (let i = 0; i < list.length; i++) {
         const p = list[i]!;
-        const here = pickupPresent(p, cur.tick);
+        const old = seenReady[i]!;
         const floorY = p.pos.y - POINT_LIFT_M;
-        if (here !== known[i]) {
-          known[i] = here;
-          if (here) appear(f, i, p, floorY);
-          else vanish(f, i, p, floorY);
+        // появился: прежний или новый срок наступил в окне (прежний — и тут же взят); вернувшийся откатом предсказания
+        // (срок в прошлом) — тихо
+        const spawned = inWin(old) || inWin(p.readyAt);
+        let who: UnitId = NOBODY;
+        let took = false;
+        if (p.kind === "orb") {
+          took = inWin(p.readyAt - ORB_RESPAWN_TICKS);
+          if (took) who = orbTaker(f, p);
+        } else if (p.readyAt !== old) {
+          // руна ушла со своего срока: взята, если кто-то получил ярость в окне; иначе перенесена (отсчёт, новый бой)
+          who = runeTaker(f);
+          took = who !== NOBODY;
         }
-        if (p.kind === "orb") drawOrb(f, i, p, here, floorY);
-        else drawRune(f, i, p, here, floorY);
+        if (spawned) appear(f, i, p, floorY);
+        if (took) take(f, p, floorY, who);
+        seenReady[i] = p.readyAt;
+        const here = pickupPresent(p, frameNow);
+        if (p.kind === "orb") drawOrb(f, i, p, here, floorY, ft);
+        else drawRune(f, i, p, here, floorY, ft, spawned || took);
       }
+      seenNow = frameNow;
       for (const k of warnAcc.keys()) if (!liveWarn.has(k)) warnAcc.delete(k);
       drawFury(f);
       if (raw.length > 0) specs.push(...toGold(raw));
       if (specs.length > 0) f.emit(specs);
-      flush(bodies, [b0, b1], nb);
-      flush(seals, [s0, s1, s2], ns);
+      flush(bodies, bodyAttrs, nb);
+      flush(seals, sealAttrs, ns);
     },
     dispose() {
       bodyGeom.dispose();
@@ -643,7 +729,7 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
       seals.dispose();
       warnAcc.clear();
       moteAcc.clear();
-      known = [];
+      seenReady = [];
     },
   };
 };
