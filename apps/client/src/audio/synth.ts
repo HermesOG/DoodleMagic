@@ -6,8 +6,11 @@ import { createVoiceLimiter } from "./voices";
 
 /** Голосов одновременно (голос — сыгранный звук со всеми слоями); лишние не запускаются. */
 export const MAX_VOICES = 24;
-/** Лёгкое подтверждение попадания (hitLight) не чаще 4 раз в секунду: кулаки бьют 5 раз в секунду, а тик не должен трещать. */
-export const HIT_TICK_PER_S = 4;
+/**
+ * Лёгкое подтверждение попадания (hitLight) не чаще 6 раз в секунду (фаза 9, L2): каждое попадание кулака (4 в секунду)
+ * слышно, а тик не трещит, когда кулаки и другое ЛКМ попадают разом.
+ */
+export const HIT_TICK_PER_S = 6;
 /**
  * Тяжёлое подтверждение (hitHeavy) — тоже не чаще 4 раз в секунду: удар по области задевает сразу несколько целей,
  * и каждое попадание иначе заняло бы свой голос.
@@ -65,13 +68,19 @@ export interface GameAudio {
   setListener(pos: Vec3, yaw: number): void;
   /**
    * pos null — у слушателя. floor — громкость не ниже этой после затухания с расстоянием (своё попадание слышно и
-   * с 20 м). До unlock(), без звука или при паузе контекста ничего не делает.
+   * с 20 м). pitch — множитель частот всех слоёв (тик попадания выше к смерти цели). До unlock(), без звука или при
+   * паузе контекста ничего не делает.
    */
-  play(id: SoundId, pos: Vec3 | null, gain: number, floor?: number): void;
+  play(id: SoundId, pos: Vec3 | null, gain: number, floor?: number, pitch?: number): void;
   /** Мастер-громкость 0…1. */
   setVolume(v: number): void;
   setMuted(m: boolean): void;
   stats(): AudioStats;
+  /**
+   * Шина боевой музыки (фаза 9): контекст и вход прямо в лимитер, мимо мастера и компрессора — эффекты не «качают»
+   * музыку, а автоподъём компрессора её не поднимает. Глушится вместе со звуком (setMuted). До unlock() — null.
+   */
+  musicBus(): { ctx: AudioContext; out: AudioNode } | null;
 }
 
 export interface AudioOptions {
@@ -128,9 +137,12 @@ export function createVoiceKit(ctx: BaseAudioContext, rand: () => number): Voice
   };
 }
 
-/** Ставит все слои рецепта с момента t0 в узел out. Годится и для OfflineAudioContext (прослушка, предрендер). */
-export function scheduleRecipe(ctx: BaseAudioContext, recipe: Recipe, out: AudioNode, t0: number, kit: VoiceKit): ScheduledRecipe {
-  const pitch = 1 + (kit.rand() * 2 - 1) * (recipe.vary ?? 0);
+/**
+ * Ставит все слои рецепта с момента t0 в узел out; pitchMul — множитель частот поверх разброса vary. Годится и для
+ * OfflineAudioContext (прослушка, предрендер).
+ */
+export function scheduleRecipe(ctx: BaseAudioContext, recipe: Recipe, out: AudioNode, t0: number, kit: VoiceKit, pitchMul = 1): ScheduledRecipe {
+  const pitch = pitchMul * (1 + (kit.rand() * 2 - 1) * (recipe.vary ?? 0));
   const nodes: AudioNode[] = [];
   let last: AudioScheduledSourceNode | null = null;
   let end = t0;
@@ -265,6 +277,8 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
   /** Вход реверба (его выход — в мастер); null — браузер не умеет ConvolverNode. */
   let reverbIn: AudioNode | null = null;
   let kit: VoiceKit | null = null;
+  /** Вход шины музыки в лимитер; null — до unlock(). */
+  let musicIn: GainNode | null = null;
   let volume = DEFAULT_VOLUME;
   let muted = false;
   const listener = { pos: { x: 0, y: 0, z: 0 }, yaw: 0 };
@@ -274,6 +288,7 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
 
   const applyMaster = () => {
     if (ctx && master) master.gain.setTargetAtTime(muted ? 0 : volume, ctx.currentTime, VOLUME_TC_S);
+    if (ctx && musicIn) musicIn.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, VOLUME_TC_S);
   };
   const wake = (c: AudioContext) => {
     const state: string = c.state; // "interrupted" — iOS: звонок, Siri; в типах DOM его может не быть
@@ -314,11 +329,17 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
         const m = c.createGain();
         m.gain.value = muted ? 0 : volume;
         m.connect(comp);
+        // шина музыки — своя, сразу в лимитер
+        const mus = c.createGain();
+        mus.gain.value = muted ? 0 : 1;
+        mus.connect(limiter);
         kit = createVoiceKit(c, rand);
         master = m;
+        musicIn = mus;
       } catch {
         kit = null;
         master = null;
+        musicIn = null;
         contextClass = null; // узлы не собрались: живём без звука
         try {
           c.close().catch(() => {});
@@ -356,7 +377,7 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
       listener.yaw = yaw;
     },
 
-    play(id, pos, gain, floor) {
+    play(id, pos, gain, floor, pitch) {
       if (!ctx || !master || !kit || muted || ctx.state !== "running") return;
       if (!(gain > 0) || !Number.isFinite(gain)) return;
       let bus: GainNode | null = null;
@@ -403,7 +424,8 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
           voiceNodes.push(send);
         }
 
-        const v = scheduleRecipe(ctx, recipe, bus, t0, kit);
+        // множитель высоты: нечисловой или неположительный — как без него (частота NaN бросила бы TypeError)
+        const v = scheduleRecipe(ctx, recipe, bus, t0, kit, pitch !== undefined && Number.isFinite(pitch) && pitch > 0 ? pitch : 1);
         voiceNodes.push(...v.nodes);
         v.last.onended = () => {
           for (const n of voiceNodes) n.disconnect();
@@ -431,6 +453,10 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
 
     stats() {
       return { unlocked: ctx !== null, voices: ctx ? voices.active(ctx.currentTime) : 0, volume, muted };
+    },
+
+    musicBus() {
+      return ctx && musicIn ? { ctx, out: musicIn } : null;
     },
   };
 }

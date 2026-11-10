@@ -31,23 +31,23 @@ const hitsOf = (log: Log, ability: string) => log.flatMap(({ t, e }) => (e.type 
 const reject = (t: number, slot: string, reason: string) => ({ t, e: expect.objectContaining({ type: "reject", slot, reason }) });
 
 describe("Fire kit", () => {
-  it("fists: 5 shots a second while LMB is held, 12 damage each", () => {
+  it("fists: 4 shots a second while LMB is held, 15 damage each (фаза 9, Р2)", () => {
     const { log } = play([at(-10)], 80, () => ({ primary: true, pitch: pitchTo(10) }));
-    expect(ticksOf(log, "cast", "fireFists").slice(0, 5)).toEqual([0, 12, 24, 36, 48]);
-    expect(ticksOf(log, "release", "fireFists").slice(0, 5)).toEqual([0, 12, 24, 36, 48]);
+    expect(ticksOf(log, "cast", "fireFists").slice(0, 5)).toEqual([0, 15, 30, 45, 60]);
+    expect(ticksOf(log, "release", "fireFists").slice(0, 5)).toEqual([0, 15, 30, 45, 60]);
     const hits = hitsOf(log, "fireFists");
-    expect([hits.length >= 5, hits.every(({ e }) => e.amount === 12)]).toEqual([true, true]);
+    expect([hits.length >= 5, hits.every(({ e }) => e.amount === 15)]).toEqual([true, true]);
   });
 
-  it("heat: +8 a shot; at 100 the rate halves for 1.5 s while heat drains; cools 35/s after 0.3 s idle", () => {
+  it("heat: +10 a shot; at 100 the rate halves for 1.5 s while heat drains; cools 35/s after 0.3 s idle", () => {
     const { log } = play([], 300, () => ({ primary: true }));
     const shots = ticksOf(log, "cast", "fireFists");
-    expect(shots.slice(0, 13)).toEqual(Array.from({ length: 13 }, (_, k) => 12 * k));
+    expect(shots.slice(0, 10)).toEqual(Array.from({ length: 10 }, (_, k) => 15 * k));
     const on = log.find(({ e }) => e.type === "overheat" && e.on)!.t;
     const off = log.find(({ e }) => e.type === "overheat" && !e.on)!.t;
-    expect([on, off, shots.filter((t) => t > on && t < off)]).toEqual([144, 234, [168, 192, 216]]);
+    expect([on, off, shots.filter((t) => t > on && t < off)]).toEqual([135, 225, [165, 195]]);
     const idle = play([], 109, (k) => ({ primary: k < 49 })).s;
-    expect(idle.units[0]!.mage!.heat).toBeCloseTo(40 - (42 * 35) / 60, 9);
+    expect(idle.units[0]!.mage!.heat).toBeCloseTo(40 - (45 * 35) / 60, 9);
   });
 
   it("fireball: 0.25 s windup, 50 with burning on a hit, 8 s cooldown", () => {
@@ -153,7 +153,7 @@ describe("Fire kit", () => {
     expect([ticksOf(log, "cast", "jetDash"), ticksOf(log, "release", "fireball"), ticksOf(log, "cast", "fireFists")[0]]).toEqual([[5], [15], 16]);
     // нажатие ЛКМ на перезарядке не отказывает: ждёт в буфере и стреляет, когда кулак готов
     const tap = play([], 20, (k) => ({ primary: k < 2 || k === 6 }));
-    expect([ticksOf(tap.log, "cast", "fireFists"), tap.log.filter(({ e }) => e.type === "reject").map(({ t }) => t)]).toEqual([[0, 12], []]);
+    expect([ticksOf(tap.log, "cast", "fireFists"), tap.log.filter(({ e }) => e.type === "reject").map(({ t }) => t)]).toEqual([[0, 15], []]);
     const rooted = play([], 1, (k, st) => {
       if (k === 0) st.units[0]!.status.rootUntil = st.tick + 30;
       return { e: true };

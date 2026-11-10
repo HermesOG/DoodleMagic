@@ -1,4 +1,5 @@
 import { NOBODY, forwardXZ, rightXZ, unitById, type AbilityId, type MatchEvent, type Unit, type UnitId, type Vec3, type ZoneKind } from "@doodlemagic/sim";
+import { RECOIL, recoilKick } from "./camera";
 import type { BurstPreset, Effect, SoundId } from "./effects";
 import type { FrameView } from "./elementFx";
 import type { EventView } from "./eventMap";
@@ -20,6 +21,8 @@ export const ULT_CASTER = { trauma: 0.8, kickDeg: 2, fovDeg: 10 } as const;
 const VORTEX: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["tornado", "fireTornado", "sandTornado"]);
 /** Своё попадание слышно не тише этого и издалека — как в общей карте (round3/01, H3). */
 const OWN_FLOOR = 0.6;
+/** Свой промах — пол 0,35, как в общей карте (фаза 9, L8). */
+const OWN_MISS_FLOOR = 0.35;
 /** Толчок камеры средней ступени (TIERS.medium.kickDeg) и её trauma — у выпуска Порыва и удара о стену. */
 const MEDIUM_KICK_DEG = 1.25;
 /** Зерно парения — раз в 0,35 с на мага; гул Смерча — раз в 0,5 с на вихрь (Р15). */
@@ -31,7 +34,7 @@ export const FAN_TICKS = 12;
 export const FAN_SLACK_TICKS = 2;
 
 const sound = (id: SoundId, pos: Vec3 | null = null, gain = 1): Effect => ({ kind: "sound", id, pos, gain });
-const ownSound = (id: SoundId, pos: Vec3, own: boolean): Effect => (own ? { kind: "sound", id, pos, gain: 1, floor: OWN_FLOOR } : sound(id, pos));
+const ownSound = (id: SoundId, pos: Vec3, own: boolean, floor = OWN_FLOOR): Effect => (own ? { kind: "sound", id, pos, gain: 1, floor } : sound(id, pos));
 const burst = (preset: BurstPreset, pos: Vec3, dir: Vec3 = UP, scale = 1): Effect => ({ kind: "burst", preset, pos, dir, scale });
 const centre = (u: Unit): Vec3 => ({ x: u.move.body.pos.x, y: u.move.body.pos.y + u.move.body.height / 2, z: u.move.body.pos.z });
 const ahead = (p: Vec3, d: Vec3, m: number): Vec3 => ({ x: p.x + d.x * m, y: p.y + d.y * m, z: p.z + d.z * m });
@@ -55,7 +58,8 @@ function castFx(ev: Extract<MatchEvent, { type: "cast" }>, mine: boolean): Effec
         { kind: "gesture", ability: "airSickle" },
         { kind: "palm", hand: "auto", element: "air", preset: "flash" },
         sound("sickleThrow"),
-        { kind: "kick", pitchDeg: 0.2, yawDeg: 0, rollDeg: 0 },
+        // отдача ЛКМ (фаза 9, Р6): вверх и вбок по взмаху руки этого удара
+        recoilKick(RECOIL.sickle, true),
       ];
     case "gust":
       // замах: у ладоней сходится кольцо ветра, свист растёт; удар камеры — на выпуске
@@ -128,8 +132,8 @@ export function airEffects(ev: MatchEvent, view: EventView, me: Unit | undefined
       if (ev.ability !== "airSickle") return null;
       const out: Effect[] = [burst("sicklePuff", ev.pos, ev.normal)];
       if (ev.terrain >= 0) out.push(burst("terrainChips", ev.pos, ev.normal, 0.5));
-      // пол громкости — только своему попаданию в цель, промах звучит по расстоянию
-      out.push(ownSound("sickleHit", ev.pos, mine(ev.owner) && ev.target !== NOBODY));
+      // своё попадание в цель — пол 0,6, свой промах — 0,35 (L8); чужое — по расстоянию
+      out.push(ownSound("sickleHit", ev.pos, mine(ev.owner), ev.target !== NOBODY ? OWN_FLOOR : OWN_MISS_FLOOR));
       return out;
     }
     case "blown":

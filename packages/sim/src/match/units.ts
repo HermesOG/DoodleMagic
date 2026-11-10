@@ -3,7 +3,7 @@ import { DEFAULT_MOVE, NO_INPUT, stepPlayer } from "../player";
 import { groundBelow } from "../raycast";
 import { TICK_DT, type MoveParams, type PlayerInput, type Spawn } from "../types";
 import { volumeAt, type World } from "../world";
-import { applyHit, courage, endTow, respawnAt } from "./combat";
+import { applyHit, courage, endStreak, endTow, respawnAt, scorePoint } from "./combat";
 import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ULT_MOVE, ticks } from "./defs";
 import { NO_HOOKS, type SimHooks } from "./hooks";
 import { furyOnDeath } from "./pickups";
@@ -221,7 +221,8 @@ function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
 
 /**
  * Сброс: живой в зоне смерти или ниже killBelowY выбывает (маг +1 deaths, и когда упал сам); сброс засчитывается
- * последнему ударившему за 5 с (Р13), засчитанному магу — falls и «Кураж»; засчитанный сброс даёт заряд ульты, как
+ * последнему ударившему за 5 с (Р13), засчитанному магу — falls, «Кураж», добыча и серия (scorePoint, фаза 9); серия
+ * упавшего мага обрывается (endStreak); засчитанный сброс даёт заряд ульты, как
  * убийство (+6 и помощь, Р1 фазы 5); сброс носителя ярости снимает её, засчитанному +10 (Р5 фазы 6).
  * Возрождение: на respawnTick юнит заменяется свежим (respawned) — по текущему состоянию: маги, вставшие раньше
  * в этом тике, уже стоят на своих точках.
@@ -237,6 +238,7 @@ export function stepLife(s: MatchState, t: TickCtx): void {
       endTow(t, u);
       u.slam = null;
       u.respawnTick = respawnAt(u, t);
+      const victimStreak = endStreak(u);
       if (u.mage) u.mage.stats.deaths += 1;
       const by = u.lastHitBy;
       const credit = by !== NOBODY && by !== u.id && now - u.lastHitTick <= FALL_CREDIT_TICKS ? by : NOBODY;
@@ -245,6 +247,7 @@ export function stepLife(s: MatchState, t: TickCtx): void {
       if (c?.mage) {
         c.mage.stats.falls += 1;
         courage(t, c);
+        scorePoint(t, c, u.id, victimStreak);
       }
       if (credit !== NOBODY) ultOnKill(s, t, u, credit);
       furyOnDeath(s, t, u, credit);

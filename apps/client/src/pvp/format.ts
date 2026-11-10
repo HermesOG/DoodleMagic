@@ -1,8 +1,9 @@
 import {
-  ABILITY_NAME, ELEMENTS, ELEMENT_INFO, NOBODY, PICKUPS, PVP, TICK_HZ, scoreLimitFor, standings, unitById,
+  ABILITY_NAME, ELEMENTS, ELEMENT_INFO, NOBODY, PICKUPS, PVP, TICK_HZ, scoreLimitFor, scoreOf, standings, unitById,
   type DamageSource, type Element, type GameState, type MatchEvent, type Standing, type UnitId,
 } from "@doodlemagic/sim";
 import { BOT_PING } from "../net/protocol";
+import { STREAK_LOUD_FROM, STREAK_MARK_FROM, multiText, streakStep } from "../hud/streakHud";
 
 /**
  * Тексты интерфейса матча (задача 8): чистые функции под тесты. Без родовых окончаний — пол игрока неизвестен
@@ -47,29 +48,121 @@ function leaderText(st: readonly Standing[], localId: UnitId, names: ReadonlyMap
 export function topLine(
   g: GameState, localId: UnitId, names: ReadonlyMap<UnitId, string>, isHost: boolean, now = g.match.tick, offline = false,
 ): string {
+  const p = topParts(g, localId, names, isHost, now, offline);
+  return p.clock === "" ? p.rest : `${p.clock} · ${p.rest}`;
+}
+
+/**
+ * Строка сверху по частям: часы боя (в бою — отдельно: они краснеют в последнюю минуту, T7) и остальное. offline — бой с
+ * ботами: отсчёт начинает первое «Играть».
+ */
+export function topParts(
+  g: GameState,
+  localId: UnitId,
+  names: ReadonlyMap<UnitId, string>,
+  isHost: boolean,
+  now = g.match.tick,
+  offline = false,
+): { clock: string; rest: string } {
   const n = magesIn(g);
   switch (g.phase) {
     case "warmup":
-      // бой с ботами (offline): отсчёт начинает первое «Играть»
-      if (offline) return `Разминка · магов: ${n} · «Играть» — в бой`;
-      return `Разминка · магов: ${n} · ${isHost ? "Esc → «Начать матч»" : "хост начнёт матч"}`;
+      if (offline) return { clock: "", rest: `Разминка · магов: ${n} · «Играть» — в бой` };
+      return { clock: "", rest: `Разминка · магов: ${n} · ${isHost ? "Esc → «Начать матч»" : "хост начнёт матч"}` };
     case "countdown":
       // лимит боя считает старт по числу магов (startLive): в отсчёте он ещё может быть прежним
-      return `Матч начинается · магов: ${n} · до ${scoreLimitFor(n)}`;
+      return { clock: "", rest: `Матч начинается · магов: ${n} · до ${scoreLimitFor(n)}` };
     case "live": {
       const clock = formatClock(g.phaseEnd - now);
-      const parts = [g.suddenDeath ? `Внезапная смерть ${clock}` : clock];
+      const parts: string[] = [];
       const st = standings(g);
       const me = st.find((s) => s.id === localId);
       if (me) parts.push(`Ты ${me.score}`);
       const lead = leaderText(st, localId, names);
       if (lead) parts.push(lead);
       parts.push(`до ${g.scoreLimit}`);
-      return parts.join(" · ");
+      return { clock: g.suddenDeath ? `Внезапная смерть ${clock}` : clock, rest: parts.join(" · ") };
     }
     case "results":
-      return `Итоги · магов: ${n}`;
+      return { clock: "", rest: `Итоги · магов: ${n}` };
   }
+}
+
+/**
+ * Дуга матча (T7). Последняя минута — с 6:00 боя (до конца 60 с): часы краснеют (и всю внезапную смерть), один раз за
+ * бой крупно «Последняя минута!» и гонг. Последние 10 с — щелчок на каждую секунду, последние 3 с — выше. Матч-пойнт —
+ * у кого лимит − 1 очко, пока это правда; новый маг на матч-пойнте — двойной удар барабана.
+ */
+export const ARC = { finalS: PVP.finalS, clicksS: 10, highS: 3 } as const;
+export interface ArcStep {
+  /** Часы красные: последняя минута боя или внезапная смерть. */
+  final: boolean;
+  /** Сейчас объявить «Последняя минута!» (один раз за бой). */
+  lastMinute: boolean;
+  /** Щелчок часов в эту секунду: обычный, высокий (последние 3 с) или нет. */
+  click: "tick" | "last" | null;
+  /** На матч-пойнт вышел новый маг (барабан). */
+  matchPoint: boolean;
+  /** Маги на матч-пойнте, по id (массив памяти: меняется на месте). */
+  ids: readonly UnitId[];
+}
+/**
+ * Что дуга уже сказала: за какой бой (phaseEnd) прозвучала последняя минута, секунда часов; по какой игре считан
+ * матч-пойнт, кто на нём и ключ «id,id». Меняется на месте, ответ шага (step) — один объект на всё время: без мусора в кадре.
+ */
+export interface ArcMemory {
+  finalFor: number;
+  sec: number;
+  game: GameState | null;
+  ids: UnitId[];
+  matchPoint: string;
+  step: ArcStep;
+}
+export function createArc(): ArcMemory {
+  const ids: UnitId[] = [];
+  return { finalFor: Number.NaN, sec: Number.NaN, game: null, ids, matchPoint: "", step: { final: false, lastMinute: false, click: null, matchPoint: false, ids } };
+}
+const byId = (a: UnitId, b: UnitId): number => a - b;
+/** Маги с лимит − 1 очком (в бою), по id — в out (на месте). */
+export function matchPointIds(g: GameState, out: UnitId[] = []): UnitId[] {
+  out.length = 0;
+  if (g.phase !== "live" || g.scoreLimit < 2) return out;
+  for (const u of g.match.units) if (u.mage && scoreOf(u) === g.scoreLimit - 1) out.push(u.id);
+  return out.sort(byId);
+}
+/**
+ * Шаг дуги по подтверждённой игре g на тике часов now (у игрока — предсказанный, как часы в строке). Матч-пойнт
+ * пересчитывается только с новой игрой (снапшотом). Память m и ответ m.step меняются на месте.
+ */
+export function stepArc(m: ArcMemory, g: GameState, now: number): ArcStep {
+  const live = g.phase === "live";
+  const left = g.phaseEnd - now;
+  const inFinal = left > 0 && left <= ARC.finalS * TICK_HZ;
+  const s = m.step;
+  s.lastMinute = live && !g.suddenDeath && inFinal && m.finalFor !== g.phaseEnd;
+  if (s.lastMinute) m.finalFor = g.phaseEnd;
+  const sec = live && left > 0 ? Math.ceil(left / TICK_HZ) : Number.NaN;
+  s.click = sec !== m.sec && sec >= 1 && sec <= ARC.clicksS ? (sec <= ARC.highS ? "last" : "tick") : null;
+  m.sec = sec;
+  s.final = live && (g.suddenDeath || inFinal);
+  s.matchPoint = false;
+  if (g !== m.game) {
+    m.game = g;
+    matchPointIds(g, m.ids);
+    const key = m.ids.length === 0 ? "" : m.ids.join(",");
+    s.matchPoint = key !== "" && key !== m.matchPoint;
+    m.matchPoint = key;
+  }
+  return s;
+}
+/** Печать матч-пойнта в строке сверху: своему — «Одно очко до победы», о чужих — «Матч-пойнт: Имя»; никого — null. */
+export function matchPointText(ids: readonly UnitId[], localId: UnitId, names: ReadonlyMap<UnitId, string>): string | null {
+  if (ids.length === 0) return null;
+  const parts: string[] = [];
+  if (ids.includes(localId)) parts.push("Одно очко до победы");
+  const others = ids.filter((id) => id !== localId).map((id) => nameOf(names, id));
+  if (others.length > 0) parts.push(`Матч-пойнт: ${others.join(", ")}`);
+  return parts.join(" · ");
 }
 
 /** Крупная цифра отсчёта: 3, 2, 1 (до начала боя — вверх до целой секунды, не меньше 1). */
@@ -114,19 +207,29 @@ export function feedLine(ev: MatchEvent, names: ReadonlyMap<UnitId, string>, loc
   return null;
 }
 
-/** Текст экрана смерти по последнему death/fall со мной в роли цели. HP убийцы — по g (живому). Нет события — "". */
+/** Приписка экрана смерти о серии убийцы (Р5): в бою, с 3 очков — «· его серия: N» (уже с этим очком, по g). */
+function streakTail(g: GameState, id: UnitId): string {
+  if (g.phase !== "live") return "";
+  const n = unitById(g.match, id)?.mage?.stats.streak ?? 0;
+  return n >= STREAK_MARK_FROM ? ` · его серия: ${n}` : "";
+}
+
+/**
+ * Текст экрана смерти по последнему death/fall со мной в роли цели. HP и серия убийцы — по g (HP — живому). Нет
+ * события — "".
+ */
 export function deathLine(ev: MatchEvent | null, g: GameState, names: ReadonlyMap<UnitId, string>): string {
   if (ev?.type === "death") {
     const cause = causeOf(ev.ability);
     const killer = names.get(ev.killer);
     if (killer === undefined) return `Тебя победили · ${cause}`;
     const k = unitById(g.match, ev.killer);
-    return `Тебя победил ${killer} · ${cause}${k?.alive ? ` · у него ${hpText(k.hp)} HP` : ""}`;
+    return `Тебя победил ${killer} · ${cause}${k?.alive ? ` · у него ${hpText(k.hp)} HP` : ""}${streakTail(g, ev.killer)}`;
   }
   if (ev?.type === "fall") {
     if (ev.credit === NOBODY) return "Сорвался в ущелье";
     const by = names.get(ev.credit);
-    return by === undefined ? "Тебя сбросили" : `Тебя сбросил ${by}`;
+    return by === undefined ? "Тебя сбросили" : `Тебя сбросил ${by}${streakTail(g, ev.credit)}`;
   }
   return "";
 }
@@ -148,6 +251,32 @@ export function deathTip(ev: MatchEvent | null, g: GameState, pings: ReadonlyMap
   if (by === NOBODY || pings.get(by) !== BOT_PING) return "";
   const element = unitById(g.match, by)?.mage?.element;
   return element ? BOT_TIPS[element] : "";
+}
+
+/** Строка килфида о серии: stamp — печать «×N» у мульти, "" — без печати. */
+export interface StreakFeedLine {
+  text: string;
+  mine: boolean;
+  stamp: string;
+}
+/** «Двойное!» → «двойное», «Неудержимый!» → «Неудержимый»: в килфиде без восклицания. */
+const quiet = (t: string): string => t.replace(/!$/, "");
+/**
+ * Строки килфида по подтверждённому очку (Р5) — для других: своё скажут крупная надпись и тост. Мульти от ×2 — «Имя ·
+ * двойное» с печатью «×N»; ступень серии от 5 — «Имя — Неудержимый»; прервал серию от 3 — «Петя прерывает серию: Вася ·
+ * 5» (без родовых окончаний и падежей имён); mine — прервали мою. Набравший очко вышел — строк нет.
+ */
+export function streakFeedLines(ev: MatchEvent, names: ReadonlyMap<UnitId, string>, localId: UnitId): StreakFeedLine[] {
+  if (ev.type !== "streak" || ev.unit === localId) return [];
+  const who = names.get(ev.unit);
+  if (who === undefined) return [];
+  const out: StreakFeedLine[] = [];
+  const m = multiText(ev.multi);
+  if (m) out.push({ text: `${who} · ${quiet(m).toLowerCase()}`, mine: false, stamp: `×${ev.multi}` });
+  const s = ev.streak >= STREAK_LOUD_FROM ? streakStep(ev.streak) : null;
+  if (s) out.push({ text: `${who} — ${quiet(s)}`, mine: false, stamp: "" });
+  if (ev.broke !== NOBODY) out.push({ text: `${who} прерывает серию: ${nameOf(names, ev.broke)} · ${ev.brokeStreak}`, mine: ev.broke === localId, stamp: "" });
+  return out;
 }
 
 /** Строка таблицы. element — стихия мага сейчас (вышел — null); ping — «34», «бот» или «—», пока неизвестен. */

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createMageUnit } from "@doodlemagic/sim";
-import { cooldownFraction, formatDamage, heatFraction, hpBar, mergeNumbers, numberAnim, type FloatingNumber } from "./format";
+import {
+  BITE, BITE_MIN_DROP, LMB_MERGE_S, NUMBER_PX, biteShake, biteTrail, cooldownFraction, formatDamage, freshBite, heatFraction, hpBar, mergeNumbers, numberAnim,
+  numberPx, stacksOnto, stepBite,
+  type FloatingNumber, type NumberHit,
+} from "./format";
 import { DEFAULT_PREFS, parsePrefs } from "./prefs";
 
 const pos = { x: 0, y: 1, z: 0 };
@@ -30,6 +34,70 @@ describe("HUD formatting", () => {
     expect(list.map((n) => n.amount)).toEqual([6, 3]);
     list = mergeNumbers(list, at(1, 3), 2.2);
     expect(list.map((n) => [n.target, n.amount])).toEqual([[2, 6], [2, 3], [3, 3]]);
+  });
+
+  // кулаки 4/с: 0,25 с между попаданиями — одна растущая цифра; прочие удары и чужая цель — своя цифра (L7)
+  it("stacks LMB hits on the same target within 0.6 s into one popping number and grows the font 23 + min(11, dmg / 6) px", () => {
+    const lmb = (amount: number, target = 2) => ({ target, amount, dot: false, air: false, pos, lmb: true });
+    let list: FloatingNumber[] = [];
+    for (const t of [1.0, 1.25, 1.5, 2.05]) list = mergeNumbers(list, lmb(15), t);
+    expect(list.map((n) => [n.amount, n.born, n.updated])).toEqual([[60, 1.0, 2.05]]);
+    // пауза больше 0,6 с — новая цифра; другая цель, удар способностью и горение рядом — не прибавляются к ЛКМ
+    list = mergeNumbers(list, lmb(15), 2.75);
+    list = mergeNumbers(list, lmb(15, 3), 2.8);
+    list = mergeNumbers(list, { ...lmb(50), lmb: false }, 2.85);
+    list = mergeNumbers(list, dot(3), 2.9);
+    list = mergeNumbers(list, lmb(15), 2.95);
+    expect(list.map((n) => [n.target, n.amount, n.lmb])).toEqual([[2, 60, true], [2, 30, true], [3, 15, true], [2, 50, false], [2, 3, false]]);
+    expect(LMB_MERGE_S).toBe(0.6);
+    expect([numberPx(12), numberPx(30), numberPx(66), numberPx(200), NUMBER_PX]).toEqual([25, 28, 34, 34, 23]);
+  });
+
+  // решение «копить или нет» — по полю lmb эффекта, а не по ступени хитмаркера: добивающая ЛКМ (крупная ступень)
+  // прибавляется к стопке, удар способностью (средняя ступень) — своя цифра
+  it("decides stacking by the effect: an LMB kill stacks, dot onto dot, an ability, another target or a 0.6 s gap do not", () => {
+    const n = (over: Partial<FloatingNumber> = {}): FloatingNumber => ({ target: 2, amount: 45, dot: false, air: false, lmb: true, pos, born: 1, updated: 1.2, ...over });
+    const hit = (over: Partial<NumberHit> = {}): NumberHit => ({ target: 2, amount: 15, dot: false, air: false, pos, lmb: true, ...over });
+    // убийство ЛКМ: lmb у эффекта — к стопке «45» прибавляется «15», а не рядом
+    expect(stacksOnto(n(), hit(), 1.45)).toBe(true);
+    const list = mergeNumbers([n()], hit(), 1.45);
+    expect(list.map((x) => [x.amount, x.lmb])).toEqual([[60, true]]);
+    // урон по времени — только к урону по времени
+    expect(stacksOnto(n({ dot: true, lmb: false }), hit({ dot: true, lmb: false }), 1.7)).toBe(true);
+    expect(stacksOnto(n(), hit({ dot: true, lmb: false }), 1.3)).toBe(false);
+    // средняя ступень (способность) — без lmb: своя цифра
+    expect(stacksOnto(n(), hit({ lmb: false }), 1.3)).toBe(false);
+    expect(stacksOnto(n(), hit({ lmb: undefined }), 1.3)).toBe(false);
+    // другая цель
+    expect(stacksOnto(n(), hit({ target: 3 }), 1.3)).toBe(false);
+    // окно 0,6 с от прошлой прибавки: на 0,6 — ещё копится, позже — новая цифра
+    const edge = 1.2 + LMB_MERGE_S;
+    expect([stacksOnto(n(), hit(), edge), stacksOnto(n(), hit(), edge + 0.01)]).toEqual([true, false]);
+  });
+
+  it("bites only on a drop above 0.003 of the HP: prediction nudges in PvP do not shake the bar", () => {
+    expect(BITE_MIN_DROP).toBe(0.003);
+    const b = freshBite(0.8);
+    const nudged = stepBite(b, 0.8 - 0.002, 4);
+    expect([nudged.at, nudged.frac, biteShake(4 - nudged.at)]).toEqual([-Infinity, 0.798, 0]);
+    expect(stepBite(b, 0.8 - 0.004, 4).at).toBe(4);
+  });
+
+  it("bites the target HP bar: paper trail holds 0.3 s and drains in 0.25 s, the bar shakes ±2 px for 80 ms (L4)", () => {
+    expect(BITE).toEqual({ holdS: 0.3, fadeS: 0.25, shakeS: 0.08, shakePx: 2 });
+    let b = freshBite(1);
+    expect(biteTrail(b, 5)).toBe(1);
+    b = stepBite(b, 0.8, 10);
+    expect([biteTrail(b, 10), biteTrail(b, 10.29), biteTrail(b, 10.425), biteTrail(b, 10.55)].map((v) => Number(v.toFixed(6)))).toEqual([1, 1, 0.9, 0.8]);
+    // второй укус на сходе — след от того места, где он виден, и держится заново
+    b = stepBite(b, 0.6, 10.425);
+    expect([b.from, b.at, biteTrail(b, 10.7)].map((v) => Number(v.toFixed(6)))).toEqual([0.9, 10.425, 0.9]);
+    // лечение и возрождение — без нового следа, след не ниже заливки
+    const healed = stepBite(b, 0.95, 10.5);
+    expect([healed.at, biteTrail(healed, 10.5), biteTrail(healed, 11)]).toEqual([10.425, 0.95, 0.95]);
+    expect(stepBite(b, 0.6, 10.6)).toBe(b);
+    expect([biteShake(0), biteShake(0.04), biteShake(0.08), biteShake(-0.01)].map((v) => Number(v.toFixed(6)))).toEqual([2, 1, 0, 0]);
+    for (let t = 0; t < 0.08; t += 0.005) expect(Math.abs(biteShake(t))).toBeLessThanOrEqual(2);
   });
 
   it("reads cooldowns, heat and HP with the ⅔ regen notch; prefs fall back on garbage", () => {
