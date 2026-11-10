@@ -19,10 +19,11 @@ import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
 import { KIT_WIDGETS, type KitWidget } from "./kitWidgets";
 import {
-  NUMBER_LIFE_S, NUMBER_PX, biteShake, biteTrail, cooldownFraction, formatDamage, freshBite, furyLeftS, heatFraction, hpBar, mergeNumbers, numberAnim,
-  numberPx, runeCue, runeText, stepBite, ultFraction, ultPercent,
+  NUMBER_LIFE_S, NUMBER_PX, biteShake, biteTrail, cooldownFraction, formatDamage, freshBite, furyLeftS, heatFraction, hpBar, lootAnim, mergeNumbers,
+  numberAnim, numberPx, runeCue, runeText, stepBite, ultFraction, ultPercent,
   type FloatingNumber, type HpBite,
 } from "./format";
+import { streakMark } from "./streakHud";
 
 /** Что HUD видит в кадре: два последних состояния и доля между ними, камера мира, часы и проверка видимости точки. */
 export interface HudView {
@@ -35,11 +36,17 @@ export interface HudView {
   visible(p: Vec3): boolean;
   /** Имена магов: есть — над полосой HP чужого мага пишется его имя. */
   names?: ReadonlyMap<UnitId, string>;
+  /** Печать серии над именем мага (фаза 9): false — не показывать (разминка PvP); по умолчанию — да. */
+  streaks?: boolean;
 }
 export interface CombatHud {
   /** hitmarker, number, indicator, toast, deny; остальные эффекты HUD не касаются. */
   apply(e: Effect, nowS: number): void;
   update(v: HudView): void;
+  /** Своя «Добыча» (фаза 9, L14): бумажно-белый прирост полосы HP за 0,25 с и «+N» рядом на 0,6 с. */
+  loot(amount: number, nowS: number): void;
+  /** Погасить тосты с этими текстами, пока они на экране (тост убийства ультой под своим объявлением серии). */
+  quietToasts(texts: readonly string[]): void;
   setVisible(on: boolean): void;
   dispose(): void;
 }
@@ -147,8 +154,12 @@ interface Cell {
 }
 interface DummyBar {
   root: HTMLDivElement;
+  /** Строка над полосой: имя и печать серии; оба пусты — строка скрыта (у манекена). */
+  who: HTMLDivElement;
   /** Имя мага над полосой; у манекена пустое и скрыто. */
   name: HTMLDivElement;
+  /** Маленькая красная печать с числом серии от 3 (видно, за кем охотиться). */
+  mark: HTMLDivElement;
   /** Полоса шириной BAR_PX.max; ширину по расстоянию даёт scaleX (без пересчёта раскладки в кадре). */
   track: HTMLDivElement;
   fill: HTMLDivElement;
@@ -184,7 +195,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   // своя ярость — «Ярость N» золотом над правым краем мазка HP
   const life = div(
     "ch-life",
-    `<div class="ch-elem"></div><div class="ch-hp"><div class="ch-hp-trail"></div><div class="ch-hp-fill"></div><i class="ch-hp-notch"></i></div><div class="ch-hp-text"></div><div class="ch-fury" hidden></div>`,
+    `<div class="ch-elem"></div><div class="ch-hp"><div class="ch-hp-trail"></div><div class="ch-hp-fill"></div><div class="ch-hp-gain"></div><i class="ch-hp-notch"></i></div><div class="ch-hp-text"></div><div class="ch-hp-plus"></div><div class="ch-fury" hidden></div>`,
   );
   const elemName = pick<HTMLDivElement>(life, ".ch-elem");
   const hpBox = pick<HTMLDivElement>(life, ".ch-hp");
@@ -193,6 +204,8 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   const hpFill = pick<HTMLDivElement>(life, ".ch-hp-fill");
   const hpNotch = pick<HTMLElement>(life, ".ch-hp-notch");
   const hpText = pick<HTMLDivElement>(life, ".ch-hp-text");
+  const hpGain = pick<HTMLDivElement>(life, ".ch-hp-gain");
+  const hpPlus = pick<HTMLDivElement>(life, ".ch-hp-plus");
   const kit = div("ch-kit", `<div class="ch-heat" hidden><div class="ch-heat-fill"></div><span class="ch-heat-label">Перегрев</span></div><div class="ch-cells"></div>`);
   const heat = pick<HTMLDivElement>(kit, ".ch-heat");
   const heatFill = pick<HTMLDivElement>(kit, ".ch-heat-fill");
@@ -232,14 +245,16 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       // сверху вниз: значки статусов, имя, полоса — имя не прыгает, когда появляются значки
       const r = div(
         "ch-dbar ch-at",
-        `<div class="ch-dbar-st">${icon("burn")}${icon("root")}${icon("slow")}${icon("air")}</div><div class="ch-dbar-name" hidden></div><div class="ch-dbar-track"><div class="ch-dbar-trail"></div><div class="ch-dbar-fill"></div></div>`,
+        `<div class="ch-dbar-st">${icon("burn")}${icon("root")}${icon("slow")}${icon("air")}</div><div class="ch-dbar-who" hidden><div class="ch-dbar-name" hidden></div><div class="ch-dbar-mark" hidden></div></div><div class="ch-dbar-track"><div class="ch-dbar-trail"></div><div class="ch-dbar-fill"></div></div>`,
       );
       // ширина задаётся один раз; ближе или дальше полосу делает scaleX дорожки
       r.style.width = `${BAR_PX.max}px`;
       barsLayer.append(r);
       b = {
         root: r,
+        who: pick<HTMLDivElement>(r, ".ch-dbar-who"),
         name: pick<HTMLDivElement>(r, ".ch-dbar-name"),
+        mark: pick<HTMLDivElement>(r, ".ch-dbar-mark"),
         track: pick<HTMLDivElement>(r, ".ch-dbar-track"),
         fill: pick<HTMLDivElement>(r, ".ch-dbar-fill"),
         trail: pick<HTMLDivElement>(r, ".ch-dbar-trail"),
@@ -254,6 +269,9 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   const bites = new Map<UnitId, HpBite>();
   let numbers: FloatingNumber[] = [];
   let hitAt = -Infinity;
+  /** Своя добыча: когда и сколько HP (L14); −∞ — не было. */
+  let lootAt = -Infinity;
+  let lootAmount = 0;
   let hitKill = false;
   let hitTier: FeelTier = "small";
   let vignetteK = 0;
@@ -356,11 +374,23 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     widget?.update(me, now, nowS);
   };
 
-  const updateLife = (me: Unit): void => {
+  const updateLife = (me: Unit, nowS: number): void => {
     const bar = hpBar(me);
     const sx = `scaleX(${bar.frac.toFixed(4)})`;
     setStyle(hpFill, "transform", sx);
     setStyle(hpTrail, "transform", sx);
+    // добыча: белый сегмент от прежнего края к новому поверх заливки — дорисовывается за 0,25 с и гаснет; «+N» рядом
+    const loot = lootAnim(nowS - lootAt);
+    if (loot && me.maxHp > 0) {
+      const from = Math.max(0, bar.frac - lootAmount / me.maxHp);
+      setStyle(hpGain, "transform", `translateX(${(from * 100).toFixed(2)}%) scaleX(${((bar.frac - from) * loot.sweep).toFixed(4)})`);
+      setStyle(hpGain, "opacity", loot.alpha.toFixed(3));
+      setStyle(hpPlus, "opacity", loot.plusAlpha.toFixed(3));
+      setStyle(hpPlus, "transform", `translateY(${loot.plusDy.toFixed(1)}px) scale(${loot.plusScale.toFixed(3)})`);
+    } else {
+      setStyle(hpGain, "opacity", "0");
+      setStyle(hpPlus, "opacity", "0");
+    }
     setStyle(hpNotch, "left", `${(bar.notch * 100).toFixed(2)}%`);
     setHidden(hpNotch, bar.notch >= 1);
     setText(hpText, bar.text);
@@ -421,6 +451,11 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       const name = mage ? (view.names?.get(u.id) ?? "") : "";
       setText(b.name, name);
       setHidden(b.name, name === "");
+      // серия от 3 — маленькая красная печать с числом рядом с именем (из состояния)
+      const mark = mage && view.streaks !== false ? streakMark(u.mage?.stats.streak ?? 0) : null;
+      setText(b.mark, mark ?? "");
+      setHidden(b.mark, mark === null);
+      setHidden(b.who, name === "" && mark === null);
       const f = statusFlags(u, view.cur.tick);
       setHidden(b.icons.burn, !f.burning);
       setHidden(b.icons.root, !f.rooted);
@@ -557,13 +592,23 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       const now = view.prev.tick + (view.cur.tick - view.prev.tick) * Math.min(1, Math.max(0, view.alpha));
       if (me) {
         updateKit(me, now, view.nowS);
-        updateLife(me);
+        updateLife(me, view.nowS);
       }
       updateRune(view);
       updateBars(view);
       updateNumbers(view);
       updateCross(view, dt);
       updateToasts(view.nowS);
+    },
+    loot(amount, nowS) {
+      if (!(amount > 0) || !Number.isFinite(amount)) return;
+      lootAt = nowS;
+      lootAmount = amount;
+      // HP бывает дробным (прибавка до максимума): цифра — целая
+      setText(hpPlus, `+${Math.max(1, Math.round(amount))}`);
+    },
+    quietToasts(texts) {
+      for (const t of toasts) if (texts.includes(t.el.textContent ?? "")) t.at = -Infinity;
     },
     setVisible(on) {
       hud.hidden = !on;

@@ -54,6 +54,8 @@ export interface Vfx {
   readonly fx: FxLayers;
   /** Исполняет burst, palm, flash и flinch; остальное пропускает. hand — чья рука для palm с hand "auto". */
   apply(e: Effect, nowS: number, hand: "left" | "right"): void;
+  /** Искры «Добычи» (фаза 9, L14): стихия убийцы летит от тела жертвы (from) к убийце (to) — из мирового пула. */
+  lootSparks(from: Vec3, to: Vec3, element: Element, nowS: number): void;
   /**
    * Раз в кадр: положения между prev и cur, зоны и рельеф из cur, время эффектов. Живые маги, кроме localId, рисуются
    * фигурами (не больше MAX_MAGES), мёртвые — нет.
@@ -199,6 +201,46 @@ interface Mark {
 }
 /** Следов на полу одновременно — не больше: старый уступает новому. */
 const MAX_MARKS = 8;
+
+/**
+ * Искры «Добычи» (фаза 9, L14): 7 частиц стихии убийцы летят от тела жертвы к убийце со скоростью 40 м/с и гаснут у
+ * него — видно, кто взял добычу. Струйкой: каждая следующая — чуть позади и в стороне. Дальше 24 м (сброс в ущелье) —
+ * летят с 24 м. Свет (alpha 0) — мягкое пятно со шлейфом по скорости; полноэкранной вспышки нет.
+ */
+export const LOOT_SPARKS = { n: 7, speedMps: 40, maxM: 24, spreadM: 0.35, gapM: 0.6 } as const;
+const SPARK_COLOR: Readonly<Record<Element, readonly [number, number, number]>> = {
+  fire: FX_COLOR.fire, earth: FX_COLOR.jade, air: FX_COLOR.air, water: FX_COLOR.water,
+};
+export function lootSparkSpecs(from: Vec3, to: Vec3, element: Element, rng: () => number): ParticleSpec[] {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const d = Math.hypot(dx, dy, dz);
+  if (!(d > 0.3) || !Number.isFinite(d)) return [];
+  const ux = dx / d;
+  const uy = dy / d;
+  const uz = dz / d;
+  const m = Math.min(d, LOOT_SPARKS.maxM);
+  const out: ParticleSpec[] = [];
+  for (let i = 0; i < LOOT_SPARKS.n; i++) {
+    const back = m + i * LOOT_SPARKS.gapM;
+    const j = (): number => (rng() - 0.5) * 2 * LOOT_SPARKS.spreadM;
+    const p = { x: to.x - ux * back + j(), y: to.y - uy * back + j(), z: to.z - uz * back + j() };
+    const len = Math.hypot(to.x - p.x, to.y - p.y, to.z - p.z);
+    const k = LOOT_SPARKS.speedMps / Math.max(1e-3, len);
+    out.push({
+      pos: p,
+      vel: { x: (to.x - p.x) * k, y: (to.y - p.y) * k, z: (to.z - p.z) * k },
+      gravity: 0,
+      life: len / LOOT_SPARKS.speedMps,
+      size0: 0.16,
+      size1: 0.06,
+      color: SPARK_COLOR[element],
+      alpha: 0,
+    });
+  }
+  return out;
+}
 
 /**
  * Пол под взрывом шара: попал в стоящего — его подошва; в летящего — пола рядом нет (null); иначе — точка взрыва
@@ -453,6 +495,10 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         default:
           break;
       }
+    },
+
+    lootSparks(from, to, element, nowS) {
+      emitWorld(lootSparkSpecs(from, to, element, Math.random), rel(nowS));
     },
 
     sync(v) {

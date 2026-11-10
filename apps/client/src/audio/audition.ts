@@ -3,6 +3,7 @@ import { SOUND_IDS, type SoundId } from "../feel/effects";
 import { AIR_SOUND_LABELS } from "./airRecipes";
 import { RECIPES, SOUND_ELEMENT, recipeLength } from "./recipes";
 import { DEFAULT_VOLUME, createAudio, createVoiceKit, scheduleRecipe, type GameAudio } from "./synth";
+import { STREAK_SOUND_LABELS } from "./streakRecipes";
 import { WATER_SOUND_LABELS } from "./waterRecipes";
 
 /**
@@ -58,6 +59,7 @@ export const SOUND_LABELS: Record<SoundId, string> = {
   whizzWater: "Свист мимо: вода",
   ...AIR_SOUND_LABELS,
   ...WATER_SOUND_LABELS,
+  ...STREAK_SOUND_LABELS,
 };
 
 const EAR = 1.6;

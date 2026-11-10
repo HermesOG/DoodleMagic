@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ABILITY_IDS, NOBODY, createMageUnit, createMatchState, type AbilityId, type MatchEvent } from "@doodlemagic/sim";
 import type { Effect } from "./effects";
-import { AREA_TRAUMA, LMB_VICTIM_KICK_DEG, effectsFor, hitTickPitch, hitTier } from "./eventMap";
+import { AREA_TRAUMA, LMB_VICTIM_KICK_DEG, LOOT_RISE_S, STREAK_BELL_S, ULT_KILL_TOASTS, afterKillS, effectsFor, hitTickPitch, hitTier } from "./eventMap";
 
 const V = (x = 0, y = 0, z = 0) => ({ x, y, z });
 const ME = 1;
@@ -168,5 +168,48 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     expect(size(kickOf({ ability: "stoneShot", amount: 30 }))).toBeCloseTo(0.75 * 30 / 40, 9);
     // не ЛКМ — по-прежнему по урону, без пола
     expect(size(kickOf({ ability: "fireball", amount: 4 }))).toBeCloseTo(1.25 * 4 / 40, 9);
+  });
+});
+
+describe("effectsFor: streaks and loot (phase 9, task 5)", () => {
+  const streak = (unit: number, multi: number, n: number, broke = NOBODY, brokeStreak = 0): MatchEvent => ({ type: "streak", unit, multi, streak: n, broke, brokeStreak });
+  const ids = (es: Effect[]) => es.map((e) => (e.kind === "sound" ? e.id : e.kind === "toast" ? `toast:${e.text}` : e.kind));
+
+  it("rings my streak one step higher each time: bell, ×2, ×3, ×4+ with a gong; streak steps add drums, a gong, a storm", () => {
+    expect(ids(fx(streak(ME, 1, 1)))).toEqual([]);
+    expect(ids(fx(streak(ME, 2, 2)))).toEqual(["streakDouble"]);
+    expect(ids(fx(streak(ME, 3, 3)))).toEqual(["streakTriple", "streakDrums"]);
+    expect(ids(fx(streak(ME, 4, 4)))).toEqual(["streakTriple", "streakRampage"]);
+    expect(ids(fx(streak(ME, 1, 3)))).toEqual(["streakBell", "streakDrums"]);
+    expect(ids(fx(streak(ME, 1, 5)))).toEqual(["streakBell", "streakGong"]);
+    expect(ids(fx(streak(ME, 1, 7)))).toEqual(["streakBell", "streakStorm"]);
+    expect(ids(fx(streak(ME, 1, 10)))).toEqual(["streakBell", "streakStorm"]);
+    // все звуки серии — у уха
+    for (const e of fx(streak(ME, 3, 5))) expect(e).toMatchObject({ kind: "sound", pos: null });
+  });
+
+  it("tells the breaker «Серия прервана!» with a chime; others hear a far gong only from a streak step of 5", () => {
+    expect(ids(fx(streak(ME, 1, 1, OTHER, 4)))).toEqual(["toast:Серия прервана!", "streakBroke"]);
+    expect(ids(fx(streak(OTHER, 3, 3)))).toEqual([]);
+    expect(fx(streak(OTHER, 1, 5))).toEqual([{ kind: "sound", id: "streakFar", pos: null, gain: 1 }]);
+    expect(ids(fx(streak(OTHER, 1, 6)))).toEqual([]);
+    expect(ids(fx(streak(OTHER, 1, 7)))).toEqual(["streakFar"]);
+  });
+
+  it("gives my loot a warm rise and charged palms; another mage's loot makes no sound", () => {
+    const loot = (unit: number): MatchEvent => ({ type: "loot", unit, victim: OTHER, amount: 30, pos: V(0, 0.9, 0) });
+    expect(fx(loot(ME))).toEqual([
+      { kind: "sound", id: "lootRise", pos: null, gain: 1 },
+      { kind: "palm", hand: "both", element: "fire", preset: "charge" },
+    ]);
+    expect(fx(loot(OTHER))).toEqual([]);
+  });
+
+  it("waits after my kill sound: 120 ms for the bell, 250 ms for the loot; others' events at once", () => {
+    expect([STREAK_BELL_S, LOOT_RISE_S]).toEqual([0.12, 0.25]);
+    expect(afterKillS(streak(ME, 2, 2), ME)).toBe(0.12);
+    expect(afterKillS({ type: "loot", unit: ME, victim: OTHER, amount: 30, pos: V() }, ME)).toBe(0.25);
+    expect([afterKillS(streak(OTHER, 2, 2), ME), afterKillS({ type: "loot", unit: OTHER, victim: ME, amount: 30, pos: V() }, ME)]).toEqual([0, 0]);
+    expect(ULT_KILL_TOASTS).toEqual(["Дыхание дракона!", "Разлом!"]);
   });
 });

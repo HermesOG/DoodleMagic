@@ -3,7 +3,7 @@ import type { Element, Unit, Zone } from "@doodlemagic/sim";
 import type { Effect } from "../feel/effects";
 import { QUAKE_AFTER_S, SCORCH_S, markDecal, zoneDecal } from "./decals";
 import { IDLE_PALM_RATE, KNOCK_DUST_RATE, idlePalmParticle, knockDust, palmParticles, pebbleParticle } from "./presets";
-import { FLASH_S, MUZZLE_LIGHT, MUZZLE_PRIO, hitFreeze, muzzleOf, scorchFloor } from "./vfx";
+import { FLASH_S, LOOT_SPARKS, MUZZLE_LIGHT, MUZZLE_PRIO, hitFreeze, lootSparkSpecs, muzzleOf, scorchFloor } from "./vfx";
 
 const O = { x: 0, y: 0, z: 0 };
 const unit = (x: number, y: number, onGround: boolean): Unit =>
@@ -75,5 +75,27 @@ describe("feel pass, part 2 (vfx)", () => {
     expect(zoneDecal(z("fireTornado", 1), 60, 1)).toMatchObject({ style: "fireTornado", enemy: false });
     expect(zoneDecal(z("spring", 2), 10, 1)).toMatchObject({ style: "spring", stage: "telegraph", enemy: true });
     expect(zoneDecal(z("steam", 2), 60, 1)).toBeNull();
+  });
+});
+
+describe("loot sparks (phase 9, L14)", () => {
+  it("flies 7 sparks of the killer's element from the victim to the killer at 40 m/s and ends them there", () => {
+    const from = { x: 0, y: 1, z: -12 };
+    const to = { x: 0, y: 1, z: 0 };
+    let r = 0;
+    const sparks = lootSparkSpecs(from, to, "earth", () => ((r = (r + 0.37) % 1), r));
+    expect(sparks.length).toBe(LOOT_SPARKS.n);
+    expect(sparks.length).toBeLessThanOrEqual(40);
+    for (const p of sparks) {
+      expect(Math.hypot(p.vel.x, p.vel.y, p.vel.z)).toBeCloseTo(40, 6);
+      // долетает до убийцы и гаснет там
+      const end = { x: p.pos.x + p.vel.x * p.life, y: p.pos.y + p.vel.y * p.life, z: p.pos.z + p.vel.z * p.life };
+      expect(Math.hypot(end.x - to.x, end.y - to.y, end.z - to.z)).toBeLessThan(1e-6);
+      expect([p.alpha, p.gravity]).toEqual([0, 0]);
+    }
+    // из ущелья — не дальше 24 м (+ струйка), рядом с убийцей — ничего
+    const far = lootSparkSpecs({ x: 0, y: -60, z: 0 }, to, "fire", () => 0.5);
+    expect(Math.max(...far.map((p) => p.life))).toBeLessThanOrEqual((LOOT_SPARKS.maxM + LOOT_SPARKS.gapM * LOOT_SPARKS.n) / 40);
+    expect(lootSparkSpecs(to, to, "fire", () => 0.5)).toEqual([]);
   });
 });

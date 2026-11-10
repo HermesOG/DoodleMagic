@@ -171,6 +171,24 @@ export function biteShake(ageS: number): number {
   return BITE.shakePx * Math.cos(u * 4 * Math.PI) * (1 - u);
 }
 
+/**
+ * Своя «Добыча» на полосе HP (фаза 9, L14): белый сегмент дорисовывается к новому краю за 0,25 с, держится и гаснет
+ * к 0,6 с; «+N» рядом — подскок 1,3 → 1 за 0,12 с, подъём на 6 px, гаснет последние 0,15 с.
+ */
+export const LOOT_LOOK = { sweepS: 0.25, s: 0.6, fadeS: 0.2, plusFadeS: 0.15, popS: 0.12, risePx: 6 } as const;
+export function lootAnim(ageS: number): { sweep: number; alpha: number; plusAlpha: number; plusScale: number; plusDy: number } | null {
+  if (!(ageS >= 0 && ageS < LOOT_LOOK.s)) return null;
+  const u = Math.min(1, ageS / LOOT_LOOK.sweepS);
+  const pop = 1 - Math.min(1, ageS / LOOT_LOOK.popS);
+  return {
+    sweep: 1 - (1 - u) * (1 - u),
+    alpha: Math.min(1, (LOOT_LOOK.s - ageS) / LOOT_LOOK.fadeS),
+    plusAlpha: Math.min(1, (LOOT_LOOK.s - ageS) / LOOT_LOOK.plusFadeS),
+    plusScale: 1 + 0.3 * pop * pop,
+    plusDy: -LOOT_LOOK.risePx * (ageS / LOOT_LOOK.s),
+  };
+}
+
 /** Руна ярости (фаза 6): объявление — последние 10 с до появления; «в центре» — первые 3 с, пока лежит. */
 const RUNE_WARN_TICKS = PICKUPS.rune.warnS * TICK_HZ;
 const RUNE_HERE_TICKS = 3 * TICK_HZ;
