@@ -26,9 +26,9 @@
   cursor: pointer;
 }
 /*
- * Карточка меню всегда светлая (бумага). Глобальные стили style.css берут цвета из переменных :root, а в тёмной
- * теме ОС они тёмные: здесь переменные переопределены светлыми, а ползунок и флажок сброшены от общего
- * input { padding, border, background, width: 100% } — иначе в тёмной теме внутри светлой карточки тёмная рамка.
+ * Карточка меню всегда светлая (бумага). Переменные style.css заданы здесь ещё раз, чтобы карточка не зависела от общей
+ * темы (сейчас она тоже бумажная, раунд 4); ползунок и флажок сброшены от общего input { padding, border, background,
+ * width: 100% }.
  */
 .sb-card {
   color-scheme: light;
@@ -109,7 +109,7 @@
   margin: 14px 0 0;
   font-size: 14px;
 }
-/* киноварь в интерфейсе — только для HP и опасности (арт-директор), поэтому кнопка тушью; селектор сильнее .btn:not(.secondary) из style.css */
+/* киноварь в интерфейсе — только для HP и опасности (арт-директор), поэтому кнопка тушью — как .btn в style.css, но цвета заданы явно */
 .sb-card .btn.sb-play {
   margin-top: 8px;
   background: #1d1b16;
@@ -137,6 +137,12 @@
 }
 .sb-element-name[data-element="earth"] {
   border-left-color: #3dbe7a;
+}
+.sb-element-name[data-element="air"] {
+  border-left-color: #8f84d6;
+}
+.sb-element-name[data-element="water"] {
+  border-left-color: #2ea8e6;
 }
 .sb-card .btn.sb-change {
   padding: 6px 12px;

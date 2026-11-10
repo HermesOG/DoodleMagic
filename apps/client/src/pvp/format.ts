@@ -109,6 +109,20 @@ export function feedLine(ev: MatchEvent, names: ReadonlyMap<UnitId, string>, loc
   return null;
 }
 
+/**
+ * Стихия мага, с имени которого начинается строка feedLine: убийца, сбивший, взявший руну, сбивший носителя. Строки нет
+ * или она начинается с жертвы (убийца вышел, сорвался сам) — null: знак стихии ставится только рядом с именем. Стихия —
+ * по g (подтверждённому, на момент события).
+ */
+export function feedElement(ev: MatchEvent, g: GameState, names: ReadonlyMap<UnitId, string>): Element | null {
+  let actor: UnitId | null = null;
+  if (ev.type === "pickup" && ev.kind === "rune" && ev.phase === "take") actor = ev.unit;
+  else if (ev.type === "fury" && ev.phase === "slain" && ev.by !== NOBODY && names.has(ev.by)) actor = ev.by;
+  else if (ev.type === "death" && names.has(ev.killer)) actor = ev.killer;
+  else if (ev.type === "fall" && ev.credit !== NOBODY && names.has(ev.credit)) actor = ev.credit;
+  return actor === null ? null : (unitById(g.match, actor)?.mage?.element ?? null);
+}
+
 /** Текст экрана смерти по последнему death/fall со мной в роли цели. HP убийцы — по g (живому). Нет события — "". */
 export function deathLine(ev: MatchEvent | null, g: GameState, names: ReadonlyMap<UnitId, string>): string {
   if (ev?.type === "death") {

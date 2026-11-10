@@ -17,6 +17,7 @@ import {
 import type { Effect, FeelTier } from "../feel/effects";
 import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
+import { glyphSvg } from "./glyphs";
 import { KIT_WIDGETS, type KitWidget } from "./kitWidgets";
 import {
   NUMBER_LIFE_S, cooldownFraction, formatDamage, furyLeftS, heatFraction, hpBar, mergeNumbers, numberAnim, runeCue, runeText, ultFraction, ultPercent,
@@ -178,12 +179,13 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   // объявление руны (фаза 6): по центру сверху, под строкой матча PvP — та же позиция и на полигоне
   const runeLine = div("ch-rune");
   runeLine.hidden = true;
-  // своя ярость — «Ярость N» золотом над правым краем мазка HP
+  // своя ярость — «Ярость N» золотом над правым краем мазка HP; имя стихии над мазком — с печатью стихии (знак и цвет)
   const life = div(
     "ch-life",
-    `<div class="ch-elem"></div><div class="ch-hp"><div class="ch-hp-trail"></div><div class="ch-hp-fill"></div><i class="ch-hp-notch"></i></div><div class="ch-hp-text"></div><div class="ch-fury" hidden></div>`,
+    `<div class="ch-elem"><span class="ch-seal" aria-hidden="true"></span><span class="ch-elem-name"></span></div><div class="ch-hp"><div class="ch-hp-trail"></div><div class="ch-hp-fill"></div><i class="ch-hp-notch"></i></div><div class="ch-hp-text"></div><div class="ch-fury" hidden></div>`,
   );
-  const elemName = pick<HTMLDivElement>(life, ".ch-elem");
+  const elemSeal = pick<HTMLSpanElement>(life, ".ch-seal");
+  const elemName = pick<HTMLSpanElement>(life, ".ch-elem-name");
   const hpBox = pick<HTMLDivElement>(life, ".ch-hp");
   const furyLabel = pick<HTMLDivElement>(life, ".ch-fury");
   const hpTrail = pick<HTMLDivElement>(life, ".ch-hp-trail");
@@ -281,6 +283,8 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     if (element === e) return;
     element = e;
     setText(elemName, ELEMENT_INFO[e].name);
+    elemSeal.dataset.element = e;
+    elemSeal.innerHTML = glyphSvg(e);
     for (const slot of SLOTS) {
       const c = cells[slot];
       // у X — имя ульты стихии

@@ -2,6 +2,72 @@
  * Бой с друзьями: лобби комнаты (обычная страница, цвета из style.css) и поверх игры — интерфейс матча (строка сверху,
  * отсчёт, килфид, экран смерти, таблица, итоги, «Защита»), плашка «нет связи», «Хост вышел из игры».
  */
+
+/*
+ * Печать стихии (Р10): круг цветом стихии, знак тушью (hud/glyphs.ts) — цвет стихии никогда не один, Воздух и Вода
+ * различимы по форме при любом зрении. Тушь на любом из четырёх цветов — от 5,3 : 1. Размер задаёт место: не меньше
+ * 20 px, знак — 72 % (от 14 px).
+ */
+.pvp-seal {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 48% 52% 50% 50% / 52% 48% 52% 48%;
+  background: var(--pvp-el, #d9d3c3);
+  color: #1d1b16;
+  vertical-align: middle;
+}
+.pvp-seal svg {
+  width: 72%;
+  height: 72%;
+}
+
+/*
+ * Лобби — бумага, как меню полигона: сверху полоса неба цветами неба арены (Р3: зенит → тёплый горизонт, хребты в
+ * дымке) с названием игры. Красного нет: он — HP и опасность.
+ */
+.pvp-lobby {
+  overflow: hidden;
+}
+.pvp-sky {
+  position: relative;
+  margin: -20px -20px 16px;
+  padding: 18px 20px 36px;
+  background: linear-gradient(180deg, #8fb0d6 0%, #f0d9ba 100%);
+  color: #1d1b16;
+}
+/* хребты — у нижнего края полосы, ниже текста: дальний #A9B4C8, ближний #7D889F */
+.pvp-sky::before,
+.pvp-sky::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.pvp-sky::before {
+  height: 30px;
+  background: #a9b4c8;
+  clip-path: polygon(0 72%, 11% 40%, 21% 58%, 35% 16%, 48% 52%, 61% 30%, 76% 60%, 89% 24%, 100% 48%, 100% 100%, 0 100%);
+}
+.pvp-sky::after {
+  height: 17px;
+  background: #7d889f;
+  clip-path: polygon(0 58%, 9% 30%, 19% 64%, 31% 38%, 44% 72%, 57% 22%, 69% 60%, 83% 34%, 100% 66%, 100% 100%, 0 100%);
+}
+/* название — шрифтом заголовков HUD (шрифты пока не грузятся: на экране — запасной из списка) */
+.pvp-game {
+  margin: 0;
+  font: 700 38px/1.05 "Cormorant SC", "Cormorant Garamond", "Forum", Georgia, "Times New Roman", serif;
+  letter-spacing: 0.02em;
+}
+.pvp-tagline {
+  margin: 4px 0 0;
+  font-weight: 600;
+}
 .pvp-lobby .pvp-title {
   margin-bottom: 12px;
 }
@@ -28,7 +94,7 @@
   margin: 12px 0 6px;
   font-weight: 600;
 }
-/* карточки стихий: четыре — сеткой 2 × 2, полоска цвета стихии слева, выбранная — с рамкой тушью */
+/* карточки стихий: четыре — сеткой 2 × 2, полоска цвета стихии слева, печать со знаком, выбранная — с рамкой тушью */
 .pvp-els {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -42,8 +108,8 @@
 .pvp-el {
   position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 12px;
   padding: 12px 12px 12px 18px;
   border: 2px solid var(--line);
   border-radius: 8px;
@@ -63,16 +129,21 @@
   width: 6px;
   background: var(--pvp-el, var(--line));
 }
-.pvp-el[data-element="fire"] {
+/* цвета стихий — те же, что у HUD (hud/combatHud.css): у карточек и у печатей, и в лобби, и в интерфейсе матча */
+.pvp-el[data-element="fire"],
+.pvp-seal[data-element="fire"] {
   --pvp-el: #ff7a1a;
 }
-.pvp-el[data-element="earth"] {
+.pvp-el[data-element="earth"],
+.pvp-seal[data-element="earth"] {
   --pvp-el: #3dbe7a;
 }
-.pvp-el[data-element="air"] {
+.pvp-el[data-element="air"],
+.pvp-seal[data-element="air"] {
   --pvp-el: #8f84d6;
 }
-.pvp-el[data-element="water"] {
+.pvp-el[data-element="water"],
+.pvp-seal[data-element="water"] {
   --pvp-el: #2ea8e6;
 }
 .pvp-el:hover {
@@ -85,6 +156,16 @@
 .pvp-el.is-on {
   border-color: var(--fg);
 }
+.pvp-el-seal {
+  width: 40px;
+  height: 40px;
+}
+.pvp-el-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
 .pvp-el-name {
   font-weight: 700;
 }
@@ -92,8 +173,18 @@
   color: var(--muted);
   font-size: 14px;
 }
-.pvp-enter {
+/* «Войти» — тушью (style.css .btn), слева печать выбранной стихии */
+.pvp-lobby .btn.pvp-enter {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   margin-top: 16px;
+  padding: 10px 22px 10px 12px;
+  font-size: 18px;
+}
+.pvp-enter-seal {
+  width: 28px;
+  height: 28px;
 }
 .pvp-status {
   min-height: 1.5em;
@@ -126,8 +217,9 @@
 }
 
 /*
- * Интерфейс матча: «кисть и печать», как боевой HUD (hud/combatHud.css) — бумага, тушь, цвета стихий только на метках
- * стихий; киноварь не трогаем (она — HP и урон). Над боевым HUD (z 5), под меню (z 10). Мышь не ловит.
+ * Интерфейс матча: «кисть и печать», как боевой HUD (hud/combatHud.css) — бумага, тушь, цвета стихий только на печатях
+ * стихий (.pvp-seal, со знаком); киноварь не трогаем (она — HP и урон). Над боевым HUD (z 5), под меню (z 10). Мышь не
+ * ловит.
  */
 .mh {
   --mh-paper: #f6f3ea;
@@ -136,10 +228,6 @@
   --mh-ink: #1d1b16;
   --mh-muted: #6b665a;
   --mh-line: #d9d3c3;
-  --mh-fire: #ff7a1a;
-  --mh-earth: #3dbe7a;
-  --mh-air: #8f84d6;
-  --mh-water: #2ea8e6;
   --mh-head: "Cormorant SC", "Cormorant Garamond", "Forum", Georgia, "Times New Roman", serif;
   --mh-ui: "Manrope", system-ui, "Segoe UI", sans-serif;
   --mh-halo: 0 0 2px #f6f3ea, 0 0 2px #f6f3ea, 0 0 5px rgba(246, 243, 234, 0.9);
@@ -192,7 +280,7 @@
   display: none;
 }
 
-/* килфид: справа сверху, новые сверху; свои строки — тушью */
+/* килфид: справа сверху, новые сверху; свои строки — тушью; перед именем убийцы (сбившего, взявшего руну) — его печать */
 .mh-feed {
   position: absolute;
   right: 18px;
@@ -217,6 +305,11 @@
   background: var(--mh-ink);
   color: var(--mh-paper);
   font-weight: 700;
+}
+.mh-feed-line .pvp-seal {
+  width: 20px;
+  height: 20px;
+  margin: -2px 6px 0 -5px;
 }
 
 /* экран смерти: карточка под прицелом — причина, секунды до возрождения, выбор стихии 1 / 2 */
@@ -254,28 +347,22 @@
 .mh-sep {
   color: var(--mh-muted);
 }
+/* чип «1 — Огонь»: печать стихии слева; выбранный — рамкой тушью */
 .mh-chip {
-  padding: 3px 10px 3px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
   border: 1.5px solid var(--mh-line);
-  border-left: 5px solid var(--mh-el, var(--mh-line));
   border-radius: 6px;
   color: var(--mh-muted);
 }
-.mh-chip[data-element="fire"] {
-  --mh-el: var(--mh-fire);
-}
-.mh-chip[data-element="earth"] {
-  --mh-el: var(--mh-earth);
-}
-.mh-chip[data-element="air"] {
-  --mh-el: var(--mh-air);
-}
-.mh-chip[data-element="water"] {
-  --mh-el: var(--mh-water);
+.mh-chip .pvp-seal {
+  width: 22px;
+  height: 22px;
 }
 .mh-chip.is-on {
   border-color: var(--mh-ink);
-  border-left-color: var(--mh-el);
   background: var(--mh-card);
   color: var(--mh-ink);
   font-weight: 700;
@@ -355,27 +442,14 @@
 .mh-table td:nth-child(4) {
   font-weight: 800;
 }
-.mh-table td:nth-child(3)[data-element]::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: var(--mh-line);
-  vertical-align: 1px;
+/* стихия: печать со знаком и имя одной строкой */
+.mh-table td:nth-child(3) {
+  white-space: nowrap;
 }
-.mh-table td:nth-child(3)[data-element="fire"]::before {
-  background: var(--mh-fire);
-}
-.mh-table td:nth-child(3)[data-element="earth"]::before {
-  background: var(--mh-earth);
-}
-.mh-table td:nth-child(3)[data-element="air"]::before {
-  background: var(--mh-air);
-}
-.mh-table td:nth-child(3)[data-element="water"]::before {
-  background: var(--mh-water);
+.mh-table td .pvp-seal {
+  width: 20px;
+  height: 20px;
+  margin: -2px 6px 0 0;
 }
 .mh-table tr.is-mine td {
   background: #f2ede0;

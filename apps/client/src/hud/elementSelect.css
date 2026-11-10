@@ -16,3 +16,15 @@
 .es-card[data-element="water"] {
   --es-el: var(--ch-water);
 }
+/* шапка карточки: печать стихии (знак 36 px) и имя; справа место под номер клавиши */
+.es-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 30px;
+}
+.es-seal {
+  width: 50px;
+  height: 50px;
+  box-shadow: none;
+}
