@@ -58,7 +58,8 @@ export type Effect =
   | { kind: "fov"; deg: number; holdS?: number }
   | { kind: "hitstop"; ms: number } // визуальный: замирают руки, пока идёт жест (GDD 2.2)
   | { kind: "hitmarker"; kill: boolean; air: boolean; tier?: FeelTier }
-  | { kind: "number"; target: UnitId; amount: number; pos: Vec3; dot: boolean; air: boolean }
+  // lmb — попадание ЛКМ (и добивающее): такие цифры копятся в одну (L7); урон по времени — всегда false
+  | { kind: "number"; target: UnitId; amount: number; pos: Vec3; dot: boolean; air: boolean; lmb: boolean }
   | { kind: "flash"; target: UnitId }
   | { kind: "flinch"; target: UnitId; dir: Vec3; amount: number }
   | { kind: "indicator"; from: Vec3; amount: number } // попали в меня: откуда

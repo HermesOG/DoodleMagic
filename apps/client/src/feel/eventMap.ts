@@ -253,7 +253,7 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
   if (beat) out.push(burst("breathHit", ev.pos));
   if (ev.source === view.localId && ev.target !== view.localId) {
     if (overTime(ev)) {
-      out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne });
+      out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne, lmb: false });
       // добил горением или следом — убийство всё равно отмечается
       if (ev.killed) out.push({ kind: "hitmarker", kill: true, air: ev.airborne, tier: "large" });
       // поток попадает: лёгкое подтверждение на вспышке — малый хитмаркер, вспышка цели и тихий щелчок, без паузы
@@ -267,7 +267,8 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
       const ms = hitstopMs(tier, ev.ability);
       out.push(
         { kind: "hitmarker", kill: ev.killed, air: ev.airborne, tier },
-        { kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: false, air: ev.airborne },
+        // ЛКМ и добивающая ЛКМ копятся в одну цифру (L7): по lmb, а не по ступени хитмаркера — убийство крупной ступени
+        { kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: false, air: ev.airborne, lmb },
         { kind: "flash", target: ev.target },
         { kind: "flinch", target: ev.target, dir: ev.dir, amount: ult ? 0.8 : lmb ? 0.1 : 0.2 },
       );

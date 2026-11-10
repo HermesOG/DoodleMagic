@@ -387,9 +387,12 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     hpBox.classList.toggle("is-fury", fury > 0);
   };
 
+  /** Полосы, показанные в этом кадре, и юниты в состоянии: одни множества на всё время, без мусора в кадре. */
+  const seen = new Set<UnitId>();
+  const present = new Set<UnitId>();
   const updateBars = (view: HudView): void => {
-    const seen = new Set<UnitId>();
-    const present = new Set<UnitId>();
+    seen.clear();
+    present.clear();
     const tanHalf = Math.tan(((view.camera.fov / 2) * Math.PI) / 180);
     for (const u of view.cur.units) {
       // манекены и живые чужие маги; над собой полосы нет
@@ -518,8 +521,8 @@ export function createCombatHud(root: HTMLElement): CombatHud {
           hit.classList.toggle("is-air", e.air);
           break;
         case "number":
-          // попадание ЛКМ (L7): карта событий шлёт цифру сразу за её хитмаркером; малая ступень — ЛКМ без убийства
-          numbers = mergeNumbers(numbers, { ...e, lmb: !e.dot && hitAt === nowS && hitTier === "small" && !hitKill }, nowS);
+          // попадания ЛКМ копятся в одну цифру (L7) — по полю эффекта: добивающая ЛКМ тоже прибавляется к стопке
+          numbers = mergeNumbers(numbers, e, nowS);
           break;
         case "indicator": {
           const k = oldest(arcs);

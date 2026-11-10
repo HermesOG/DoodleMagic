@@ -34,24 +34,41 @@ export const DOT_MERGE_S = 0.6;
  */
 export const LMB_MERGE_S = 0.6;
 
+/** Попадание для цифры: lmb — ЛКМ (и добивающая ЛКМ), по полю эффекта, а не по ступени хитмаркера. */
+export interface NumberHit {
+  target: UnitId;
+  amount: number;
+  dot: boolean;
+  air: boolean;
+  pos: Vec3;
+  lmb?: boolean;
+}
+
+/**
+ * Копить ли попадание e в цифру n в момент nowS. Копятся только урон по времени (к урону по времени) и ЛКМ (к ЛКМ)
+ * по той же цели, пока прошлая прибавка свежая (DOT_MERGE_S, LMB_MERGE_S); прочие удары — всегда своя цифра.
+ */
+export function stacksOnto(n: FloatingNumber, e: NumberHit, nowS: number): boolean {
+  const lmb = !e.dot && e.lmb === true;
+  if (!e.dot && !lmb) return false;
+  if (n.dot !== e.dot || n.lmb !== lmb || n.target !== e.target) return false;
+  return nowS - n.updated <= (e.dot ? DOT_MERGE_S : LMB_MERGE_S);
+}
+
 /**
  * Новая цифра. Урон по времени прибавляется к последней цифре урона по времени той же цели, попадание ЛКМ — к
- * последней цифре ЛКМ той же цели, если она свежая (DOT_MERGE_S, LMB_MERGE_S); прочие удары — всегда своя цифра.
+ * последней цифре ЛКМ той же цели, если она свежая (stacksOnto); прочие удары — всегда своя цифра.
  * Слитая цифра переезжает к точке нового импульса: она идёт за целью (подброшенной, патрулирующей), а не висит
  * там, где был первый; скачок прячет подскок цифры при прибавке.
  */
-export function mergeNumbers(
-  list: FloatingNumber[],
-  e: { target: UnitId; amount: number; dot: boolean; air: boolean; pos: Vec3; lmb?: boolean },
-  nowS: number,
-): FloatingNumber[] {
+export function mergeNumbers(list: FloatingNumber[], e: NumberHit, nowS: number): FloatingNumber[] {
   const lmb = !e.dot && e.lmb === true;
   if (e.dot || lmb) {
-    const windowS = e.dot ? DOT_MERGE_S : LMB_MERGE_S;
+    // смотрим только последнюю цифру того же вида и цели: устаревшая — новая цифра, а не прибавка к более старой
     for (let k = list.length - 1; k >= 0; k--) {
       const n = list[k]!;
       if (n.dot !== e.dot || n.lmb !== lmb || n.target !== e.target) continue;
-      if (nowS - n.updated > windowS) break;
+      if (!stacksOnto(n, e, nowS)) break;
       const merged: FloatingNumber = { ...n, amount: n.amount + e.amount, air: n.air || e.air, pos: { ...e.pos }, updated: nowS };
       return [...list.slice(0, k), merged, ...list.slice(k + 1)];
     }
@@ -115,6 +132,11 @@ export function hpBar(u: Unit): { frac: number; notch: number; text: string } {
  * полоса вздрагивает на ±2 px за 80 мс. Подтверждение там, куда смотрит глаз, — на цели.
  */
 export const BITE = { holdS: 0.3, fadeS: 0.25, shakeS: 0.08, shakePx: 2 } as const;
+/**
+ * Укус — только при падении больше этой доли HP (0,45 HP из 150): мелкие поправки предсказания в PvP (откат на
+ * доли HP) не дрожат полосой и не рисуют след. Горение (3 урона) — уже укус.
+ */
+export const BITE_MIN_DROP = 0.003;
 /** След полосы: frac — доля HP сейчас, from — откуда сходит след, at — когда откусили (−∞ — не было). */
 export interface HpBite {
   frac: number;
@@ -134,9 +156,10 @@ export function biteTrail(b: HpBite, nowS: number): number {
 /**
  * Новая доля HP. Урон — след от того места, где он виден сейчас (несколько попаданий подряд — один длинный кусок,
  * держится от последнего), и вздрагивание заново. Лечение и возрождение — без нового следа: прежний не ниже заливки.
+ * Падение не больше BITE_MIN_DROP — без укуса: заливка идёт за HP, след стоит.
  */
 export function stepBite(b: HpBite, frac: number, nowS: number): HpBite {
-  if (frac < b.frac - 1e-6) return { frac, from: Math.max(biteTrail(b, nowS), b.frac), at: nowS };
+  if (frac < b.frac - BITE_MIN_DROP) return { frac, from: Math.max(biteTrail(b, nowS), b.frac), at: nowS };
   if (frac === b.frac) return b;
   return { frac, from: Math.max(b.from, frac), at: b.at };
 }

@@ -69,6 +69,15 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     for (const es of [small, medium, kill]) expect(pick(es, "trauma")).toEqual([]);
   });
 
+  // цифра знает, что она от ЛКМ: добивающий кулак (крупная ступень) копится в стопку, шар и горение — нет (L7)
+  it("marks LMB damage numbers explicitly: a finishing fist is lmb, a fireball and a burn tick are not", () => {
+    const lmbOf = (es: Effect[]) => pick(es, "number").map((e) => e.lmb);
+    expect(lmbOf(fx(hit({ ability: "fireFists", amount: 15, killed: true })))).toEqual([true]);
+    expect(lmbOf(fx(hit({ ability: "stoneShot", amount: 30 })))).toEqual([true]);
+    expect(lmbOf(fx(hit({ ability: "fireball", amount: 50 })))).toEqual([false]);
+    expect(lmbOf(fx(hit({ ability: "burning", amount: 3, dot: true })))).toEqual([false]);
+  });
+
   it("shakes the victim by tier and element: a fist 0.1 Fire, a stone 0.2 Earth, a fireball 0.5 Fire in all with FOV and a whoosh", () => {
     const onMe = (over: Partial<Hit>) => fx(hit({ source: OTHER, target: ME, ...over }));
     expect(pick(onMe({}), "trauma")).toEqual([{ kind: "trauma", amount: 0.1, profile: "fire" }]);
