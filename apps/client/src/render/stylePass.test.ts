@@ -52,8 +52,8 @@ describe("style material", () => {
       INK_GRASS: INK.grass,
     });
     for (const name of Object.keys(m.defines!)) expect(STYLE_FRAG, name).toContain(name);
-    expect([FOG.near, FOG.far, FOG.max, DAY_DIM, GORGE.sway]).toEqual([22, 90, 0.7, 0.12, 1.5]);
-    expect(u.uFog!.value.toArray()).toEqual([22, 90]);
+    expect([FOG.near, FOG.far, FOG.max, DAY_DIM, GORGE.sway]).toEqual([25, 95, 0.7, 0.12, 1.5]);
+    expect(u.uFog!.value.toArray()).toEqual([25, 95]);
   });
 
   it("reads the G-buffer with whole-texel fetches only, 10 per pixel (budget 13)", () => {
