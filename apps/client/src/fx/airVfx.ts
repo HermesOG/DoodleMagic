@@ -3,7 +3,7 @@ import { AIR, forwardXZ, rightXZ, type Unit, type UnitId, type Vec3, type Zone }
 import { createInkMaterial } from "../render/gbuffer";
 import { INK } from "../render/palette";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
-import { FX_COLOR, UP, particle, spawn, type ParticleSpec, type Rng } from "./particleKit";
+import { FX_COLOR, UP, markSide, particle, sideOf, spawn, type ParticleSpec, type Rng } from "./particleKit";
 import { AIR_STREAM } from "./presets.air";
 
 /*
@@ -344,8 +344,9 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
       a.column -= due.column;
       a.rim -= due.rim;
       a.flame -= due.flame;
+      // пламя огненного смерча — с каймой своего или чужого (V3)
       const specs = vortexParticles(z, f.tick, f.nowS, due, rng);
-      if (specs.length > 0) f.emit(specs);
+      if (specs.length > 0) f.emit(z.kind === "fireTornado" ? markSide(specs, sideOf(z.owner, f.localId)) : specs);
       if (f.tick < z.armTick) continue;
       // столб ядра: свечение без света; огненный — свет огня
       const c = z.shape.center;

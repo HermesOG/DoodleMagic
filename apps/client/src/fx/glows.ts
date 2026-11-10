@@ -1,5 +1,6 @@
-import { DynamicDrawUsage, Frustum, InstancedBufferAttribute, InstancedMesh, Matrix4, PlaneGeometry, Sphere, type Camera, type ShaderMaterial } from "three";
+import { DynamicDrawUsage, Frustum, InstancedBufferAttribute, InstancedMesh, Matrix4, PlaneGeometry, Sphere, Vector3, type Camera, type ShaderMaterial } from "three";
 import type { Vec3 } from "@doodlemagic/sim";
+import { INK_STYLE } from "../render/palette";
 import { glslFloat } from "../render/stylePass";
 import { FX_ORDER, GLAZE_TINT, createFxMaterial, type FxGBuffer } from "./fxShader";
 
@@ -8,6 +9,8 @@ import { FX_ORDER, GLAZE_TINT, createFxMaterial, type FxGBuffer } from "./fxShad
  * обрезанное там, где перед ним стоит поверхность. Свет — точечный источник «в проходе света» (без PointLight):
  * точка поверхности под пикселем восстанавливается из глубины G-буфера, нормаль — из G-буфера, свет падает
  * только на заливки мира: на тушь врага, его ореол и вспышку (GDD 6), на руки и на небо — нет.
+ * Ореол горения (V5): белая кромка врага в радиусе rim от точки красится тёплыми чернилами haloBurn — «горит» видно
+ * без подписи, а тушь силуэта не трогается.
  */
 export interface Glow {
   pos: Vec3;
@@ -19,22 +22,26 @@ export interface Glow {
   intensity: number;
   /** Доля белого ядра в центре ореола. */
   core: number;
+  /** Радиус ореола горения, м: белая кромка врага ближе — тёплая (0 или нет — не красит). */
+  rim?: number;
 }
 
 const GLOW_VERT = /* glsl */ `
 attribute vec4 aG0; // центр (x, y, z), радиус ореола
-attribute vec4 aG1; // радиус света, яркость, ядро, —
+attribute vec4 aG1; // радиус света, яркость, ядро, радиус ореола горения
 attribute vec3 aG2; // цвет
 varying vec3 vQ;
 varying vec3 vC;
 varying vec4 vG;
 varying vec3 vCol;
+varying float vRim;
 void main() {
   vec3 c = (viewMatrix * vec4(aG0.xyz, 1.0)).xyz;
-  float R = max(aG0.w, aG1.x);
+  float R = max(max(aG0.w, aG1.x), aG1.w);
   vC = c;
   vG = vec4(aG0.w, aG1.x, aG1.y, aG1.z);
   vCol = aG2;
+  vRim = aG1.w;
   vQ = vec3(0.0, 0.0, -1.0);
   // сфера целиком за камерой — ничего не рисуем (обычно такие отсекает ещё процессор, cullGlows)
   if (c.z > R) {
@@ -63,10 +70,12 @@ void main() {
 `;
 
 const GLOW_FRAG = /* glsl */ `
+uniform vec3 uBurn;
 varying vec3 vQ;
 varying vec3 vC;
 varying vec4 vG;
 varying vec3 vCol;
+varying float vRim;
 const float LIGHT_GAIN = 0.55;
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
@@ -90,18 +99,29 @@ void main() {
     g = (0.55 * exp(-x * x * 9.0) + 0.45 * exp(-x * x * 2.2)) * front;
   }
   float Lr = vG.y;
+  float rim = vRim;
   float att = 0.0;
   vec3 L = vec3(0.0);
-  float dist = 1.0;
-  if (Lr > 0.0 && !sky) {
+  float dist = 1.0e3;
+  if ((Lr > 0.0 || rim > 0.0) && !sky) {
     L = vC - ray * D;
     dist = length(L);
-    att = clamp(1.0 - dist * dist / (Lr * Lr), 0.0, 1.0);
-    att *= att;
+    if (Lr > 0.0) {
+      att = clamp(1.0 - dist * dist / (Lr * Lr), 0.0, 1.0);
+      att *= att;
+    }
   }
-  // ни ореола, ни света — до выборок чернил и нормали
-  if (g < 1.0e-3 && att <= 0.0) discard;
-  bool enemy = !sky && fxIsEnemy(fxInkAt(p));
+  float burn = rim > 0.0 ? 1.0 - smoothstep(rim * 0.8, rim, dist) : 0.0;
+  // ни ореола, ни света, ни горения — до выборок чернил и нормали
+  if (g < 1.0e-3 && att <= 0.0 && burn <= 0.0) discard;
+  int ink = sky ? 0 : fxInkAt(p);
+  // ореол горения (V5): белая кромка врага рядом с огнём — тёплая, плотным слоем поверх
+  if (burn > 0.0 && (ink == INK_HALO || ink == INK_HALO_BURN)) {
+    float k = BURN_ALPHA * burn * clamp(vG.z * 1.5, 0.0, 1.0);
+    gl_FragColor = vec4(uBurn * k, k);
+    return;
+  }
+  bool enemy = !sky && fxIsEnemy(ink);
   float vis = enemy ? FX_ENEMY_LIGHT : 1.0;
   vec3 tinted = vCol * (g * vis * vG.z * 0.75);
   // белое ядро над врагом — как плотное: десятая доля, иначе вспышка взрыва белит силуэт в момент удара
@@ -128,10 +148,13 @@ export function cullGlows<T extends Glow>(glows: readonly T[], camera: Camera): 
   cullFrustum.setFromProjectionMatrix(cullMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   return glows.filter((g) => {
     cullSphere.center.set(g.pos.x, g.pos.y, g.pos.z);
-    cullSphere.radius = Math.max(g.halo, g.light);
+    cullSphere.radius = Math.max(g.halo, g.light, g.rim ?? 0);
     return cullSphere.radius > 0 && cullFrustum.intersectsSphere(cullSphere);
   });
 }
+
+/** Плотность тёплого ореола горения поверх белой кромки. */
+export const BURN_ALPHA = 0.9;
 
 export interface GlowMeshes {
   readonly mesh: InstancedMesh<PlaneGeometry, ShaderMaterial>;
@@ -149,7 +172,15 @@ export function createGlowMeshes(gbuffer: FxGBuffer, max = 48): GlowMeshes {
   geometry.setAttribute("aG0", a0);
   geometry.setAttribute("aG1", a1);
   geometry.setAttribute("aG2", a2);
-  const material = createFxMaterial({ name: "fx-glows", vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG, gbuffer, defines: { GLOW_TINT: glslFloat(GLAZE_TINT.glows) } });
+    const burn = INK_STYLE.haloBurn.wash;
+  const material = createFxMaterial({
+    name: "fx-glows",
+    vertexShader: GLOW_VERT,
+    fragmentShader: GLOW_FRAG,
+    gbuffer,
+    defines: { GLOW_TINT: glslFloat(GLAZE_TINT.glows), BURN_ALPHA: glslFloat(BURN_ALPHA) },
+    uniforms: { uBurn: { value: new Vector3(burn[0], burn[1], burn[2]) } },
+  });
   const mesh = new InstancedMesh(geometry, material, max);
   mesh.name = "fx-glows";
   mesh.frustumCulled = false;
@@ -163,7 +194,7 @@ export function createGlowMeshes(gbuffer: FxGBuffer, max = 48): GlowMeshes {
       for (let i = 0; i < n; i++) {
         const g = glows[i]!;
         a0.setXYZW(i, g.pos.x, g.pos.y, g.pos.z, g.halo);
-        a1.setXYZW(i, g.light, g.intensity, g.core, 0);
+        a1.setXYZW(i, g.light, g.intensity, g.core, g.rim ?? 0);
         a2.setXYZ(i, g.color[0], g.color[1], g.color[2]);
       }
       for (const a of [a0, a1, a2]) {

@@ -76,9 +76,10 @@ const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
     L("core", 6, "up", [0.5, 1.5], [0.15, 0.3], [0.9, 1.3], [1.8, 2.4], { r0: 2 }),
     L("ember", 16, "up", [4, 8], [0.3, 0.6], [0.05, 0.08], [0.02, 0.03], { r0: 2.5, gravity: 6 }),
   ],
+  // горение (V5): языки рождаются на краю силуэта (точку даёт vfx, burnEdge) и растут вверх 0,25 → 0,45 м
   burnLick: [
-    L("flame", 5, "up", [0.6, 1.4], [0.3, 0.5], [0.16, 0.24], [0.04, 0.08], { r0: 0.25 }),
-    L("glow", 2, "up", [0.4, 0.8], [0.3, 0.45], [0.3, 0.4], [0.15, 0.2], { r0: 0.2 }),
+    L("flame", 5, "up", [0.6, 1.4], [0.3, 0.5], [0.22, 0.28], [0.36, 0.45], { r0: 0.06, cone: 0.35 }),
+    L("glow", 2, "up", [0.4, 0.8], [0.3, 0.45], [0.25, 0.32], [0.12, 0.18], { r0: 0.06 }),
   ],
   stoneCrumble: [
     L("chip", 8, "sphere", [1, 3], [0.5, 0.8], [0.06, 0.1], [0.04, 0.06], { up: 1 }),
@@ -354,6 +355,13 @@ export function idlePalmParticle(element: Element, pos: Vec3, rng: () => number)
 export function pebbleParticle(pos: Vec3, phase: number, rng: () => number): ParticleSpec {
   const at = { x: pos.x + Math.cos(phase) * PEBBLE_R, y: pos.y + 0.02 + Math.sin(phase * 2) * 0.008, z: pos.z + Math.sin(phase) * PEBBLE_R };
   return spawn(PEBBLE, at, UP, rng);
+}
+
+/** Дымок горящего (V5): раз в BURN_SMOKE_S с макушки. */
+const BURN_SMOKE = L("smoke", 1, "up", [0.3, 0.7], [0.7, 1.0], [0.14, 0.2], [0.45, 0.6], { cone: 0.3 });
+export const BURN_SMOKE_S = 0.3;
+export function burnSmoke(top: Vec3, rng: () => number): ParticleSpec {
+  return spawn(BURN_SMOKE, top, UP, rng);
 }
 
 /** Пыль из-под ног отброшенного по полу (K3): одна частица у подошвы. */

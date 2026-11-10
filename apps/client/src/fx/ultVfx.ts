@@ -1,14 +1,14 @@
 import {
   ConeGeometry, CylinderGeometry, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Matrix4, Quaternion, Vector3, type ShaderMaterial,
 } from "three";
-import { EARTH, EYE_HEIGHT, FIRE, TICK_HZ, aimDir, forwardXZ, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
+import { EARTH, EYE_HEIGHT, FIRE, NOBODY, TICK_HZ, aimDir, forwardXZ, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
 import { breathStreaming } from "../feel/eventMap";
 import { createInkMaterial } from "../render/gbuffer";
 import { INK } from "../render/palette";
 import { glslFloat } from "../render/stylePass";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
 import { FX_ORDER, createFxMaterial } from "./fxShader";
-import { FX_COLOR, particle, randomCone, type ParticleSpec, type Rng } from "./particleKit";
+import { FX_COLOR, RIM, particle, randomCone, type ParticleSpec, type Rng } from "./particleKit";
 
 /*
  * Ульты Огня и Земли (фаза 5) поверх общих пулов эффектника:
@@ -117,12 +117,13 @@ export function spikeHash(zone: number, i: number, ch: number): number {
 /**
  * Лист пламени на конусе: вершина у рта (у своего — у ладоней), ось — взгляд. Шум течёт от рта вперёд; координаты
  * шума — точка поперёк оси в метрах, поэтому шва развёртки нет. Конец рваный и гаснет; у своего лист начинается
- * в метре от рук и в полсилы, чтобы не застить прицел.
+ * в метре от рук и в полсилы, чтобы не застить прицел. По краю языков — кайма (V3): своя гладкая оранжевая, чужая
+ * тёмная зубчатая.
  */
 const BREATH_VERT = /* glsl */ `
 attribute vec4 aB0; // вершина (x, y, z), семя
 attribute vec4 aB1; // ось (x, y, z), длина, м
-attribute vec4 aB2; // плотность (гаснет к концу потока), свой (1), 0, 0
+attribute vec4 aB2; // плотность (гаснет к концу потока), свой (1), чужой (1), 0
 varying vec3 vRel;
 varying vec4 vInfo;
 void main() {
@@ -136,7 +137,7 @@ void main() {
   vec2 c = position.xz * len * BREATH_TAN;
   vec3 w = aB0.xyz + ax * d + sx * c.x + sy * c.y;
   vRel = vec3(c, d);
-  vInfo = vec4(len, aB2.x, aB0.w, aB2.y);
+  vInfo = vec4(len, aB2.x, aB0.w, aB2.y + 2.0 * aB2.z);
   gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
 }
 `;
@@ -147,6 +148,8 @@ uniform vec3 uFire;
 uniform vec3 uCore;
 uniform vec3 uEmber;
 uniform vec3 uShade;
+uniform vec3 uRimOwn;
+uniform vec3 uRimFoe;
 varying vec3 vRel;
 varying vec4 vInfo;
 void main() {
@@ -155,7 +158,8 @@ void main() {
   float len = max(vInfo.x, 0.01);
   float fade = vInfo.y;
   float seed = vInfo.z;
-  bool own = vInfo.w > 0.5;
+  bool own = vInfo.w > 0.5 && vInfo.w < 1.5;
+  bool foe = vInfo.w > 1.5;
   float d = vRel.z;
   float a01 = d / BREATH_LEN;
   float t = uTime;
@@ -164,15 +168,24 @@ void main() {
   float flame = 0.62 + (n - 0.5) * 1.3 + (n2 - 0.5) * 0.5 - a01 * 0.45;
   float tip = 1.0 - smoothstep(0.7, 1.0, d / len + (n2 - 0.5) * 0.25);
   float root = own ? smoothstep(0.06, 0.2, a01) : smoothstep(0.0, 0.05, a01);
-  float dens = smoothstep(0.1, 0.45, flame) * tip * root * fade;
-  if (dens <= 0.002) discard;
+  float body = tip * root * fade;
+  float dens = smoothstep(0.1, 0.45, flame) * body;
+  // кайма по краю языков: чужая — шум втрое чаще и тёмная тушь, своя — гладкая оранжевая
+  float rim = 0.0;
+  if (own || foe) {
+    float jag = foe ? (fxNoise(vec2(vRel.x * 2.7 - vRel.y * 2.1 + seed, d * 1.35 - t * 13.5)) - 0.5) * 0.14 : 0.0;
+    rim = smoothstep(0.06, 0.11, flame + jag) * (1.0 - smoothstep(0.17, 0.25, flame - jag)) * body * (foe ? RIM_FOE_A : RIM_OWN_A);
+  }
+  if (dens + rim <= 0.002) discard;
   float heat = clamp(flame, 0.0, 1.0) * (1.0 - 0.45 * a01);
   vec3 col = mix(uEmber, uShade, smoothstep(0.0, 0.18, heat));
   col = mix(col, uFire, smoothstep(0.18, 0.5, heat));
   col = mix(col, uCore, smoothstep(0.62, 1.0, heat));
   float a = dens * (own ? 0.35 : 0.6) * fxDense(vis);
   vec3 glow = col * heat * 0.55 * dens * vis;
-  gl_FragColor = vec4(col * a + glow, a);
+  float ra = rim * fxDense(vis);
+  vec3 rc = foe ? uRimFoe : uRimOwn;
+  gl_FragColor = vec4(rc * ra + (col * a + glow) * (1.0 - ra), ra + a * (1.0 - ra));
 }
 `;
 
@@ -197,13 +210,15 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
     vertexShader: BREATH_VERT,
     fragmentShader: BREATH_FRAG,
     gbuffer,
-    defines: { BREATH_TAN: glslFloat(BREATH_TAN), BREATH_LEN: glslFloat(BREATH_LEN_M) },
+    defines: { BREATH_TAN: glslFloat(BREATH_TAN), BREATH_LEN: glslFloat(BREATH_LEN_M), RIM_OWN_A: glslFloat(RIM.own.alpha), RIM_FOE_A: glslFloat(RIM.foe.alpha) },
     uniforms: {
       uTime: time,
       uFire: { value: new Vector3(...FX_COLOR.fire) },
       uCore: { value: new Vector3(...FX_COLOR.core) },
       uEmber: { value: new Vector3(...FX_COLOR.ember) },
       uShade: { value: new Vector3(...FX_COLOR.fireShade) },
+      uRimOwn: { value: new Vector3(...RIM.own.breath) },
+      uRimFoe: { value: new Vector3(...RIM.foe.fire) },
     },
   });
   const cones = new InstancedMesh<CylinderGeometry, ShaderMaterial>(coneGeom, coneMat, MAX_BREATH);
@@ -273,6 +288,7 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
       const c = it.u.mage?.ult.cast;
       if (!c || c.ability !== "dragonBreath") continue;
       const own = it.id === f.localId;
+      const foe = !own && f.localId !== NOBODY;
       if (own) {
         const p = f.palmWorld("both");
         apex.set(p.x, p.y, p.z);
@@ -305,13 +321,18 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
       const len = BREATH_LEN_M * Math.max(0.05, grow);
       b0.setXYZW(n, apex.x, apex.y, apex.z, (it.id * 0.618) % 7);
       b1.setXYZW(n, axis.x, axis.y, axis.z, len);
-      b2.setXYZW(n, fade, own ? 1 : 0, 0, 0);
+      b2.setXYZW(n, fade, own ? 1 : 0, foe ? 1 : 0, 0);
       n++;
       // частицы огня по конусу ≤ 90/с
       const m = due(flowAcc, it.id, BREATH_RATE, f.dt);
       if (m > 0) {
         specs.length = 0;
-        for (let i = 0; i < m; i++) specs.push(breathParticle(apex, axis, len, rng));
+        for (let i = 0; i < m; i++) {
+          const p = breathParticle(apex, axis, len, rng);
+          if (own) p.own = true;
+          else if (foe) p.foe = true;
+          specs.push(p);
+        }
         f.emit(specs);
       }
       // свет огня 7,5 м у основания потока и ореол дальше по оси; своему ореолы меньше — прицел виден

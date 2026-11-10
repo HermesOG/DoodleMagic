@@ -1,4 +1,4 @@
-import type { Vec3 } from "@doodlemagic/sim";
+import { NOBODY, type UnitId, type Vec3 } from "@doodlemagic/sim";
 import { PAPER, type RGB } from "../render/palette";
 
 /*
@@ -36,6 +36,17 @@ export const FX_COLOR = {
   ink: hex(0x1e1a16),
 } as const;
 export const SMOKE_ALPHA = 0.35;
+/**
+ * Кайма магии (V3, GDD 2.2): у плотного пламени и воды, листа стены огня и конуса Дыхания. Чужая — тёмная, зубчатая,
+ * α 0,9 — видна по краю с 30 м; своя — гладкая, средним тоном той же стихии, α 0,5. Своя кромка Дыхания — оранжевее,
+ * дальше от красного HP (рецензия 02). Пена Воды — белая с линией.
+ */
+export const RIM = {
+  foe: { fire: hex(0x2a140a), water: [0.08, 0.1, 0.13] as RGB, alpha: 0.9 },
+  own: { fire: hex(0x8a5a3a), water: FX_COLOR.foamLine, breath: hex(0xb8500f), alpha: 0.5 },
+  foamLine: { color: FX_COLOR.foamLine, alpha: 0.6 },
+} as const;
+
 /** Плотность штриха Воздуха и штриха туши удара. */
 export const AIR_STROKE_ALPHA = 0.6;
 export const INK_STROKE_ALPHA = 0.9;
@@ -58,8 +69,10 @@ export interface ParticleSpec {
   alpha: number;
   /** Штрих кисти: вытянут по скорости, size — длина (ветер, удар тушью). Нет — форма по alpha и gravity. */
   stroke?: boolean;
-  /** Магия чужого мага: у пламени и воды тёмная зубчатая кайма (V3); у своей — гладкая средним тоном. */
+  /** Магия чужого мага: у пламени и воды тёмная зубчатая кайма (V3). */
   foe?: boolean;
+  /** Своя магия: кайма гладкая, средним тоном (V3). Ни own, ни foe — хозяин неизвестен, каймы нет. */
+  own?: boolean;
   /** Своё у прицела: центр кадра (6°) остаётся чистым (своё Дыхание, V4). */
   clear?: boolean;
 }
@@ -226,6 +239,19 @@ export function spawn(layer: Layer, pos: Vec3, dir: Vec3, rng: Rng): ParticleSpe
   };
   if (k.stroke) s.stroke = true;
   return s;
+}
+
+/** Чья магия для каймы: своя, чужая или неизвестно (без каймы); свой маг неизвестен — тоже без каймы. */
+export function sideOf(owner: UnitId, localId: UnitId): "own" | "foe" | null {
+  if (localId === NOBODY || owner === NOBODY) return null;
+  return owner === localId ? "own" : "foe";
+}
+
+/** Пометить частицы своими или чужими (кайма V3). Возвращает тот же массив. */
+export function markSide<T extends ParticleSpec[]>(specs: T, side: "own" | "foe" | null): T {
+  if (side === "own") for (const p of specs) p.own = true;
+  else if (side === "foe") for (const p of specs) p.foe = true;
+  return specs;
 }
 
 export function emit(layers: readonly Layer[], total: number, pos: Vec3, dir: Vec3, rng: Rng): ParticleSpec[] {

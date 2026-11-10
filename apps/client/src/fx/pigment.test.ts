@@ -1,11 +1,14 @@
-import { DepthTexture, Texture, Vector2 } from "three";
+import { DepthTexture, PerspectiveCamera, Texture, Vector2, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
-import { INK, PAPER, luminance, saturation, type RGB } from "../render/palette";
+import { NOBODY, createMageUnit, createMatchState, type MatchState, type Zone } from "@doodlemagic/sim";
+import { INK, INK_STYLE, PAPER, luminance, saturation, type RGB } from "../render/palette";
+import { createFireWallMeshes, fireWallSheet } from "./fireWalls";
 import { FX_COMMON, GLAZE, GLAZE_TINT, glazeAlpha, glazeOver } from "./fxShader";
-import { createGlowMeshes } from "./glows";
-import { AIR_STROKE_ALPHA, FX_COLOR, KIND, particle } from "./particleKit";
-import { createParticlePool } from "./particles";
-import { burstParticles } from "./presets";
+import { BURN_ALPHA, createGlowMeshes, cullGlows } from "./glows";
+import { AIR_STROKE_ALPHA, FX_COLOR, KIND, RIM, markSide, particle, sideOf } from "./particleKit";
+import { FLAG, createParticlePool, packGravity, unpackGravity } from "./particles";
+import { BURN_SMOKE_S, burnSmoke, burstParticles } from "./presets";
+import { burnEdge, createVfx } from "./vfx";
 
 /*
  * Магия-пигмент (фаза 7, задача 3; раунд 4, V1–V10): глазурь света, цвета под бумагу, кайма свой / чужой, горение
@@ -13,6 +16,7 @@ import { burstParticles } from "./presets";
  */
 
 const O = { x: 0, y: 1, z: 0 };
+const V = (x = 0, y = 0, z = 0) => ({ x, y, z });
 const rng = (seed = 5) => () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
 const scale = (c: RGB, k: number): RGB => [c[0] * k, c[1] * k, c[2] * k];
 const gray = (v: number): RGB => [v, v, v];
@@ -105,12 +109,128 @@ describe("V6: element colours for the paper", () => {
     expect(particle("flame", O, O, 0.4, 0.06, 0.25, rng()).stroke).toBeUndefined();
   });
 
-  it("a stroke is marked by the sign of size0 in the pool, no new attribute", () => {
+  it("a stroke is a flag packed into the gravity attribute, no new attribute", () => {
     const pool = createParticlePool({ name: "t", maxCap: 4, cap: 4, gbuffer, time });
     pool.emit([particle("wind", O, O, 0.4, 0.06, 0.25, rng()), particle("flame", O, O, 0.4, 0.06, 0.25, rng())], 0);
-    const a = pool.mesh.geometry.getAttribute("aTime");
-    expect([a.getZ(0), a.getZ(1)]).toEqual([expect.closeTo(-0.06, 6), expect.closeTo(0.06, 6)]);
+    const g = pool.mesh.geometry.getAttribute("aGrav");
+    expect([unpackGravity(g.getX(0)), unpackGravity(g.getX(1))]).toEqual([{ gravity: 0, flags: FLAG.stroke }, { gravity: -3, flags: 0 }]);
     expect(Object.keys(pool.mesh.geometry.attributes).sort()).toEqual(["aColor", "aGrav", "aP0", "aTime", "aV0", "normal", "position", "uv"]);
-    expect(pool.mesh.material.vertexShader).toContain("aTime.z < 0.0 ? 3.0");
+    expect(pool.mesh.material.vertexShader).toContain("(flags & FLAG_STROKE) != 0 ? 3.0");
+  });
+});
+
+/** Эффектник целиком в node: G-буфер — пустые текстуры, камера в (0; 1,6; 0) смотрит вдоль −Z. */
+const ME = 1;
+const OTHER = 2;
+const palms = { right: new Vector3(0.26, -0.25, -0.62), left: new Vector3(-0.26, -0.25, -0.62) };
+function harness() {
+  const vfx = createVfx(gbuffer as never, "high");
+  const camera = new PerspectiveCamera(70, 16 / 9, 0.05, 200);
+  camera.position.set(0, 1.6, 0);
+  const mesh = (name: string) => vfx.fx.world.getObjectByName(name) as unknown as { count: number; geometry: { getAttribute(n: string): { getX(i: number): number; getY(i: number): number; getZ(i: number): number; getW(i: number): number } } };
+  const sync = (s: MatchState, nowS: number, prev = s) => vfx.sync({ prev, cur: s, alpha: 1, nowS, camera, localId: ME, palms });
+  return { vfx, camera, mesh, sync };
+}
+const flagsOf = (pool: ReturnType<ReturnType<typeof harness>["mesh"]>, i: number) => unpackGravity(pool.geometry.getAttribute("aGrav").getX(i)).flags;
+
+describe("V3: own and enemy rim", () => {
+  it("packs own, enemy, stroke and crosshair-clear flags into gravity and back", () => {
+    const base = particle("flame", O, O, 0.4, 0.2, 0.4, rng());
+    for (const g of [-3.4, 0, 6, 14]) {
+      for (const f of [{}, { foe: true }, { own: true }, { stroke: true, clear: true }]) {
+        const u = unpackGravity(packGravity({ ...base, gravity: g, ...f }));
+        expect(u.gravity).toBeCloseTo(g, 9);
+        expect(u.flags).toBe(("foe" in f ? FLAG.foe : 0) | ("own" in f ? FLAG.own : 0) | ("stroke" in f ? FLAG.stroke | FLAG.clear : 0));
+      }
+    }
+    // чужое сильнее своего: оба флага сразу не пишутся
+    expect(unpackGravity(packGravity({ ...base, own: true, foe: true })).flags).toBe(FLAG.foe);
+  });
+
+  it("knows whose magic it is: own, enemy, or unknown (no rim) when there is no local mage", () => {
+    expect([sideOf(ME, ME), sideOf(OTHER, ME), sideOf(OTHER, NOBODY), sideOf(NOBODY, ME)]).toEqual(["own", "foe", null, null]);
+    const ps = markSide([particle("flame", O, O, 0.4, 0.2, 0.4, rng())], "foe");
+    expect([ps[0]!.foe, ps[0]!.own]).toEqual([true, undefined]);
+    const wall = { id: 3, owner: OTHER, kind: "fireWall", ability: "fireWall", shape: { type: "box", box: { min: { x: -5, y: 0, z: -11 }, max: { x: 5, y: 2.5, z: -10.4 } } }, bornTick: 0, armTick: 24, endTick: 324, rehit: [] } as Zone;
+    expect([fireWallSheet(wall, 60, ME)?.side, fireWallSheet({ ...wall, owner: ME }, 60, ME)?.side, fireWallSheet(wall, 60)?.side]).toEqual(["foe", "own", null]);
+  });
+
+  it("enemy rim is dark (#2A140A, α 0.9) and jagged, own is smooth mid-tone at 0.5; the breath's own edge is #B8500F", () => {
+    expect([RIM.foe.fire, RIM.foe.alpha, RIM.own.fire, RIM.own.alpha, RIM.own.breath]).toEqual([
+      [0x2a / 255, 0x14 / 255, 0x0a / 255], 0.9, [0x8a / 255, 0x5a / 255, 0x3a / 255], 0.5, [0xb8 / 255, 0x50 / 255, 0x0f / 255],
+    ]);
+    // своя кайма — средний тон огня (между тенью мира и телом), чужая — почти тушь, темнее любой заливки мира
+    expect(luminance(RIM.foe.fire)).toBeLessThan(0.16);
+    expect(luminance(RIM.own.fire)).toBeGreaterThan(0.3);
+    expect(hue(RIM.own.breath)).toBeGreaterThanOrEqual(20);
+    const pool = createParticlePool({ name: "t", maxCap: 4, cap: 4, gbuffer, time }).mesh.material;
+    const walls = createFireWallMeshes(gbuffer, time).mesh.material;
+    expect([pool.defines.RIM_FOE_A, pool.defines.RIM_OWN_A, walls.defines.RIM_FOE_A]).toEqual(["0.9", "0.5", "0.9"]);
+    expect(pool.fragmentShader).toContain("float jag = foe ?");
+    expect(walls.fragmentShader).toContain("float jag = side > 1.5 ?");
+  });
+
+  it("marks trail flames of an enemy fireball as foe and of mine as own, in the shared pool", () => {
+    const { vfx, mesh, sync } = harness();
+    const fireball = (id: number, owner: number, x: number) => ({ id, owner, ability: "fireball", pos: { x, y: 1.5, z: -8 }, vel: { x: 20, y: 0, z: 0 }, bornTick: 0, endTick: 600, power: 0 });
+    const at = (k: number) => {
+      const s = createMatchState([createMageUnit(ME, "fire", { pos: V(0, 0, 0), yaw: 0 }), createMageUnit(OTHER, "fire", { pos: V(0, 0, -20), yaw: Math.PI })]);
+      s.tick = k;
+      s.projectiles = [fireball(10, OTHER, -6 + k * 0.4) as never];
+      return s;
+    };
+    for (let k = 0; k < 20; k++) sync(at(k), k / 60);
+    const pool = mesh("fx-particles");
+    const flags = Array.from({ length: 200 }, (_, i) => flagsOf(pool, i)).filter((f) => f !== 0);
+    expect(flags.length).toBeGreaterThan(5);
+    expect(flags.every((f) => (f & FLAG.foe) !== 0)).toBe(true);
+    vfx.dispose();
+  });
+});
+
+describe("V5: burning along the contour, warm halo", () => {
+  it("licks are born on the silhouette edge across the view (0.35–0.45 m, 1.2–1.9 m) or at the crown, toward the camera", () => {
+    const r = rng(9);
+    const feet = V(0, 0, -8);
+    const eye = V(0, 1.6, 0);
+    let top = 0;
+    for (let i = 0; i < 300; i++) {
+      const p = burnEdge(feet, eye, r);
+      expect(p.z).toBeCloseTo(-7.9, 6);
+      if (Math.abs(p.x) <= 0.15 + 1e-9) {
+        top++;
+        expect(p.y >= 1.85 && p.y <= 1.95).toBe(true);
+      } else {
+        expect(Math.abs(p.x) >= 0.35 && Math.abs(p.x) <= 0.45 && p.y >= 1.2 && p.y <= 1.9).toBe(true);
+      }
+    }
+    expect(top / 300).toBeGreaterThan(0.15);
+    expect(top / 300).toBeLessThan(0.35);
+    // языки 0,25 → 0,45 м вверх; дымок раз в 0,3 с
+    const lick = burstParticles("burnLick", O, O, 1, rng()).filter((p) => p.alpha > 0);
+    expect(lick.every((p) => p.size0 >= 0.2 && p.size1 >= 0.35 && p.size1 <= 0.45 && p.gravity < 0)).toBe(true);
+    expect(BURN_SMOKE_S).toBe(0.3);
+    expect(burnSmoke(O, rng()).alpha).toBeGreaterThan(0);
+  });
+
+  it("a burning enemy gets a warm halo glow (haloBurn) without a light slot, culled by its radius", () => {
+    const { vfx, mesh, sync } = harness();
+    const s = createMatchState([createMageUnit(ME, "fire", { pos: V(0, 0, 0), yaw: 0 }), createMageUnit(OTHER, "earth", { pos: V(0, 0, -8), yaw: Math.PI })]);
+    s.units[1]!.status.burnPulses = 3;
+    sync(s, 1);
+    sync(s, 1.2);
+    const glows = mesh("fx-glows");
+    const g1 = glows.geometry.getAttribute("aG1");
+    const rims = Array.from({ length: glows.count }, (_, i) => g1.getW(i)).filter((w) => w > 0);
+    expect(rims.length).toBe(1);
+    expect(rims[0]).toBeGreaterThan(1.5);
+    expect(BURN_ALPHA).toBeGreaterThan(0.8);
+    const m = createGlowMeshes(gbuffer).mesh.material;
+    expect(m.uniforms.uBurn!.value.toArray()).toEqual([...INK_STYLE.haloBurn.wash]);
+    expect(m.fragmentShader).toContain("ink == INK_HALO || ink == INK_HALO_BURN");
+    const cam = new PerspectiveCamera(70, 16 / 9, 0.05, 160);
+    cam.updateMatrixWorld();
+    expect(cullGlows([{ pos: V(0, 0, -6), color: FX_COLOR.fire, halo: 0, light: 0, intensity: 1, core: 0, rim: 1.6 }], cam).length).toBe(1);
+    vfx.dispose();
   });
 });
