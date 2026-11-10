@@ -14,7 +14,7 @@ export interface Mittens {
   update(pose: HandPose, cameraWorldInverse: Matrix4, gesture?: HandGesture): void;
   /** Центры варежек в пространстве камеры рук после последнего update. Каждый раз те же два вектора. */
   palms(): { right: Vector3; left: Vector3 };
-  /** Освобождает геометрию и материал (они общие у обеих рук). */
+  /** Освобождает геометрию и материалы (они общие у обеих рук). */
   dispose(): void;
 }
 
@@ -33,11 +33,17 @@ interface Parts {
   sleeve: BufferGeometry;
 }
 
-function makeHand(side: 1 | -1, parts: Parts, mat: Material): Group {
+/** Материалы рук: светлая варежка с пальцем и манжетой — тушь рук, рукав — тушь своей стихии. */
+interface Mats {
+  hand: Material;
+  sleeve: Material;
+}
+
+function makeHand(side: 1 | -1, parts: Parts, mats: Mats): Group {
   const name = side > 0 ? "right" : "left";
   const hand = new Group();
   hand.name = `hand-${name}`;
-  const part = (geometry: BufferGeometry, part: string): Mesh => {
+  const part = (geometry: BufferGeometry, part: string, mat: Material = mats.hand): Mesh => {
     const mesh = new Mesh(geometry, mat);
     mesh.name = `${part}-${name}`;
     return mesh;
@@ -50,7 +56,7 @@ function makeHand(side: 1 | -1, parts: Parts, mat: Material): Group {
   thumb.rotation.z = side * 0.75;
   const cuff = part(parts.cuff, "cuff");
   cuff.position.set(0, -0.055, 0);
-  const sleeve = part(parts.sleeve, "sleeve");
+  const sleeve = part(parts.sleeve, "sleeve", mats.sleeve);
   sleeve.position.set(0, -0.23, 0.02);
   hand.add(mitten, thumb, cuff, sleeve);
   hand.position.set(side * REST.x, REST.y, REST.z);
@@ -68,9 +74,11 @@ export function createMittens(): Mittens {
     cuff: new CylinderGeometry(0.047, 0.052, 0.05, 14),
     sleeve: new CylinderGeometry(0.056, 0.075, 0.32, 14),
   };
-  const mat = createInkMaterial(INK.hands, sun);
-  const right = makeHand(1, parts, mat);
-  const left = makeHand(-1, parts, mat);
+  // рукав — своими чернилами `sleeve`: цвет стихии держит стилевой проход (setSleeveElement), материал не меняется.
+  // Та же программа шейдера, вызовов столько же — по мешу на часть
+  const mats: Mats = { hand: createInkMaterial(INK.hands, sun), sleeve: createInkMaterial(INK.sleeve, sun) };
+  const right = makeHand(1, parts, mats);
+  const left = makeHand(-1, parts, mats);
   const rig = new Group();
   rig.add(right, left);
   scene.add(rig);
@@ -103,7 +111,8 @@ export function createMittens(): Mittens {
     },
     dispose() {
       for (const g of Object.values(parts)) g.dispose();
-      mat.dispose();
+      mats.hand.dispose();
+      mats.sleeve.dispose();
     },
   };
 }

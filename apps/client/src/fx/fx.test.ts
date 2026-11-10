@@ -5,7 +5,7 @@ import { BURST_PRESETS } from "../feel/effects";
 import { GBUFFER_FRAG, GBUFFER_VERT, createInkMaterial } from "../render/gbuffer";
 import { INK, PAPER, luminance, saturation } from "../render/palette";
 import { zoneDecal } from "./decals";
-import { dummyParts, haloMargin, type DummyPose } from "./dummyMeshes";
+import { DUMMY_TOP_M, dummyParts, haloMargin, type DummyPose } from "./dummyMeshes";
 import { handToWorldView, lerpById, muzzleBlend } from "./interp";
 import { allocateRing } from "./particles";
 import { createDecalMeshes } from "./decals";
@@ -43,11 +43,13 @@ describe("fx pure parts", () => {
 
   it("builds a dark dummy with a white mask toward −Z, inverts it on a hit, keeps the halo ~2 px", () => {
     const parts = dummyParts(pose);
-    expect(parts.every((p) => p.pos[1] - p.scale[1] / 2 >= -1e-9 && p.pos[1] + p.scale[1] / 2 <= 1.8 + 1e-9)).toBe(true);
+    // тело — до 1,8 м (хитбокс), шляпа мага — над ним, под полосой HP
+    const hat = (name: string) => ["brim", "crown", "cone", "tip"].includes(name);
+    expect(parts.every((p) => p.pos[1] - p.scale[1] / 2 >= -1e-9 && p.pos[1] + p.scale[1] / 2 <= (hat(p.part) ? DUMMY_TOP_M : 1.8) + 1e-9)).toBe(true);
     const mask = parts.find((p) => p.part === "mask")!;
     expect([mask.ink, mask.pos[2] < parts.find((p) => p.part === "head")!.pos[2]]).toEqual([INK.halo, true]);
     const lit = dummyParts({ ...pose, flash: true });
-    expect([lit.filter((p) => p.part !== "mask").every((p) => p.ink === INK.flash), lit.find((p) => p.part === "mask")!.ink]).toEqual([true, INK.enemy]);
+    expect([lit.filter((p) => !["mask", "eyeL", "eyeR"].includes(p.part)).every((p) => p.ink === INK.flash), lit.find((p) => p.part === "mask")!.ink]).toEqual([true, INK.enemy]);
     expect(dummyParts({ ...pose, yaw: Math.PI / 2 }).find((p) => p.part === "mask")!.pos[0]).toBeLessThan(-0.1);
     expect(haloMargin(15, 1080, 70)).toBeCloseTo((2 * 15 * Math.tan((35 * Math.PI) / 180)) / 540, 9);
     expect(haloMargin(1, 1080, 70)).toBe(0.02);
@@ -137,7 +139,7 @@ describe("fx budgets and mapping", () => {
     expect(head.pos[2]).toBeGreaterThan(0.3);
     expect(head.tiltX).toBeCloseTo(0.3, 9);
     const squashed = dummyParts({ ...pose, squash: 0.8 });
-    expect(Math.max(...squashed.map((p) => p.pos[1] + p.scale[1] / 2))).toBeLessThan(1.8 * 0.8 + 0.12);
+    expect(Math.max(...squashed.map((p) => p.pos[1] + p.scale[1] / 2))).toBeLessThan((DUMMY_TOP_M - 0.12) * 0.8 + 0.12);
   });
 });
 

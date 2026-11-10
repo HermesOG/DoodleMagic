@@ -1,8 +1,9 @@
 import { BackSide, BoxGeometry, DynamicDrawUsage, Euler, InstancedBufferAttribute, InstancedMesh, Matrix4, Quaternion, Vector3, type ShaderMaterial } from "three";
-import type { Vec3 } from "@doodlemagic/sim";
+import { ELEMENTS, type Element, type Vec3 } from "@doodlemagic/sim";
 import { createInkMaterial, worldSun } from "../render/gbuffer";
 import { INK } from "../render/palette";
 import { lineRadiusFor } from "../render/quality";
+import { HALO_PX, figureInk, headParts, onFace, type HeadPartName } from "./mageMeshes";
 
 /** Поза манекена на кадр: из состояния юнита и пружин отклика (наклон, вздрагивание, приземление). */
 export interface DummyPose {
@@ -17,14 +18,16 @@ export interface DummyPose {
   flinch: number;
   /** Сжатие по высоте на приземлении (1 — нет). */
   squash: number;
-  /** Вспышка попадания: тушь становится бумагой, маска — тушью. */
+  /** Вспышка попадания: тушь становится бумагой, маска — тушью; глаза остаются цветом стихии. */
   flash: boolean;
   /** Покачивание парящих рук, м. */
   bob: number;
+  /** Стихия манекена — только вид: глаза и шляпа (по номеру, dummyElement). Без неё глаза под цвет маски, шляпа обычная. */
+  element?: Element;
 }
 
 export interface DummyPart {
-  part: "base" | "post" | "body" | "head" | "mask" | "handL" | "handR";
+  part: "base" | "post" | "robe" | "chest" | HeadPartName | "handL" | "handR";
   ink: number;
   /** Середина бокса, мир. */
   pos: [number, number, number];
@@ -36,34 +39,68 @@ export interface DummyPart {
   tiltZ: number;
 }
 
+/** Стихия манекена по номеру (визуально, на бой не влияет): соседние номера — разные стихии. */
+export function dummyElement(n: number): Element {
+  const k = ELEMENTS.length;
+  return ELEMENTS[((Math.trunc(n) % k) + k) % k]!;
+}
+
 /** Корпус наклоняется вокруг верха основания: основание стоит на полу ровно. */
 const PIVOT_Y = 0.12;
+/**
+ * Полоса HP манекена — над 2,2 м (боевой HUD: голова 1,75 + 0,45): шляпа манекена ниже её, до DUMMY_TOP_M. Высоты
+ * частей шляпы — DUMMY_HAT_K от шляпы мага, ширины и загибы те же: стихия по силуэту читается.
+ */
+const DUMMY_HAT_K = 0.55;
+export const DUMMY_TOP_M = 2.17;
 
 interface PartDef {
   part: DummyPart["part"];
   size: readonly [number, number, number];
   /** Середина при yaw = 0, лицом к −Z. */
   at: readonly [number, number, number];
+  /** Постоянный загиб вокруг локальной X, рад (колпак и наконечник шляпы). */
+  bend: number;
   upper: boolean;
+  /** Голова и всё, что на ней: вздрагивает сильнее. */
+  head: boolean;
 }
 
-/** Манекен 1,8 м: основание, стойка, тело, голова, белая маска на грани −Z и две парящие «руки». */
-const PARTS: readonly PartDef[] = [
-  { part: "base", size: [0.8, 0.12, 0.8], at: [0, 0.06, 0], upper: false },
-  { part: "post", size: [0.1, 0.36, 0.1], at: [0, 0.3, 0], upper: true },
-  { part: "body", size: [0.62, 0.95, 0.4], at: [0, 0.925, 0], upper: true },
-  { part: "head", size: [0.4, 0.4, 0.4], at: [0, 1.6, 0], upper: true },
-  { part: "mask", size: [0.3, 0.22, 0.03], at: [0, 1.58, -0.215], upper: true },
-  { part: "handL", size: [0.16, 0.16, 0.16], at: [-0.5, 0.98, -0.1], upper: true },
-  { part: "handR", size: [0.16, 0.16, 0.16], at: [0.5, 0.98, -0.1], upper: true },
-];
-export const DUMMY_PART_COUNT = PARTS.length;
+/**
+ * Манекен — маг на стойке, 1,8 м (как хитбокс): основание и шест вместо ног, мантия, грудь, голова мага с белой
+ * маской и глазами стихии на грани −Z, шляпа стихии и две парящие руки.
+ */
+function buildParts(element: Element | undefined): readonly PartDef[] {
+  return [
+    { part: "base", size: [0.8, 0.12, 0.8], at: [0, 0.06, 0], bend: 0, upper: false, head: false },
+    { part: "post", size: [0.1, 0.36, 0.1], at: [0, 0.3, 0], bend: 0, upper: true, head: false },
+    { part: "robe", size: [0.62, 0.62, 0.44], at: [0, 0.78, 0.02], bend: 0, upper: true, head: false },
+    { part: "chest", size: [0.46, 0.5, 0.32], at: [0, 1.3, 0.02], bend: 0, upper: true, head: false },
+    ...headParts(element, DUMMY_HAT_K).map((h): PartDef => ({ ...h, upper: true, head: true })),
+    { part: "handL", size: [0.15, 0.15, 0.15], at: [-0.42, 1.1, -0.26], bend: 0, upper: true, head: false },
+    { part: "handR", size: [0.15, 0.15, 0.15], at: [0.42, 1.1, -0.26], bend: 0, upper: true, head: false },
+  ];
+}
+const PARTS_OF: Readonly<Record<Element | "plain", readonly PartDef[]>> = {
+  plain: buildParts(undefined),
+  fire: buildParts("fire"),
+  earth: buildParts("earth"),
+  air: buildParts("air"),
+  water: buildParts("water"),
+};
+export const DUMMY_PART_COUNT = PARTS_OF.plain.length;
 
 function rotY(x: number, z: number, a: number): [number, number] {
   const c = Math.cos(a);
   const s = Math.sin(a);
   return [x * c + z * s, -x * s + z * c];
 }
+
+// рабочие объекты загнутых частей: поворот Rx(tiltX)·Rz(tiltZ)·Ry(yaw)·Rx(загиб) обратно в Euler "XZY"
+const qBent = new Quaternion();
+const qBend = new Quaternion();
+const eBent = new Euler(0, 0, 0, "XZY");
+const AXIS_X = new Vector3(1, 0, 0);
 
 /** Части манекена в мире. Чистая функция: проверяется тестами и пишется в экземпляры InstancedMesh. */
 export function dummyParts(p: DummyPose): DummyPart[] {
@@ -73,16 +110,15 @@ export function dummyParts(p: DummyPose): DummyPart[] {
   const bx = Math.sin(p.yaw);
   const bz = Math.cos(p.yaw);
   const out: DummyPart[] = [];
-  for (const d of PARTS) {
+  for (const d of PARTS_OF[p.element ?? "plain"]) {
     const isHand = d.part === "handL" || d.part === "handR";
-    const isHead = d.part === "head" || d.part === "mask";
-    const ink = d.part === "mask" ? (p.flash ? INK.enemy : INK.halo) : p.flash ? INK.flash : INK.enemy;
+    const ink = figureInk(d.part, p.flash, p.element);
     if (!d.upper) {
       const [x, z] = rotY(d.at[0], d.at[2], p.yaw);
       out.push({ part: d.part, ink, pos: [p.pos.x + x, p.pos.y + d.at[1], p.pos.z + z], scale: [d.size[0], d.size[1], d.size[2]], yaw: p.yaw, tiltX: 0, tiltZ: 0 });
       continue;
     }
-    const fl = p.flinch * (isHead ? 1.4 : 1);
+    const fl = p.flinch * (d.head ? 1.4 : 1);
     const tiltX = p.leanX + fl * bz;
     const tiltZ = p.leanZ - fl * bx;
     // смещение от оси наклона: сжатие по высоте, руки качаются и от вздрагивания разлетаются в стороны
@@ -99,21 +135,30 @@ export function dummyParts(p: DummyPose): DummyPart[] {
     const sx = Math.sin(tiltX);
     const fy = ly * cx - yz * sx;
     const fz = ly * sx + yz * cx;
+    let yaw = p.yaw;
+    let tx = tiltX;
+    let tz = tiltZ;
+    if (d.bend !== 0) {
+      // загиб — в теле, до yaw и наклона
+      qBent.setFromEuler(eBent.set(tiltX, p.yaw, tiltZ, "XZY")).multiply(qBend.setFromAxisAngle(AXIS_X, d.bend));
+      eBent.setFromQuaternion(qBent, "XZY");
+      yaw = eBent.y;
+      tx = eBent.x;
+      tz = eBent.z;
+    }
     out.push({
       part: d.part,
       ink,
       pos: [p.pos.x + lx, p.pos.y + PIVOT_Y + fy, p.pos.z + fz],
       scale: [d.size[0] * wide, d.size[1] * squash, d.size[2] * wide],
-      yaw: p.yaw,
-      tiltX,
-      tiltZ,
+      yaw,
+      tiltX: tx,
+      tiltZ: tz,
     });
   }
   return out;
 }
 
-/** Ширина ореола, пикселей кадра (GDD 6, round1/05: «белый ореол 2 px»). */
-export const HALO_PX = 2;
 const HALO_MIN_M = 0.02;
 const HALO_MAX_M = 0.3;
 
@@ -133,7 +178,7 @@ export interface DummyView {
 }
 
 export interface DummyMeshes {
-  /** Тёмные части с маской: чернила каждого экземпляра — свои (aInk). */
+  /** Тёмные части с маской и глазами: чернила каждого экземпляра — свои (aInk). */
   readonly parts: InstancedMesh<BoxGeometry, ShaderMaterial>;
   /** Вывернутая оболочка ореола (BackSide, чернила halo) вокруг каждой тёмной части. */
   readonly shells: InstancedMesh<BoxGeometry, ShaderMaterial>;
@@ -185,7 +230,7 @@ export function createDummyMeshes(maxDummies = 8): DummyMeshes {
           parts.setMatrixAt(ip, mat.compose(pos, q, scl.set(part.scale[0], part.scale[1], part.scale[2])));
           inkAttr.array[ip] = part.ink;
           ip++;
-          if (part.part === "mask") continue;
+          if (onFace(part.part)) continue;
           shells.setMatrixAt(is++, mat.compose(pos, q, scl.set(part.scale[0] + 2 * margin, part.scale[1] + 2 * margin, part.scale[2] + 2 * margin)));
         }
       }

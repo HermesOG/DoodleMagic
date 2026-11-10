@@ -35,6 +35,7 @@ import { loadPrefs, savePrefs } from "../hud/prefs";
 import { buildArenaMeshes } from "../render/arenaMeshes";
 import { FPS_METER_MAX_FRAME_MS, createFpsMeter } from "../render/fpsMeter";
 import { createAutoQuality, createQualityWatchdog, type AutoQuality, type PresetId, type QualityWatchdog } from "../render/quality";
+import { setSleeveElement } from "../render/stylePass";
 import { StyleRenderer, WORLD_FOV } from "../render/styleRenderer";
 import { KEYS, applyLook, buildMatchInput, lookRate, type Look } from "../sandbox/controls";
 import { FALL_HOLD_Y, createFallCamera, stepFallCamera } from "../sandbox/fallCamera";
@@ -432,6 +433,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
         // остаток накопителя — alpha тика
         const landAge = Math.max(0, (frame.ticks.length - 2 - landTick) * TICK_DT + alpha * TICK_DT);
         const element = me.mage?.element ?? prefs.element;
+        // рукав — тушью стихии мага в игре: выбор на полигоне, смена на экране смерти и в PvP (после ответа хоста)
+        setSleeveElement(element);
         const hands = updateHandRig(
           handRig,
           {
