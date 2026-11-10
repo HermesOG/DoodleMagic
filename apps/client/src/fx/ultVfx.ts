@@ -1,11 +1,11 @@
 import {
   ConeGeometry, CylinderGeometry, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Matrix4, Quaternion, Vector3, type ShaderMaterial,
 } from "three";
-import { EARTH, EYE_HEIGHT, FIRE, NOBODY, TICK_HZ, aimDir, forwardXZ, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
+import { AIR, EARTH, EYE_HEIGHT, FIRE, NOBODY, TICK_HZ, WATER, aimDir, forwardXZ, type MatchState, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
 import { breathStreaming } from "../feel/eventMap";
 import { createInkMaterial } from "../render/gbuffer";
 import { INK } from "../render/palette";
-import { glslFloat } from "../render/stylePass";
+import { glslFloat, styleShared } from "../render/stylePass";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
 import { FX_ORDER, createFxMaterial } from "./fxShader";
 import { FX_COLOR, RIM, particle, randomCone, randomRing, type ParticleSpec, type Rng } from "./particleKit";
@@ -22,6 +22,7 @@ import type { PresetId } from "../render/quality";
  * - «Тектонический разлом»: трещина — декаль rift (decals.ts); по ней за 0,8 с бежит фронт с пылью; на взводе шипы
  *   вырастают по всей линии за 0,1 с (G-буфер, чернила рельефа), стоят до конца зоны и тают в последние 0,5 с.
  * Своих мешей два: конус (+1 вызов Огня) и шипы (+1 вызов Земли); частицы и свет — общие пулы.
+ * «Магия гасит день» (Р7) — здесь же, по ультам всех стихий в состоянии: пишет styleShared.dayDim.
  */
 
 const DB = FIRE.dragonBreath;
@@ -228,6 +229,86 @@ void main() {
 }
 `;
 
+/**
+ * «Магия гасит день» (Р7): бумага и небо × (1 − 0,12·k). k = 1, пока идёт своя ульта или чужая, в зону которой ты
+ * попал (дальность + 5 м); иначе 0. Темнеет за 0,4 с, светлеет за 0,8 с; новое затемнение — не чаще раза в 8 с
+ * (ульта, начавшаяся раньше, день не гасит). Линии и враг не гаснут — это стилевой проход.
+ */
+export const DAY_DIM = { inS: 0.4, outS: 0.8, everyS: 8, nearM: 5 } as const;
+/** Разлом — удар через столько секунд после взвода ещё гасит день; шипы потом стоят без затемнения. */
+const RIFT_DIM_S = 0.5;
+
+const flat = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.z - b.z);
+/** Расстояние по XZ от p до отрезка a → b. */
+function toSegment(p: Vec3, a: Vec3, b: Vec3): number {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const l2 = dx * dx + dz * dz;
+  const t = l2 > 1e-9 ? clamp01(((p.x - a.x) * dx + (p.z - a.z) * dz) / l2) : 0;
+  return Math.hypot(p.x - a.x - dx * t, p.z - a.z - dz * t);
+}
+/** Расстояние по XZ от p до полосы, которую пройдёт гребень Цунами a → b (ход — (n.z, −n.x), на travelM вперёд). */
+function toWavePath(p: Vec3, a: Vec3, b: Vec3): number {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const l = Math.hypot(dx, dz) || 1;
+  const nx = dx / l;
+  const nz = dz / l;
+  const qx = p.x - a.x;
+  const qz = p.z - a.z;
+  const s = Math.min(l, Math.max(0, qx * nx + qz * nz));
+  const t = Math.min(WATER.tsunami.travelM, Math.max(0, qx * nz - qz * nx));
+  return Math.hypot(qx - nx * s - nz * t, qz - nz * s + nx * t);
+}
+
+/**
+ * Гасит ли ульта день на тике tick: своя идёт (каст или её зона: волна Цунами, удар Разлома) — да; чужая — если me
+ * (подошва своего мага; null — его нет) в её зоне + 5 м: Дыхание — 12 м от мага, Ураган — 10 м, Разлом — у линии,
+ * Цунами — на пути волны.
+ */
+export function ultDimsDay(s: MatchState, localId: UnitId, tick: number, me: Vec3 | null): boolean {
+  const near = DAY_DIM.nearM;
+  for (const u of s.units) {
+    const c = u.mage?.ult.cast;
+    if (!c || !u.alive || tick >= c.endTick) continue;
+    if (u.id === localId) return true;
+    if (!me) continue;
+    const at = u.move.body.pos;
+    if (c.ability === "dragonBreath" && Math.hypot(at.x - me.x, at.y - me.y, at.z - me.z) <= FIRE.dragonBreath.rangeM + near) return true;
+    if (c.ability === "hurricane" && flat(at, me) <= AIR.hurricane.radiusM + near) return true;
+  }
+  for (const z of s.zones) {
+    if (z.shape.type !== "segment" || tick >= z.endTick) continue;
+    const rift = z.kind === "rift" && tick < z.armTick + RIFT_DIM_S * TICK_HZ;
+    if (!rift && z.kind !== "tsunami") continue;
+    if (z.owner === localId) return true;
+    if (!me) continue;
+    if (rift && toSegment(me, z.shape.a, z.shape.b) <= z.shape.halfW + near) return true;
+    if (z.kind === "tsunami" && toWavePath(me, z.shape.a, z.shape.b) <= near) return true;
+  }
+  return false;
+}
+
+/** k «магии, гасящей день»: want — гасит ли ульта день сейчас; новое затемнение — по фронту want, не чаще everyS. */
+export interface DayDimState {
+  k: number;
+  on: boolean;
+  want: boolean;
+  lastOnS: number;
+}
+export const dayDimState = (): DayDimState => ({ k: 0, on: false, want: false, lastOnS: -Infinity });
+export function stepDayDim(d: DayDimState, want: boolean, nowS: number, dt: number): number {
+  if (want && !d.want && nowS - d.lastOnS >= DAY_DIM.everyS) {
+    d.on = true;
+    d.lastOnS = nowS;
+  }
+  if (!want) d.on = false;
+  d.want = want;
+  d.k = d.on ? Math.min(1, d.k + dt / DAY_DIM.inS) : Math.max(0, d.k - dt / DAY_DIM.outS);
+  // плавно у обоих концов
+  return d.k * d.k * (3 - 2 * d.k);
+}
+
 export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx => {
   // конус Дыхания: проход света, один вызов на все конусы
   const attr = (): InstancedBufferAttribute => {
@@ -304,6 +385,7 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
   const dustAcc = new Map<number, number>();
   const liveUnits = new Set<UnitId>();
   const liveZones = new Set<number>();
+  const dim = dayDimState();
 
   /** Сколько частиц родить за кадр по темпу rate (остаток копится в acc под ключом id). */
   function due<K>(acc: Map<K, number>, id: K, rate: number, dt: number): number {
@@ -458,6 +540,9 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
     sync(f) {
       drawBreath(f);
       drawRifts(f);
+      let me: Vec3 | null = null;
+      for (const it of f.units) if (it.id === f.localId) me = it.pos;
+      styleShared.dayDim.value = stepDayDim(dim, ultDimsDay(f.cur, f.localId, f.tick, me), f.nowS, f.dt);
     },
     setPreset(p) {
       preset = p;
@@ -477,6 +562,7 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
       spikes.dispose();
       flowAcc.clear();
       dustAcc.clear();
+      styleShared.dayDim.value = 0;
     },
   };
 };

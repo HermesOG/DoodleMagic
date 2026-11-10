@@ -1,7 +1,8 @@
 import { DepthTexture, PerspectiveCamera, Texture, Vector2, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
-import { NOBODY, createMageUnit, createMatchState, type MatchState, type Zone } from "@doodlemagic/sim";
+import { NOBODY, createMageUnit, createMatchState, type MatchState, type Vec3, type Zone } from "@doodlemagic/sim";
 import { INK, INK_STYLE, PAPER, luminance, saturation, type RGB } from "../render/palette";
+import { styleShared } from "../render/stylePass";
 import { createFireWallMeshes, fireWallSheet } from "./fireWalls";
 import { FX_COMMON, GLAZE, GLAZE_TINT, glazeAlpha, glazeOver } from "./fxShader";
 import { BURN_ALPHA, createGlowMeshes, cullGlows } from "./glows";
@@ -9,7 +10,7 @@ import type { ElementVfxFrame } from "./elementVfx";
 import { AIR_STROKE_ALPHA, FX_COLOR, INK_STROKE_ALPHA, KIND, RIM, markSide, particle, sideOf, type ParticleSpec } from "./particleKit";
 import { CLEAR_DEG, FLAG, createParticlePool, packGravity, unpackGravity } from "./particles";
 import { BREATH_PALM_RATE, BURN_SMOKE_S, BURST_SHARE, INK_STRIKE, breathPalmTongue, burnSmoke, burstParticles, inkStrike } from "./presets";
-import { OWN_BREATH, createUltVfx } from "./ultVfx";
+import { DAY_DIM, OWN_BREATH, createUltVfx, dayDimState, stepDayDim, ultDimsDay } from "./ultVfx";
 import { burnEdge, createVfx } from "./vfx";
 
 /*
@@ -345,5 +346,70 @@ describe("V7: ink strike on a hit", () => {
       return n;
     };
     expect([strokes(0.1), strokes(0.2), strokes(0.8)]).toEqual([0, INK_STRIKE.medium.strokes, INK_STRIKE.large.strokes]);
+  });
+});
+
+describe("R7: magic dims the day", () => {
+  const cast = (id: number, element: "fire" | "air" | "earth" | "water", ability: "dragonBreath" | "hurricane" | "tectonicRift" | "tsunami", pos: Vec3, zone = NOBODY) => {
+    const u = createMageUnit(id, element, { pos, yaw: 0 });
+    u.mage!.ult.cast = { ability, startTick: 100, releaseTick: 136, endTick: 316, zone };
+    return u;
+  };
+  const meAt = (pos: Vec3) => createMageUnit(ME, "earth", { pos, yaw: 0 });
+
+  it("dims for my own ult and for an enemy ult only when I am within its reach + 5 m", () => {
+    expect(DAY_DIM).toEqual({ inS: 0.4, outS: 0.8, everyS: 8, nearM: 5 });
+    const mine = createMatchState([cast(ME, "fire", "dragonBreath", V())]);
+    expect(ultDimsDay(mine, ME, 120, V())).toBe(true);
+    expect(ultDimsDay(mine, ME, 316, V())).toBe(false);
+    // чужое Дыхание: 12 + 5 м; Ураган: 10 + 5 м
+    const breath = (z: number) => createMatchState([meAt(V(0, 0, z)), cast(OTHER, "fire", "dragonBreath", V())]);
+    expect([ultDimsDay(breath(-16.5), ME, 140, V(0, 0, -16.5)), ultDimsDay(breath(-17.5), ME, 140, V(0, 0, -17.5))]).toEqual([true, false]);
+    const storm = createMatchState([meAt(V(14, 0, 0)), cast(OTHER, "air", "hurricane", V())]);
+    expect([ultDimsDay(storm, ME, 120, V(14, 0, 0)), ultDimsDay(storm, ME, 120, V(16, 0, 0))]).toEqual([true, false]);
+    // без своего мага — только чужие ульты не гасят ничего
+    expect(ultDimsDay(storm, ME, 120, null)).toBe(false);
+  });
+
+  it("the rift dims along its line until 0.5 s after the strike; the tsunami along the path of the wave", () => {
+    const rift = { id: 9, owner: OTHER, kind: "rift", ability: "tectonicRift", shape: { type: "segment", a: V(0, 0, -1.5), b: V(0, 0, -26.5), halfW: 1.5 }, bornTick: 100, armTick: 148, endTick: 508, rehit: [] } as Zone;
+    const s = createMatchState([meAt(V(6, 0, -10)), createMageUnit(OTHER, "earth", { pos: V(), yaw: 0 })]);
+    s.zones = [rift];
+    expect([ultDimsDay(s, ME, 120, V(6, 0, -10)), ultDimsDay(s, ME, 120, V(7, 0, -10)), ultDimsDay(s, ME, 148 + 29, V(6, 0, -10)), ultDimsDay(s, ME, 148 + 31, V(6, 0, -10))]).toEqual([true, false, true, false]);
+    // волна идёт от a → b по (n.z, −n.x): от отрезка вдоль x — к −z
+    const wave = { ...rift, id: 10, kind: "tsunami", ability: "tsunami", shape: { type: "segment", a: V(-7, 0, 0), b: V(7, 0, 0), halfW: 1 }, armTick: 148, endTick: 268 } as Zone;
+    s.zones = [wave];
+    expect([ultDimsDay(s, ME, 200, V(0, 0, -25)), ultDimsDay(s, ME, 200, V(0, 0, -36)), ultDimsDay(s, ME, 200, V(0, 0, 6)), ultDimsDay(s, ME, 200, V(0, 0, 4))]).toEqual([true, false, false, true]);
+    s.zones = [{ ...wave, owner: ME }];
+    expect(ultDimsDay(s, ME, 200, V(0, 0, 100))).toBe(true);
+  });
+
+  it("goes dark over 0.4 s, back over 0.8 s, smoothly, and not again within 8 s", () => {
+    const d = dayDimState();
+    const run = (want: boolean, from: number, s: number) => {
+      let k = 0;
+      for (let t = 0; t < s - 1e-9; t += 0.02) k = stepDayDim(d, want, from + t, 0.02);
+      return k;
+    };
+    expect(run(true, 0, 0.2)).toBeGreaterThan(0.3);
+    expect(run(true, 0.2, 0.2)).toBeCloseTo(1, 9);
+    expect(run(false, 2, 0.4)).toBeGreaterThan(0.3);
+    expect(run(false, 2.4, 0.4)).toBeCloseTo(0, 9);
+    // следующая ульта через 5 с — день не гаснет; через 8 с после прошлого — гаснет
+    expect(run(true, 5, 1)).toBe(0);
+    expect(run(false, 6, 0.1)).toBe(0);
+    expect(run(true, 8.05, 0.5)).toBeCloseTo(1, 9);
+  });
+
+  it("writes the shared day-dim uniform from the ult effects and clears it on dispose", () => {
+    const vfx = createUltVfx({ gbuffer: gbuffer as never, time: { value: 0 } });
+    const s = createMatchState([cast(ME, "fire", "dragonBreath", V())]);
+    const camera = new PerspectiveCamera(70, 16 / 9, 0.05, 200);
+    const units = s.units.map((u) => ({ id: u.id, pos: u.move.body.pos, u }));
+    for (let i = 0; i < 40; i++)
+      vfx.sync({ prev: s, cur: s, alpha: 1, tick: 110 + i, nowS: 20 + i / 60, dt: 1 / 60, camera, eye: V(0, 1.6, 0), localId: ME, units, mages: [], palmWorld: () => V(0, 1.35, -0.6), emit: () => {}, glow: () => {}, decal: () => {} });
+    expect(styleShared.dayDim.value).toBeCloseTo(1, 9);
+    vfx.dispose();
+    expect(styleShared.dayDim.value).toBe(0);
   });
 });
