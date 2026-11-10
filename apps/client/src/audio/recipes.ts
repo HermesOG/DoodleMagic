@@ -88,6 +88,25 @@ export const RECIPES: Record<SoundId, Recipe> = {
       noise("highpass", 3500, 3500, 0.5, 0.25, { q: 0, ceiling: 8000, delay: 0.05, clicks: 8 }),
     ],
   },
+  // Дыхание дракона, вдох 0,6 с: воздух втягивается — шум lowpass 600 → 3000 Гц нарастает, сверху разгорается треск
+  breathInhale: {
+    reverb: REVERB_SEND.medium,
+    layers: [
+      noise("lowpass", 600, 3000, 0.6, 0.7, { q: 4, attack: 0.5 }),
+      noise("highpass", 2500, 5000, 0.6, 0.35, { q: 0, ceiling: 8000, attack: 0.48, clicks: 8, ...SIG }),
+      tone("sine", 150, 220, 0.6, 0.25, { attack: 0.5 }),
+    ],
+  },
+  // зерно потока 0,4 с раз в 0,3 с (Р15 фазы 4): рёв 2–6 кГц с телом 150 Гц, зёрна перекрываются на 0,1 с
+  breathRoar: {
+    vary: 0.05,
+    layers: [
+      noise("bandpass", 3500, 3000, 0.4, 0.55, { q: 0.6, attack: 0.1, ...SIG }),
+      noise("highpass", 2000, 2400, 0.4, 0.3, { q: 0, ceiling: 6000, attack: 0.08, clicks: 6 }),
+      tone("triangle", 150, 140, 0.4, 0.35, { attack: 0.1, drive: 1.5 }),
+      noise("lowpass", 500, 350, 0.4, 0.35, { q: 0, attack: 0.1 }),
+    ],
+  },
 
   // ── Земля ──
   stoneCast: {
@@ -167,6 +186,25 @@ export const RECIPES: Record<SoundId, Recipe> = {
       noise("bandpass", 1400, 900, 0.5, 0.25, { q: 2, delay: 0.06, clicks: 8 }),
     ],
   },
+  // Тектонический разлом, телеграф 0,8 с: трещина бежит — гул 40 → 55 Гц нарастает к удару, хруст и скрежет по ходу
+  riftRumble: {
+    reverb: REVERB_SEND.medium,
+    layers: [
+      tone("sine", 40, 55, 0.8, 0.8, { attack: 0.62, drive: 3, ...SIG }),
+      noise("lowpass", 120, 420, 0.8, 0.55, { q: 2, attack: 0.6, clicks: 10 }),
+      noise("bandpass", 320, 600, 0.75, 0.25, { q: 1.5, attack: 0.5, clicks: 8 }),
+    ],
+  },
+  // удар шипов по всей линии: низкий удар 80 → 30 Гц и каменный хруст; крупная ступень — реверб 0,35
+  riftStrike: {
+    reverb: REVERB_SEND.large,
+    layers: [
+      tone("sine", 80, 30, 0.7, 1, { sweep: 0.4, drive: 3.5, ...SIG }),
+      noise("lowpass", 500, 150, 0.6, 0.85, { q: 2, clicks: 12 }),
+      noise("bandpass", 1400, 800, 0.45, 0.4, { q: 2, delay: 0.03, clicks: 10 }),
+      noise("lowpass", 180, 70, 0.8, 0.45, { q: 0, attack: 0.04 }),
+    ],
+  },
 
   // ── Общие ──
   // подтверждение по ступеням (H3): малая — 1,8 кГц и щелчок 3,6 кГц, 30 мс
@@ -210,14 +248,23 @@ export const RECIPES: Record<SoundId, Recipe> = {
       tone("triangle", f, f * 1.01, i === 3 ? 0.4 : 0.35, 0.22, { delay: i * 0.05, attack: 0.006 }),
     ),
   },
-  // ульта (фаза 5), заглушки — финал даст задача 5. Чужая ульта: низкий гул 120 → 60 Гц, 0,6 с, на всю карту
+  // ульта (фаза 5). Чужая ульта на всю карту, у всех четырёх стихий один звук без подписи: низкий гул 120 → 60 Гц
+  // нарастает 0,45 с и обрывается, сверху — шорох; 0,6 с
   ultWarn: {
     reverb: REVERB_SEND.large,
-    layers: [tone("sine", 120, 60, 0.6, 0.8, { attack: 0.08, drive: 1.5 }), tone("triangle", 240, 120, 0.6, 0.2, { attack: 0.1 })],
+    layers: [
+      tone("sine", 120, 60, 0.6, 0.8, { attack: 0.45, drive: 1.5 }),
+      tone("triangle", 240, 120, 0.6, 0.22, { attack: 0.45 }),
+      noise("highpass", 3000, 1800, 0.6, 0.18, { q: 0, ceiling: 9000, attack: 0.42 }),
+    ],
   },
-  // свой заряд полон: два щелчка 1,5 кГц за 0,2 с
+  // свой заряд полон: звон-«щелчок» 0,2 с — щелчок 1,5 кГц и короткий звон квинтой выше
   ultReady: {
-    layers: [tone("sine", 1500, 1500, 0.05, 0.5, { attack: 0.001 }), tone("sine", 1500, 1500, 0.06, 0.5, { delay: 0.14, attack: 0.001 })],
+    layers: [
+      tone("sine", 1500, 1500, 0.05, 0.5, { attack: 0.001 }),
+      tone("sine", 2250, 2250, 0.2, 0.3, { attack: 0.002 }),
+      tone("triangle", 3000, 3000, 0.15, 0.12, { delay: 0.04, attack: 0.002 }),
+    ],
   },
 
   // ── Движение (M2): тихо, коротко, без подписи стихии ──
@@ -254,6 +301,8 @@ export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
   fireWallTelegraph: "fire",
   fireWallIgnite: "fire",
   overheat: "fire",
+  breathInhale: "fire",
+  breathRoar: "fire",
   stoneCast: "earth",
   stoneImpact: "earth",
   stoneThrow: "earth",
@@ -264,6 +313,8 @@ export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
   quakeStrike: "earth",
   terrainHit: "earth",
   terrainBreak: "earth",
+  riftRumble: "earth",
+  riftStrike: "earth",
   hitLight: null,
   hitHeavy: null,
   kill: null,

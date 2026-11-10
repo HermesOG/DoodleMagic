@@ -10,6 +10,8 @@ export const BURST_PRESETS = [
   "fistFlash", "fistImpact", "fireballCharge", "fireballBoom", "dashBlast", "fireWallSparks", "fireWallIgnite", "burnLick",
   "stoneCrumble", "stoneImpact", "pillarCracks", "pillarBurst", "wallDust", "quakeRing", "terrainChips", "terrainBreak",
   "deathFire", "deathEarth", "respawnPuff", "fizzle", "paperFlash", "landDust",
+  // ульты Огня и Земли (фаза 5): выдох Дыхания, вспышка потока на цели, трещина Разлома и удар шипов
+  "breathFlare", "breathHit", "riftCrack", "riftBurst",
   ...AIR_BURST_PRESETS, ...WATER_BURST_PRESETS,
 ] as const;
 export type BurstPreset = (typeof BURST_PRESETS)[number];
@@ -19,6 +21,8 @@ export const SOUND_IDS = [
   "fireballLaunch", "stoneThrow", "fistHit", "step", "jump", "land", "knockWhoosh",
   // ульта (фаза 5): гул чужой ульты на всю карту и «заряд полон» — общие, без подписи стихии
   "ultWarn", "ultReady",
+  // Дыхание дракона: вдох и зёрна рёва потока; Тектонический разлом: гул бегущей трещины и удар шипов
+  "breathInhale", "breathRoar", "riftRumble", "riftStrike",
   ...AIR_SOUND_IDS, ...WATER_SOUND_IDS,
 ] as const;
 export type SoundId = (typeof SOUND_IDS)[number];

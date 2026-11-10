@@ -13,7 +13,7 @@ export interface DecalSpec {
   stage: "telegraph" | "active";
   progress: number;
   shape: "rect" | "ring" | "segment";
-  style: "sparks" | "cracks" | "quake" | "embers" | "tornado" | "fireTornado" | "spring" | "scorch";
+  style: "sparks" | "cracks" | "quake" | "embers" | "tornado" | "fireTornado" | "spring" | "scorch" | "rift";
   center: Vec3;
   sizeX: number;
   sizeZ: number;
@@ -30,8 +30,8 @@ const STYLE: Readonly<Record<ZoneKind, DecalSpec["style"] | null>> = {
   tornado: "tornado", fireTornado: "fireTornado", sandTornado: "tornado", spring: "spring", steam: null,
   // «Топь» — круги Родника; у врага хозяина (и у самой Воды) — с вражеской кромкой
   bog: "spring",
-  // ульты (фаза 5): Разлом и волна Цунами рисуются своими мешами (задачи 5–6), не декалью
-  rift: null, tsunami: null,
+  // ульты (фаза 5): Разлом — тёмная трещина по всей линии (шипы и пыль — ultVfx); волна Цунами — своим мешем (задача 6)
+  rift: "rift", tsunami: null,
 };
 /** Разовые зоны бьют ровно на armTick: после взвода декали нет, удар рисует всплеск. */
 const ONE_SHOT: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["pillar", "quake"]);
@@ -97,7 +97,7 @@ export interface RootRing {
 }
 
 /** Номер узора в шейдере; 4 — кольцо обездвиженного (не зона). */
-const STYLE_ID: Readonly<Record<DecalSpec["style"], number>> = { sparks: 0, cracks: 1, quake: 2, embers: 3, scorch: 5, tornado: 6, fireTornado: 7, spring: 8 };
+const STYLE_ID: Readonly<Record<DecalSpec["style"], number>> = { sparks: 0, cracks: 1, quake: 2, embers: 3, scorch: 5, tornado: 6, fireTornado: 7, spring: 8, rift: 9 };
 const SHAPE_ID = { rect: 0, ring: 1, segment: 2 } as const;
 const STYLE_ROOT = 4;
 
@@ -312,6 +312,33 @@ void main() {
       add *= 1.0 - band;
       a = max(a, 0.7 * band);
     }
+  } else if (style == 9) {
+    // Разлом (фаза 5): тёмная трещина тушью видна по всей линии сразу. Телеграф — по ней от мага бежит светлый фронт,
+    // за фронтом трещина шире и в ней нефрит, полоса 3 м — пунктиром по краю; потом — трещина под шипами, гаснет
+    // в последние 0,5 с
+    float along = (l.x + hs.x) / (2.0 * hs.x);
+    float inside = step(0.0, along) * step(along, 1.0);
+    float wob = (fxNoise(vec2(l.x * 0.9 + seed, seed)) - 0.5) * 0.7 + (fxNoise(vec2(l.x * 3.1, seed * 2.0)) - 0.5) * 0.25;
+    float off = abs(l.y - wob);
+    float head = tele ? prog : 1.0;
+    float passed = 1.0 - smoothstep(head - 0.01, head + 0.01, along);
+    float w = mix(0.035, 0.13, passed);
+    float crack = (1.0 - smoothstep(w * 0.55, w, off)) * inside;
+    a = crack * 0.9;
+    add += uJade * (1.0 - smoothstep(0.0, w * 0.5, off)) * passed * inside * (tele ? 0.9 : 0.45);
+    if (tele) {
+      // светлый фронт во всю ширину полосы и пыль-свет за ним; край опасной полосы — бегущий пунктир
+      float front = fxBell((along - prog) * 2.0 * hs.x / 0.8) * (1.0 - smoothstep(hs.y * 0.5, hs.y, abs(l.y))) * inside;
+      add += mix(uJade, uCore, 0.55) * front * 1.4;
+      add += uJade * (1.0 - smoothstep(hs.y - 0.12, hs.y, abs(l.y))) * inside * (0.05 + 0.12 * prog);
+      float dash = step(0.5, fract(l.x * 0.8 - t * 1.5));
+      a = max(a, fxBell((abs(l.y) - hs.y) / 0.05) * dash * inside * 0.55);
+    } else {
+      float fade = 1.0 - smoothstep(1.0 - 0.5 / RIFT_SPIKES_S, 1.0, prog);
+      a *= fade;
+      add *= fade;
+    }
+    ink = vec3(0.08, 0.07, 0.06);
   } else {
     // обездвижен: нефритовое кольцо у ног, бегущие штрихи
     float rr = length(l);
@@ -356,7 +383,11 @@ export function createDecalMeshes(gbuffer: FxGBuffer, time: TimeUniform, max = 3
     vertexShader: DECAL_VERT,
     fragmentShader: DECAL_FRAG,
     gbuffer,
-    defines: { ROOT_FRAC: glslFloat(EARTH.earthquake.rootRadiusM / EARTH.earthquake.radiusM), QUAKE_AFTER_S: glslFloat(QUAKE_AFTER_S) },
+    defines: {
+      ROOT_FRAC: glslFloat(EARTH.earthquake.rootRadiusM / EARTH.earthquake.radiusM),
+      QUAKE_AFTER_S: glslFloat(QUAKE_AFTER_S),
+      RIFT_SPIKES_S: glslFloat(EARTH.tectonicRift.spikesS),
+    },
     uniforms: {
       uTime: time, uFire: { value: v3(FX_COLOR.fire) }, uCore: { value: v3(FX_COLOR.core) }, uEmber: { value: v3(FX_COLOR.ember) }, uJade: { value: v3(FX_COLOR.jade) },
       uAir: { value: v3(FX_COLOR.air) }, uWater: { value: v3(FX_COLOR.water) },

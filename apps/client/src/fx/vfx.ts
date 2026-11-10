@@ -21,6 +21,7 @@ import {
 } from "./presets";
 import { PROJECTILE_LOOK, createProjectileMeshes, type ProjectileDraw } from "./projectileMeshes";
 import { createTerrainMeshes, createVeinMeshes, terrainVisualBox, veinFaces, type VeinFace } from "./terrainMeshes";
+import { createUltVfx } from "./ultVfx";
 
 /** Что видит эффектник за кадр. Ладони — в пространстве камеры рук (как их ставят руки). */
 export interface VfxView {
@@ -123,6 +124,9 @@ const BURST_LIGHT: Partial<Record<BurstPreset, { light: number; halo: number; in
   fireWallIgnite: { light: 6, halo: 0, intensity: 1.4, life: 0.4, core: 0 },
   fireWallSparks: { light: 2, halo: 0, intensity: 0.6, life: 0.4, core: 0 },
   deathFire: { light: 4, halo: 1.3, intensity: 1.3, life: 0.45, core: 0.8 },
+  // Дыхание дракона: выдох светит на мир; вспышка потока на цели — только ореол (свет потока уже есть)
+  breathFlare: { light: 5, halo: 1, intensity: 1.4, life: 0.3, core: 0.8 },
+  breathHit: { light: 0, halo: 0.5, intensity: 0.9, life: 0.12, core: 0.4 },
 };
 
 /** Отклик юнита по id — общий у манекенов и магов: вспышка и вздрагивание приходят по id из эффектов. */
@@ -226,7 +230,8 @@ function lineOfBox(z: Zone): { a: Vec3; b: Vec3 } | null {
  * Эффекты магии поверх G-буфера: собирает пулы частиц, ореолы и свет, декали, стены огня, рельеф с прожилками,
  * манекенов и чужих магов с ореолом, ядра снарядов и обломки. Бюджет: G-буфер +8 вызовов (манекены 2, маги 2,
  * рельеф 1, ядра 2, обломки 1), проход света +5 (стены огня, декали, частицы, ореолы, прожилки), ладони +1;
- * пустые пулы не рисуются. Свечение рук магов — в общем меше ореолов, без своего вызова.
+ * пустые пулы не рисуются. Свечение рук магов — в общем меше ореолов, без своего вызова. Ульты Огня и Земли (ultVfx) —
+ * +1 конус Дыхания в проходе света и +1 шипы Разлома в G-буфере, только пока они идут.
  */
 export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): Vfx {
   const time: TimeUniform = { value: 0 };
@@ -251,7 +256,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const terrain = createTerrainMeshes(24);
   const cores = createProjectileMeshes(48);
   const debris = createDebris();
-  const elements = ELEMENT_VFX.map((make) => make({ gbuffer, time }));
+  // эффектники стихий фазы 4 (Воздух, Вода) и ульт Огня и Земли (фаза 5) — тем же интерфейсом
+  const elements = [...ELEMENT_VFX, createUltVfx].map((make) => make({ gbuffer, time }));
 
   const worldGroup = new Group();
   worldGroup.name = "vfx";

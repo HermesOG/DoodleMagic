@@ -202,19 +202,16 @@ describe("ult names in the kill feed and on the death screen", () => {
 });
 
 describe("client registries cover the new abilities and zones", () => {
-  it("has a gesture for every ability; the ult stubs move the hands like the C gesture of their element", () => {
+  it("has a gesture for every ability; every ult moves the hands", () => {
     for (const a of ABILITY_IDS) expect(typeof isFistGesture(a), a).toBe("boolean");
-    // Ураган и Цунами — уже свои жесты (задача 6, ultAirWater.test.ts)
-    const C: Partial<Record<(typeof ULT_IDS)[number], (typeof ABILITY_IDS)[number]>> = { dragonBreath: "fireWall", tectonicRift: "earthquake" };
+    // задачи 5 и 6 дали всем ультам свои жесты (не копии C): проверяем только, что ульта двигает руки
     for (const a of ULT_IDS) {
       const pose = (ability: (typeof ABILITY_IDS)[number]) => stepGestures(startGesture(createGestures(), ability), 0.3).pose;
-      const c = C[a];
-      if (c) expect(pose(a), a).toEqual(pose(c));
       expect(Object.values(pose(a).right).some((v) => Math.abs(v) > 1e-3) || Object.values(pose(a).left).some((v) => Math.abs(v) > 1e-3), a).toBe(true);
     }
   });
 
-  it("has a decal style entry for every zone kind; the rift and the tsunami wave draw no floor decal", () => {
+  it("has a decal style entry for every zone kind; the rift is a crack on the floor, the tsunami wave draws no floor decal", () => {
     const KINDS = {
       fireWall: 1, fireTrail: 1, pillar: 1, quake: 1, tornado: 1, fireTornado: 1, sandTornado: 1, spring: 1, steam: 1, bog: 1, rift: 1, tsunami: 1,
     } satisfies Record<ZoneKind, 1>;
@@ -225,6 +222,7 @@ describe("client registries cover the new abilities and zones", () => {
       const d = zoneDecal(zone(kind), 60);
       expect(d === null || typeof d.style === "string", kind).toBe(true);
     }
-    expect([zoneDecal(zone("rift"), 10), zoneDecal(zone("tsunami"), 60)]).toEqual([null, null]);
+    // задача 5: трещина Разлома — декаль rift; волна Цунами — своим мешем
+    expect([zoneDecal(zone("rift"), 10)?.style, zoneDecal(zone("tsunami"), 60)]).toEqual(["rift", null]);
   });
 });

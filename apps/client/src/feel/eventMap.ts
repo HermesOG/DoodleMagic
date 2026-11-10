@@ -2,7 +2,10 @@ import {
   ABILITY_OF,
   EARTH,
   ELEMENT_OF,
+  FIRE,
   NOBODY,
+  aimDir,
+  eyeOf,
   forwardXZ,
   isUlt,
   rightXZ,
@@ -12,6 +15,7 @@ import {
   type Element,
   type MatchEvent,
   type MatchState,
+  type UltCast,
   type Unit,
   type UnitId,
   type Vec3,
@@ -19,8 +23,9 @@ import {
   type ZoneShape,
 } from "@doodlemagic/sim";
 import { isFistGesture } from "../hands/gestures";
+import { SHAKE } from "./camera";
 import type { BurstPreset, Effect, FeelTier, SoundId } from "./effects";
-import { elementEffects } from "./elementFx";
+import { elementEffects, type FrameView } from "./elementFx";
 
 /** Чьими глазами смотрим: «я» — localId; state — состояние после шага, в котором родилось событие. */
 export interface EventView {
@@ -45,10 +50,21 @@ export const TIERS: Readonly<Record<FeelTier, { trauma: number; kickDeg: number;
   medium: { trauma: 0.5, kickDeg: 1.25, hitstopMs: 60, confirm: "hitHeavy" },
   large: { trauma: 0.8, kickDeg: 2, hitstopMs: 90, confirm: null }, // убийство звучит «kill» из события death
 };
-/** Ступень попадания: урон по времени — нет; ЛКМ — малая; остальное — средняя; убийство и ульта — крупная. */
-export function hitTier(ev: Pick<Extract<MatchEvent, { type: "hit" }>, "ability" | "dot" | "killed">): FeelTier {
+type HitEvent = Extract<MatchEvent, { type: "hit" }>;
+/**
+ * Касание шипов Разлома после удара (20 урона, вбок 3 м без подброса, раз в 1 с на юнита): не удар по линии.
+ * Удар — 100 и подброс; в воздухе урон ×1,15, поэтому порог — полтора урона шипов.
+ */
+const riftSpike = (ev: Pick<HitEvent, "ability"> & Partial<Pick<HitEvent, "amount" | "knock">>): boolean =>
+  ev.ability === "tectonicRift" && ev.knock !== undefined && ev.knock.upM <= 0 && ev.amount !== undefined && ev.amount <= EARTH.tectonicRift.spikesDamage * 1.5;
+/**
+ * Ступень попадания: урон по времени (и поток Дыхания — импульсы dot) — нет; ЛКМ — малая; остальное и шипы Разлома —
+ * средняя; убийство и ульта (удар Разлома, Ураган, Цунами) — крупная.
+ */
+export function hitTier(ev: Pick<HitEvent, "ability" | "dot" | "killed"> & Partial<Pick<HitEvent, "amount" | "knock">>): FeelTier {
   if (ev.killed) return "large";
   if (ev.dot || ev.ability === "jetDash" || ev.ability === "burning") return "none";
+  if (riftSpike(ev)) return "medium";
   if (isUlt(ev.ability)) return "large";
   return isPrimary(ev.ability) ? "small" : "medium";
 }
@@ -77,31 +93,65 @@ const GROUND_SLAM: Effect = { kind: "kick", pitchDeg: -1.2, yawDeg: 0, rollDeg: 
  */
 const overTime = (ev: Extract<MatchEvent, { type: "hit" }>): boolean => ev.dot || ev.ability === "jetDash";
 
+/**
+ * Ульты Огня и Земли (фаза 5). Поток Дыхания — с выдоха до конца каста, ровно по ult.cast в состоянии: каст может
+ * исчезнуть и без события ult/end, и тогда поток кончается сам.
+ */
+export function breathStreaming(c: UltCast | null | undefined, tick: number): c is UltCast {
+  return !!c && c.ability === "dragonBreath" && tick >= c.releaseTick && tick < c.endTick;
+}
+/** Зерно рёва потока — раз в 0,3 с на мага (Р15 фазы 4: непрерывное — зёрнами ≤ 0,8 с). */
+export const ROAR_GRAIN_S = 0.3;
+/** Свои ладони разгораются на вдохе: заряд у рук раз в столько секунд. */
+const INHALE_PALM_S = 0.2;
+/** Своя тряска на весь поток: 0,3 на выдохе, дальше кадр доливает ровно свой спад (SHAKE.decayPerS × dt). */
+export const BREATH_TRAUMA = 0.3;
+/** FOV-удар своего выдоха (+4°) и крупной ступени — удар Разлома у кастующего и задетых (+10°, round3/01, 2.1). */
+const BREATH_FOV_DEG = 4;
+const LARGE_FOV_DEG = 10;
+/** Вспышка потока на цели — на каждом втором импульсе (импульс раз в 10 тиков): 3 раза в секунду. */
+const BREATH_HIT_EVERY = 2;
+/**
+ * Импульс потока, на котором цель вспыхивает: тик импульса (state.tick − 1) в десятках тиков — чётный. Импульсы идут
+ * подряд через pulseTicks, поэтому чётность чередуется: ровно каждый второй, без памяти между событиями.
+ */
+export const breathBeat = (s: MatchState): boolean => Math.floor((s.tick - 1) / FIRE.dragonBreath.pulseTicks) % BREATH_HIT_EVERY === 0;
+/** Жертве Дыхания на вспышке: лёгкая тряска (урон по времени камеру не трясёт — это поток в лицо). */
+const BREATH_VICTIM_TRAUMA = 0.12;
+/** trauma удара Разлома всем на полу у линии (до 4 м): жертва получает остаток до крупной ступени. */
+export const RIFT_NEAR_TRAUMA = 0.3;
+/** Всплесков удара шипов по линии (по 30 частиц, MAX_BURST на всплеск не превышен). */
+export const RIFT_BURSTS = 5;
+/** Тост убийцы ультой (round3/01, 2.1: крупная ступень — тост). */
+const ULT_KILL_TOAST: Readonly<Partial<Record<DamageSource, string>>> = { dragonBreath: "Дыхание дракона!", tectonicRift: "Разлом!" };
+
 /** Звук каста у слушателя: предвосхищение или выпуск (round2/03, п. 4.2). */
 const CAST_SOUND: Readonly<Record<AbilityId, SoundId>> = {
   fireFists: "fireFist", fireball: "fireballCharge", jetDash: "dash", fireWall: "fireWallTelegraph",
   stoneShot: "stoneCast", stonePillar: "pillarTelegraph", stoneWall: "wallRise", earthquake: "quakeWindup",
   airSickle: "sickleThrow", gust: "gustWindup", swoop: "swoop", tornado: "tornadoRise",
   waterWhip: "whipCrack", waterGrab: "grabWindup", waterWard: "wardUp", spring: "springSpread",
-  // ульты (фаза 5): заглушки — звук каста C своей стихии; свои дадут задачи 5–6
-  dragonBreath: "fireWallTelegraph", tectonicRift: "quakeWindup", hurricane: "tornadoCast", tsunami: "springSpread",
+  // ульты (фаза 5): вдох Дыхания, гул бегущей трещины Разлома; Ураган и Цунами — заглушки до задачи 6
+  dragonBreath: "breathInhale", tectonicRift: "riftRumble", hurricane: "tornadoCast", tsunami: "springSpread",
 };
 /**
  * Отдача камеры у кастующего на нажатии, градусы: ЛКМ (кулаки, камень, серп, хлыст) 0,2° (у камня ещё 0,6° на броске,
- * A1), ладони в землю — вниз (GROUND_SLAM, A2), замах землетрясения — 0 (удар вниз придёт с ударом), остальное 1°.
+ * A1), ладони в землю — вниз (GROUND_SLAM, A2: столб, стена, Разлом), замах землетрясения — 0 (удар вниз придёт
+ * с ударом), вдох Дыхания — 0,4° вверх (выдох толкнёт сильнее), остальное 1°.
  */
 const castKick = (a: AbilityId): Effect =>
-  a === "stonePillar" || a === "stoneWall"
+  a === "stonePillar" || a === "stoneWall" || a === "tectonicRift"
     ? GROUND_SLAM
-    : { kind: "kick", pitchDeg: isPrimary(a) ? 0.2 : a === "earthquake" ? 0 : 1, yawDeg: 0, rollDeg: 0 };
+    : { kind: "kick", pitchDeg: isPrimary(a) ? 0.2 : a === "earthquake" ? 0 : a === "dragonBreath" ? 0.4 : 1, yawDeg: 0, rollDeg: 0 };
 /** Чем попали в меня — глухой удар плюс отпечаток стихии (round1/03, п. 3); у кулака свой треск попадания (H3). */
 const HIT_SOUND: Readonly<Record<DamageSource, SoundId>> = {
   fireFists: "fistHit", fireball: "fireballBoom", jetDash: "fireWallIgnite", fireWall: "fireWallIgnite", burning: "fireWallIgnite",
   stoneShot: "stoneImpact", stonePillar: "pillarStrike", stoneWall: "terrainHit", earthquake: "quakeStrike",
   airSickle: "sickleHit", gust: "airBlown", swoop: "airBlown", tornado: "airBlown",
   waterWhip: "whipHit", waterGrab: "grabHit", waterWard: "answerHit", spring: "springBubble",
-  // ульты (фаза 5): заглушки — удар C своей стихии
-  dragonBreath: "fireWallIgnite", tectonicRift: "quakeStrike", hurricane: "airBlown", tsunami: "springBubble",
+  // ульты (фаза 5): поток Дыхания — урон по времени, его звук — рёв (ultFrame); Разлом — глухой удар камня у уха,
+  // сам удар шипов звучит из линии (zone/arm); Ураган и Цунами — заглушки до задачи 6
+  dragonBreath: "fireWallIgnite", tectonicRift: "stoneImpact", hurricane: "airBlown", tsunami: "springBubble",
 };
 /** Выпуск снаряда или удара в конце замаха (A1): звук у меня у уха, у чужого — там, где он бросил. */
 const RELEASE_SOUND: Readonly<Partial<Record<AbilityId, SoundId>>> = {
@@ -141,13 +191,15 @@ function zoneDistance(s: ZoneShape, p: Vec3): number {
     const q = { x: clampTo(p.x, s.box.min.x, s.box.max.x), y: clampTo(p.y, s.box.min.y, s.box.max.y), z: clampTo(p.z, s.box.min.z, s.box.max.z) };
     return dist(p, q);
   }
-  if (s.type === "segment") {
-    const ab = { x: s.b.x - s.a.x, y: s.b.y - s.a.y, z: s.b.z - s.a.z };
-    const len2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
-    const u = len2 > 0 ? clampTo(((p.x - s.a.x) * ab.x + (p.y - s.a.y) * ab.y + (p.z - s.a.z) * ab.z) / len2, 0, 1) : 0;
-    return dist(p, { x: s.a.x + ab.x * u, y: s.a.y + ab.y * u, z: s.a.z + ab.z * u });
-  }
+  if (s.type === "segment") return dist(p, segmentPoint(s.a, s.b, p));
   return dist(p, s.center);
+}
+/** Ближайшая к p точка отрезка a–b. */
+function segmentPoint(a: Vec3, b: Vec3, p: Vec3): Vec3 {
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const len2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+  const u = len2 > 0 ? clampTo(((p.x - a.x) * ab.x + (p.y - a.y) * ab.y + (p.z - a.z) * ab.z) / len2, 0, 1) : 0;
+  return { x: a.x + ab.x * u, y: a.y + ab.y * u, z: a.z + ab.z * u };
 }
 
 /**
@@ -170,31 +222,48 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
   const out: Effect[] = [];
   const lmb = isPrimary(ev.ability);
   const tier = hitTier(ev);
+  // поток Дыхания — урон по времени 6 раз/с: малая вспышка огня на цели видна всем, но только на каждом втором
+  // импульсе (≤ 3 раз/с); крупной ступени, паузы и хитмаркера на каждый импульс нет
+  const beat = ev.ability === "dragonBreath" && breathBeat(view.state);
+  if (beat) out.push(burst("breathHit", ev.pos));
   if (ev.source === view.localId && ev.target !== view.localId) {
     if (overTime(ev)) {
       out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne });
       // добил горением или следом — убийство всё равно отмечается
       if (ev.killed) out.push({ kind: "hitmarker", kill: true, air: ev.airborne, tier: "large" });
+      // поток попадает: лёгкое подтверждение на вспышке — малый хитмаркер, вспышка цели и тихий щелчок, без паузы
+      else if (beat) out.push({ kind: "hitmarker", kill: false, air: ev.airborne, tier: "small" }, { kind: "flash", target: ev.target }, sound("hitLight", null, 0.5));
     } else {
-      // вторая фаза попадания: урон засчитан (round2/03, конфликт 1). Тряски у стреляющего нет — вместо неё пауза
-      const confirm = TIERS[tier].confirm;
+      // вторая фаза попадания: урон засчитан (round2/03, конфликт 1). Тряски у стреляющего нет — вместо неё пауза.
+      // Удар ульты (крупная ступень) — пауза цели 90 мс и вспышка 130 мс (сила вздрагивания ≥ 0,7, hitFreeze);
+      // подтверждения у крупной ступени нет (убийство звучит kill), поэтому живой цели ульта отвечает hitHeavy
+      const ult = tier === "large" && isUlt(ev.ability);
+      const confirm = TIERS[tier].confirm ?? (ult && !ev.killed ? "hitHeavy" : null);
       const ms = hitstopMs(tier, ev.ability);
       out.push(
         { kind: "hitmarker", kill: ev.killed, air: ev.airborne, tier },
         { kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: false, air: ev.airborne },
         { kind: "flash", target: ev.target },
-        { kind: "flinch", target: ev.target, dir: ev.dir, amount: lmb ? 0.1 : 0.2 },
+        { kind: "flinch", target: ev.target, dir: ev.dir, amount: ult ? 0.8 : lmb ? 0.1 : 0.2 },
       );
       if (confirm) out.push(sound(confirm));
       if (ms > 0) out.push({ kind: "hitstop", ms });
     }
   }
+  if (ev.target === view.localId && ev.source !== view.localId && overTime(ev) && beat) {
+    // в потоке Дыхания: откуда жжёт и лёгкая тряска — на вспышке, не чаще 3 раз/с
+    out.push(
+      { kind: "indicator", from: { x: ev.pos.x - ev.dir.x, y: ev.pos.y - ev.dir.y, z: ev.pos.z - ev.dir.z }, amount: ev.amount },
+      { kind: "trauma", amount: BREATH_VICTIM_TRAUMA, profile: "fire" },
+    );
+  }
   if (ev.target === view.localId && ev.source !== view.localId && !overTime(ev)) {
     // жертве — ступень самого удара, а не «крупная» за убийство: экран смерти и так всё скажет. Часть trauma уже
-    // дало событие области (зона, взрыв) — здесь только остаток
-    const own: FeelTier = lmb ? "small" : "medium";
+    // дало событие области (зона, взрыв, линия Разлома) — здесь только остаток
+    const own: FeelTier = hitTier({ ...ev, killed: false });
     const k = tempo(ev.ability);
-    const area = ev.ability in AREA_TRAUMA ? AREA_TRAUMA[ev.ability as keyof typeof AREA_TRAUMA] : 0;
+    const strike = own === "large" && ev.ability === "tectonicRift";
+    const area = strike ? RIFT_NEAR_TRAUMA : ev.ability in AREA_TRAUMA ? AREA_TRAUMA[ev.ability as keyof typeof AREA_TRAUMA] : 0;
     const shake = Math.max(0, TIERS[own].trauma * k - area);
     if (shake > 0) out.push({ kind: "trauma", amount: shake, profile: elementOf(ev.ability) === "earth" ? "earth" : "fire" });
     out.push(
@@ -202,8 +271,9 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
       { kind: "indicator", from: { x: ev.pos.x - ev.dir.x, y: ev.pos.y - ev.dir.y, z: ev.pos.z - ev.dir.z }, amount: ev.amount },
       sound(HIT_SOUND[ev.ability]),
     );
-    // толчок видно и слышно (K3): от ≥ 4 м/с — FOV-удар и «вжух»
-    if (ev.knock.distM >= KNOCK_FEEL_M) out.push({ kind: "fov", deg: 3 }, sound("knockWhoosh"));
+    // удар ульты — крупная ступень: FOV +10° и «вжух» подброса; толчок видно и слышно (K3): от ≥ 4 м/с — FOV-удар и «вжух»
+    if (own === "large" && isUlt(ev.ability)) out.push({ kind: "fov", deg: LARGE_FOV_DEG }, sound("knockWhoosh"));
+    else if (ev.knock.distM >= KNOCK_FEEL_M) out.push({ kind: "fov", deg: 3 }, sound("knockWhoosh"));
   }
   return out;
 }
@@ -214,6 +284,7 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
   if (!z) return [];
   const at = zonePoint(z.shape);
   const near = (m: number): boolean => me !== undefined && me.alive && zoneDistance(z.shape, centre(me)) < m;
+  if (ev.kind === "rift") return riftEffects(ev, z, view, me, near(4));
   if (ev.phase === "telegraph") {
     if (ev.kind === "pillar") return [burst("pillarCracks", at)];
     if (ev.kind === "fireWall") return [burst("fireWallSparks", at)];
@@ -240,6 +311,34 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
   }
   if (ev.kind === "fireWall") return [burst("fireWallIgnite", at), sound("fireWallIgnite", at), ...(near(5) ? [{ kind: "trauma", amount: 0.15 } as const] : [])];
   return [];
+}
+
+/**
+ * Тектонический разлом. Телеграф: пол лопается у ног мага (трещину по всей линии и бегущий фронт с пылью рисуют
+ * декаль rift и ultVfx, гул — звук каста). Взвод: шипы по всей линии — всплески на каждые 5 м и удар riftStrike: своему —
+ * у уха и крупная ступень по профилю Земли (вниз), чужому — из ближней точки линии; кто ближе 4 м к линии — тряска.
+ */
+function riftEffects(ev: Extract<MatchEvent, { type: "zone" }>, z: Zone, view: EventView, me: Unit | undefined, near: boolean): Effect[] {
+  if (z.shape.type !== "segment") return [];
+  const { a, b } = z.shape;
+  if (ev.phase === "telegraph") return [burst("riftCrack", { ...a })];
+  const out: Effect[] = [];
+  for (let i = 0; i < RIFT_BURSTS; i++) {
+    const t = (i + 0.5) / RIFT_BURSTS;
+    out.push(burst("riftBurst", { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }));
+  }
+  if (ev.owner === view.localId) {
+    out.push(
+      sound("riftStrike"),
+      { kind: "trauma", amount: TIERS.large.trauma, profile: "earth" },
+      { kind: "kick", pitchDeg: -TIERS.large.kickDeg, yawDeg: 0, rollDeg: 0, dropM: 0.06 },
+      { kind: "fov", deg: LARGE_FOV_DEG },
+    );
+    return out;
+  }
+  out.push(sound("riftStrike", me ? segmentPoint(a, b, centre(me)) : zonePoint(z.shape)));
+  if (near) out.push({ kind: "trauma", amount: RIFT_NEAR_TRAUMA, profile: "earth" });
+  return out;
 }
 
 /**
@@ -273,13 +372,16 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
           kind: "palm",
           hand: isFistGesture(ev.ability) ? "auto" : "both",
           element,
-          preset: ev.ability === "fireball" || ev.ability === "stoneShot" ? "charge" : "flash",
+          // на вдохе Дыхания ладони разгораются: заряд, а не вспышка
+          preset: ev.ability === "fireball" || ev.ability === "stoneShot" || ev.ability === "dragonBreath" ? "charge" : "flash",
         },
         sound(CAST_SOUND[ev.ability]),
         castKick(ev.ability),
       ];
       // камень вырывается из пола у ног
       if (ev.ability === "stoneShot" && caster) out.push(burst("stoneCrumble", { ...caster.move.body.pos }));
+      // ладони Разлома бьют в пол: тряска по профилю Земли (удар шипов — крупная ступень на взводе)
+      if (ev.ability === "tectonicRift") out.push({ kind: "trauma", amount: 0.2, profile: "earth" });
       return out;
     }
     case "release": {
@@ -349,7 +451,13 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       return mine(ev.unit) ? [{ kind: "toast", text: "Кураж!" }, sound("courage")] : [];
     case "death": {
       const element = unitById(view.state, ev.killer)?.mage?.element ?? elementOf(ev.ability);
-      return [burst(DEATH_BURST[element], ev.pos), ...(mine(ev.killer) ? [sound("kill")] : [])];
+      const out: Effect[] = [burst(DEATH_BURST[element], ev.pos)];
+      if (!mine(ev.killer)) return out;
+      out.push(sound("kill"));
+      // убийство ультой — тост с её именем
+      const toast = ULT_KILL_TOAST[ev.ability];
+      if (toast) out.push({ kind: "toast", text: toast });
+      return out;
     }
     case "fall":
       return mine(ev.credit) ? [{ kind: "toast", text: "Сброс!" }, sound("fall")] : [];
@@ -359,8 +467,21 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       // статусы HUD и частицы читают из состояния
       return [];
     case "ult":
-      // заряд полон: своему — щелчки «готово», ячейку X толкает HUD по заряду; выпуск, конец и чужое — дело стихий
-      return ev.phase === "ready" && mine(ev.unit) ? [sound("ultReady")] : [];
+      // заряд полон: своему — звон «готово», ячейку X толкает HUD по заряду
+      if (ev.phase === "ready") return mine(ev.unit) ? [sound("ultReady")] : [];
+      // выдох Дыхания: пламя срывается с рук (у чужого — у рта); своему — отдача, FOV +4° и тряска 0,3 на весь поток
+      // (её держит ultFrame). Поток, рёв и конец — по ult.cast в состоянии; Разлом звучит из зоны; прочее — стихии
+      if (ev.phase === "release" && ev.ability === "dragonBreath") {
+        if (!mine(ev.unit)) return [burst("breathFlare", { x: ev.pos.x + ev.dir.x * 0.5, y: ev.pos.y + ev.dir.y * 0.5 - 0.12, z: ev.pos.z + ev.dir.z * 0.5 }, ev.dir)];
+        return [
+          burst("breathFlare", releaseCrumblePoint(ev.pos, ev.dir), ev.dir),
+          { kind: "palm", hand: "both", element: "fire", preset: "flash" },
+          { kind: "kick", pitchDeg: 1.2, yawDeg: 0, rollDeg: 0 },
+          { kind: "fov", deg: BREATH_FOV_DEG },
+          { kind: "trauma", amount: BREATH_TRAUMA },
+        ];
+      }
+      return [];
     // события фазы 4 без общего отклика: их рисуют файлы стихий (elementEffects)
     case "beam":
     case "blown":
@@ -376,3 +497,63 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       return [];
   }
 }
+
+/** Куда слушателю звучит поток: ближняя к нему точка оси потока (от глаз мага на 12 м по взгляду). */
+function breathEar(u: Unit, me: Unit | undefined): Vec3 {
+  const e = eyeOf(u);
+  if (!me) return e;
+  const d = aimDir(u.move.yaw, u.move.pitch);
+  const m = eyeOf(me);
+  const k = clampTo((m.x - e.x) * d.x + (m.y - e.y) * d.y + (m.z - e.z) * d.z, 0, FIRE.dragonBreath.rangeM);
+  return { x: e.x + d.x * k, y: e.y + d.y * k, z: e.z + d.z * k };
+}
+
+/**
+ * Покадровое у ульт Огня и Земли — по ult.cast в состоянии, а не по событиям (каст может исчезнуть без ult/end):
+ * вдох — свои ладони разгораются (заряд раз в 0,2 с); поток — зёрна рёва раз в 0,3 с на мага (своему у уха, чужое — из
+ * ближней точки потока), у своего — вспышка ладоней на зерне и тряска, которую кадр доливает ровно на её спад.
+ */
+export function createUltFrame(): (f: FrameView) => Effect[] {
+  const roarAt = new Map<UnitId, number>();
+  const seen = new Set<UnitId>();
+  /** Свой вдох: какой каст (startTick) и когда ладони разгорались последний раз. */
+  let inhaleCast = -1;
+  let inhaleAt = 0;
+  return (f) => {
+    const out: Effect[] = [];
+    const s = f.cur;
+    const me = unitById(s, f.localId);
+    seen.clear();
+    for (const u of s.units) {
+      const c = u.mage?.ult.cast;
+      if (!u.alive || !c || c.ability !== "dragonBreath") continue;
+      const own = u.id === f.localId;
+      if (s.tick < c.releaseTick) {
+        if (!own) continue;
+        // первый кадр вдоха — заряд у рук уже дал каст; дальше раз в 0,2 с
+        if (inhaleCast !== c.startTick) {
+          inhaleCast = c.startTick;
+          inhaleAt = f.nowS;
+        } else if (f.nowS - inhaleAt >= INHALE_PALM_S || f.nowS < inhaleAt) {
+          inhaleAt = f.nowS;
+          out.push({ kind: "palm", hand: "both", element: "fire", preset: "charge" });
+        }
+        continue;
+      }
+      if (!breathStreaming(c, s.tick)) continue;
+      seen.add(u.id);
+      if (own) out.push({ kind: "trauma", amount: SHAKE.decayPerS * Math.max(0, f.dtS) });
+      const last = roarAt.get(u.id);
+      if (last === undefined || f.nowS - last >= ROAR_GRAIN_S || f.nowS < last) {
+        roarAt.set(u.id, f.nowS);
+        if (own) out.push(sound("breathRoar", null, 0.8), { kind: "palm", hand: "both", element: "fire", preset: "flash" });
+        else out.push(sound("breathRoar", breathEar(u, me)));
+      }
+    }
+    for (const id of roarAt.keys()) if (!seen.has(id)) roarAt.delete(id);
+    return out;
+  };
+}
+
+/** Раз в кадр: непрерывное у ульт Огня и Земли (зовёт elementFrameEffects). */
+export const ultFrame: (f: FrameView) => Effect[] = createUltFrame();

@@ -1,7 +1,7 @@
 import type { MatchEvent, MatchState, Unit, UnitId } from "@doodlemagic/sim";
 import { airEffects, airFrame } from "./airFx";
 import type { Effect } from "./effects";
-import type { EventView } from "./eventMap";
+import { ultFrame, type EventView } from "./eventMap";
 import { waterEffects, waterFrame } from "./waterFx";
 
 /** Кадр для непрерывных эффектов стихии: два последних тика, доля между ними, свой маг, часы кадра. */
@@ -23,9 +23,11 @@ export function elementEffects(ev: MatchEvent, view: EventView, me: Unit | undef
   return airEffects(ev, view, me) ?? waterEffects(ev, view, me);
 }
 
-/** Непрерывные эффекты стихий за кадр. */
+/** Непрерывные эффекты стихий за кадр; ульты Огня и Земли (поток Дыхания) — из общей карты (ultFrame). */
 export function elementFrameEffects(f: FrameView): Effect[] {
   const air = airFrame(f);
   const water = waterFrame(f);
-  return air.length === 0 ? water : water.length === 0 ? air : [...air, ...water];
+  const ult = ultFrame(f);
+  const both = air.length === 0 ? water : water.length === 0 ? air : [...air, ...water];
+  return ult.length === 0 ? both : both.length === 0 ? ult : [...both, ...ult];
 }
