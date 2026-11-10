@@ -28,7 +28,7 @@ describe("feel pass, part 2 (vfx)", () => {
     expect(MUZZLE_PRIO).toBeLessThan(0.3);
     const palm = (element: Element, preset: "flash" | "charge", hand: "auto" | "both" = "auto"): Effect => ({ kind: "palm", hand, element, preset });
     expect(muzzleOf(palm("fire", "flash"), 1, "left")).toEqual({ element: "fire", hand: "left" });
-    expect(muzzleOf(palm("fire", "flash", "both"), 1, "right")).toEqual({ element: "fire", hand: "both" });
+    expect(muzzleOf(palm("fire", "flash", "both"), 1, "right")).toBeNull(); // рывок, стена, Дыхание — не выстрел
     expect([muzzleOf(palm("fire", "charge"), 1, "right"), muzzleOf(palm("earth", "flash"), 1, "right"), muzzleOf(palm("air", "flash"), 1, "right")]).toEqual([null, null, null]);
     const arc = (owner: number): Effect => ({ kind: "burst", preset: "whipArc", pos: O, dir: O, scale: 1, owner });
     expect(muzzleOf(arc(1), 1, "left")).toEqual({ element: "water", hand: "right" });

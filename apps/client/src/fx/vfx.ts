@@ -153,11 +153,12 @@ export const MUZZLE_LIGHT: Readonly<Record<"fire" | "water", FlashLight>> = {
 export const MUZZLE_PRIO = 0.2;
 
 /**
- * Чья ладонь вспыхивает светом дула от эффекта: вспышка ладони Огня — рука этого удара (hand — для "auto"), своя
+ * Чья ладонь вспыхивает светом дула от эффекта: вспышка ладони Огня у выстрела ЛКМ — рука этого удара (hand), своя
  * дуга хлыста — правая (хлыст бьёт правой, см. waterVfx). Прочее — null.
  */
 export function muzzleOf(e: Effect, localId: UnitId, hand: "left" | "right"): { element: "fire" | "water"; hand: "left" | "right" | "both" } | null {
-  if (e.kind === "palm" && e.element === "fire" && e.preset === "flash") return { element: "fire", hand: e.hand === "auto" ? hand : e.hand };
+  // только выстрел ЛКМ (рука "auto"): вспышки обеих ладоней — рывок, стена, Дыхание — светом дула не горят
+  if (e.kind === "palm" && e.element === "fire" && e.preset === "flash" && e.hand === "auto") return { element: "fire", hand };
   if (e.kind === "burst" && e.preset === "whipArc" && e.owner === localId) return { element: "water", hand: "right" };
   return null;
 }
@@ -327,7 +328,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   };
   const palms = { right: new Vector3(REST_PALM.x, REST_PALM.y, REST_PALM.z), left: new Vector3(-REST_PALM.x, REST_PALM.y, REST_PALM.z) };
   let lastPalmHand: "left" | "right" = "right";
-  /** Стихия своего мага (из прошлого кадра) — у кулака Огня нет паузы цели. */
+  /** Стихия своего мага (из прошлого кадра) — у кулака Огня пауза цели короче (SMALL_FREEZE_MS). */
   let localElement: Element | null = null;
   /** Стихия у своих ладоней (A5): накопители частиц и камешков, замах своего мага. */
   let localWindup = false;
