@@ -20,7 +20,7 @@ const ctx = testContext();
 /** Мир тика — как у stepMatch: статика плюс рельеф, стены огня и пар на начало тика. */
 function tickOf(s: MatchState, ev: MatchEvent[], c: MatchContext = ctx): TickCtx {
   const tw = buildTickWorld(c.world, s);
-  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 };
+  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 };
 }
 /** Тики в порядке stepMatch без китов: движение, снаряды, зоны, статусы, жизнь. */
 function run(s: MatchState, n: number, o: { inputs?: Partial<Record<UnitId, MatchInput>>; c?: MatchContext; hooks?: SimHooks; each?: (s: MatchState) => void } = {}): MatchEvent[] {
@@ -54,7 +54,7 @@ describe("phase 4 contracts", () => {
   it("has four elements in key order and 16 abilities, each in exactly one slot", () => {
     expect(ELEMENTS).toEqual(["fire", "earth", "air", "water"]);
     const ids = ELEMENTS.flatMap((e) => SLOTS.map((sl) => ABILITY_OF[e][sl]));
-    expect([ids.length, new Set(ids).size, [...ids].sort()]).toEqual([16, 16, [...ABILITY_IDS].sort()]);
+    expect([ids.length, new Set(ids).size, [...ids].sort()]).toEqual([20, 20, [...ABILITY_IDS].sort()]); // фаза 5: + 4 ульты на X
     for (const e of ELEMENTS) for (const sl of SLOTS) expect(ELEMENT_OF[ABILITY_OF[e][sl]]).toBe(e);
     expect([PROJECTILE_SOURCE.waterAnswer, PROJECTILE_SOURCE.airSickle, PROJECTILE_DAMAGE.airSickle, PROJECTILE_DAMAGE.waterGrab]).toEqual(["waterWard", "airSickle", 16, 25]);
     expect([PROJECTILE_JUICE_M.airSickle, PROJECTILE_JUICE_M.waterGrab, PROJECTILE_JUICE_M.waterAnswer].map((v) => Number(v.toFixed(12)))).toEqual([0.2, 0, 0]);
@@ -73,6 +73,7 @@ describe("phase 4 contracts", () => {
         pulseS: 0.5, pulseDamage: 4, firePulseDamage: 8, coreRadiusM: 1.5, coreLiftM: 3, ownerLiftM: 2, ownerLiftEveryS: 1, fireReachM: 3,
       },
       passive: { name: "Лёгкость", doubleJumpM: 1.25, glideFallSpeed: 2.5, glideAirControl: 1, glideS: 3 },
+      hurricane: AIR.hurricane, // ульта фазы 5 закреплена в phase5.test.ts
     });
     expect(WATER).toEqual({
       hp: 150, runSpeed: 6.5,
@@ -81,13 +82,14 @@ describe("phase 4 contracts", () => {
       waterWard: { slot: "e", name: "Отражение", cooldownS: 9, durationS: 1, runMul: 0.7, padM: 0.5, answer: { name: "Ответ", minDamage: 20, maxDamage: 60, projectile: { speed: 45, radiusM: 0.35, gravity: 0, rangeM: 30 } } },
       spring: { slot: "c", name: "Родник", cooldownS: 14, rangeM: 15, telegraphS: 0.4, radiusM: 4, heightM: 1.5, lifeS: 6, healPerS: 12, healPulseS: 0.25, slowMul: 0.7, slowAfterS: 0.5 },
       passive: { name: "Круговорот", wetS: 3, drainFrac: 0.2 },
+      tsunami: WATER.tsunami, // ульта фазы 5 закреплена в phase5.test.ts
     });
     expect(STEAM).toEqual({ radiusM: 2.5, heightM: 3, lifeS: 3, perArena: 4, everyS: 3 });
   });
 
   it("slot cooldowns: air 20/480/360/1080, water 24/480/540/840; telegraphs ≥ 0.4 s", () => {
-    expect(SLOTS.map((sl) => slotCooldownTicks("air", sl))).toEqual([20, 480, 360, 1080]);
-    expect(SLOTS.map((sl) => slotCooldownTicks("water", sl))).toEqual([24, 480, 540, 840]);
+    expect(SLOTS.map((sl) => slotCooldownTicks("air", sl))).toEqual([20, 480, 360, 1080, 0]);
+    expect(SLOTS.map((sl) => slotCooldownTicks("water", sl))).toEqual([24, 480, 540, 840, 0]);
     for (const s of [AIR.gust.windupS, AIR.tornado.growS, WATER.spring.telegraphS]) expect(s).toBeGreaterThanOrEqual(TELEGRAPH_MIN_S);
   });
 
@@ -95,7 +97,7 @@ describe("phase 4 contracts", () => {
     for (const e of ELEMENTS) {
       const m = mage(e).mage!;
       expect([m.charges, m.chargeAt, m.flight, m.ward, m.dash]).toEqual([
-        { primary: 0, q: 0, e: e === "air" ? 2 : 0, c: 0 }, { primary: NEVER, q: NEVER, e: NEVER, c: NEVER }, { doubleJumped: false, glideTicks: 0, gliding: false }, null, null,
+        { primary: 0, q: 0, e: e === "air" ? 2 : 0, c: 0, x: 0 }, { primary: NEVER, q: NEVER, e: NEVER, c: NEVER, x: NEVER }, { doubleJumped: false, glideTicks: 0, gliding: false }, null, null,
       ]);
       expect(m.charges).toEqual(SLOT_CHARGES[e]);
     }

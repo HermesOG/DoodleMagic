@@ -115,7 +115,7 @@ describe("inputQueue", () => {
     const got = takeInput(q, 0);
     // выброшены seq 0…6, взят seq 7 с чужими нажатиями
     expect(q.ack).toBe(7);
-    expect(got).toMatchObject({ yaw: 0.07, q: true, jump: true, primary: true, e: true, c: false });
+    expect(got).toMatchObject({ yaw: 0.07, q: true, jump: true, primary: true, e: true, c: false, x: false });
     expect(q.pending.map((p) => p.seq)).toEqual([8]);
     expect(takeInput(q, 0)).toMatchObject({ yaw: 0.08, q: false, jump: false });
     expect(q.ack).toBe(8);

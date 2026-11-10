@@ -10,6 +10,7 @@ import type { ElementSim, MoveHooks, ZoneStep } from "./hooks";
 import { castAim, castSlots, emitCast, refillCharges, spendCharge, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit, Zone } from "./types";
+import { startUlt } from "./ult";
 import { adoptZone, endZone, spawnZone } from "./zones";
 
 /**
@@ -272,7 +273,10 @@ function tornado(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRea
 }
 
 /** Слоты Воздуха для castSlots: он же держит буфер нажатий и пишет отказы. */
-const AIR_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: sickle, q: gust, e: swoop, c: tornado });
+const AIR_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
+  primary: sickle, q: gust, e: swoop, c: tornado,
+  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "hurricane"), // заглушка: действие — задача 3
+});
 
 export const AIR_KIT: Kit = Object.freeze({
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {

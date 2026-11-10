@@ -3,9 +3,11 @@ import { TICK_DT, type Vec3 } from "../types";
 import { aimGround } from "./aim";
 import { dashStarted, endDash, startDash, stepDash, type DashSpec } from "./dash";
 import { FIRE, slotCooldownTicks, ticks } from "./defs";
+import type { ElementSim } from "./hooks";
 import { castAim, castSlots, emitCast, snappedWallBox, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
+import { startUlt } from "./ult";
 import { spawnZone } from "./zones";
 
 /**
@@ -122,7 +124,10 @@ function fireWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRe
 }
 
 /** Слоты Огня для castSlots: он же держит буфер нажатий и пишет отказы. */
-const FIRE_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: fists, q: fireball, e: jetDash, c: fireWall });
+const FIRE_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
+  primary: fists, q: fireball, e: jetDash, c: fireWall,
+  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "dragonBreath"), // заглушка: действие — задача 2
+});
 
 export const FIRE_KIT: Kit = Object.freeze({
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {
@@ -150,3 +155,6 @@ export const FIRE_KIT: Kit = Object.freeze({
     if (m.dash) stepDash(s, t, u, inp, FIRE_DASH);
   },
 });
+
+/** Огонь «Напор» в реестре стихий: кит (зоны ульты добавит задача 2). */
+export const FIRE_SIM: ElementSim = Object.freeze({ kit: FIRE_KIT });

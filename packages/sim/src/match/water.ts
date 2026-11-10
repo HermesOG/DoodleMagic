@@ -11,6 +11,7 @@ import { spawnProjectile, sweepSegment } from "./projectiles";
 import { unitById } from "./state";
 import { damageTerrain } from "./terrain";
 import { NEVER, NOBODY, type Buttons, type MageState, type MatchInput, type MatchState, type RejectReason, type Slot, type TickCtx, type Unit } from "./types";
+import { startUlt } from "./ult";
 import { endZone, spawnZone, zoneTouches } from "./zones";
 
 /**
@@ -156,12 +157,15 @@ function dropWard(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
 }
 
 /** Слоты Воды для castSlots: он же держит буфер нажатий и пишет отказы. */
-const WATER_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: whip, q: grab, e: ward, c: spring });
+const WATER_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
+  primary: whip, q: grab, e: ward, c: spring,
+  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "tsunami"), // заглушка: действие — задача 3
+});
 /**
  * Q, E и C — раньше удержанной ЛКМ, как у Земли: замах хлыста, начатый первым, отложил бы Хват и Отражение («в беде
- * жми E»), нажатые ровно на тике, когда хлыст снова готов.
+ * жми E»), нажатые ровно на тике, когда хлыст снова готов. X — последней, как в SLOTS.
  */
-const WATER_ORDER: readonly Slot[] = Object.freeze(["q", "e", "c", "primary"]);
+const WATER_ORDER: readonly Slot[] = Object.freeze(["q", "e", "c", "primary", "x"]);
 
 export const WATER_KIT: Kit = Object.freeze({
   /**

@@ -3,10 +3,12 @@ import { forwardXZ, sanitizeInput } from "../player";
 import { groundBelow } from "../raycast";
 import { aimGround } from "./aim";
 import { EARTH, slotCooldownTicks, ticks } from "./defs";
+import type { ElementSim } from "./hooks";
 import { castAim, castSlots, emitCast, snappedWallBox, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
 import { spawnTerrain, type TerrainSpec } from "./terrain";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
+import { startUlt } from "./ult";
 import { spawnZone } from "./zones";
 
 /**
@@ -111,12 +113,15 @@ function earthquake(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): Reject
 }
 
 /** Слоты Земли для castSlots: он же держит буфер нажатий и пишет отказы. */
-const EARTH_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: stoneShot, q: stonePillar, e: stoneWall, c: earthquake });
+const EARTH_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
+  primary: stoneShot, q: stonePillar, e: stoneWall, c: earthquake,
+  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "tectonicRift"), // заглушка: действие — задача 2
+});
 /**
  * Q, E и C — раньше удержанной ЛКМ: у них нет замаха, а замах камня, начатый первым, отклонил бы Q и C, нажатые
- * ровно на тике, когда камень снова готов. Так оба каста выходят тем же тиком.
+ * ровно на тике, когда камень снова готов. Так оба каста выходят тем же тиком. X — последней, как в SLOTS.
  */
-const EARTH_ORDER: readonly Slot[] = Object.freeze(["q", "e", "c", "primary"]);
+const EARTH_ORDER: readonly Slot[] = Object.freeze(["q", "e", "c", "primary", "x"]);
 
 export const EARTH_KIT: Kit = Object.freeze({
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {
@@ -132,3 +137,6 @@ export const EARTH_KIT: Kit = Object.freeze({
     m.windup = null;
   },
 });
+
+/** Земля «Стойкость» в реестре стихий: кит (зоны ульты добавит задача 2). */
+export const EARTH_SIM: ElementSim = Object.freeze({ kit: EARTH_KIT });

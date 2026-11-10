@@ -24,7 +24,7 @@ const GAP = testContext([{ box: aabb(23.9, -1, -40, 40, 0, 40), tag: "floor" }])
 
 function tickOf(s: MatchState, ev: MatchEvent[], c: MatchContext = ctx): TickCtx {
   const tw = buildTickWorld(c.world, s);
-  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 };
+  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 };
 }
 
 type Log = { t: number; e: MatchEvent }[];

@@ -8,16 +8,20 @@ import type { World } from "../world";
 export type Element = "fire" | "earth" | "air" | "water";
 /** Порядок стихий: клавиши 1–4 (Р17 фазы 4). */
 export const ELEMENTS: readonly Element[] = ["fire", "earth", "air", "water"];
-/** ЛКМ — атака, Q — приём, E — спасение, C — поле или контроль (GDD 2.2). */
-export type Slot = "primary" | "q" | "e" | "c";
-export const SLOTS: readonly Slot[] = ["primary", "q", "e", "c"];
+/** ЛКМ — атака, Q — приём, E — спасение, C — поле или контроль, X — ульта (GDD 2.2). */
+export type Slot = "primary" | "q" | "e" | "c" | "x";
+export const SLOTS: readonly Slot[] = ["primary", "q", "e", "c", "x"];
 export const ABILITY_IDS = [
   "fireFists", "fireball", "jetDash", "fireWall",
   "stoneShot", "stonePillar", "stoneWall", "earthquake",
   "airSickle", "gust", "swoop", "tornado",
   "waterWhip", "waterGrab", "waterWard", "spring",
+  "dragonBreath", "tectonicRift", "hurricane", "tsunami",
 ] as const;
 export type AbilityId = (typeof ABILITY_IDS)[number];
+/** Ульты по стихиям в порядке ELEMENTS. */
+export const ULT_IDS = ["dragonBreath", "tectonicRift", "hurricane", "tsunami"] as const;
+export type UltId = (typeof ULT_IDS)[number];
 /** Чем нанесён урон: способностью или горением. */
 export type DamageSource = AbilityId | "burning";
 export type UnitId = number;
@@ -26,7 +30,7 @@ export const NOBODY: UnitId = -1;
 export const NEVER = -1_000_000;
 
 /** Ввод мага за тик: движение и взгляд фазы 1 плюс кнопки. Нажатие — переход false → true между тиками. */
-export interface MatchInput extends PlayerInput { primary: boolean; q: boolean; e: boolean; c: boolean }
+export interface MatchInput extends PlayerInput { primary: boolean; q: boolean; e: boolean; c: boolean; x: boolean }
 export type Buttons = Pick<MatchInput, Slot>;
 /** Отбрасывание из карточки, метры: вбок по ровному полу и вверх (GDD 2.2). */
 export interface Knockback { distM: number; upM: number }
@@ -63,6 +67,10 @@ export interface DashState { ability: AbilityId; dirX: number; dirZ: number; sta
 export interface FlightState { doubleJumped: boolean; glideTicks: number; gliding: boolean }
 /** Диск Отражения: до какого тика стоит и сколько урона впитал. */
 export interface WardState { endTick: number; absorbed: number }
+/** Идущая ульта: телеграф до releaseTick, действие до endTick (stepUlts снимает на endTick); zone — её зона или NOBODY. */
+export interface UltCast { ability: UltId; startTick: number; releaseTick: number; endTick: number; zone: number }
+/** Ульта (X, GDD 3): заряд 0…100 (дробный) и идущий каст. */
+export interface UltState { charge: number; cast: UltCast | null }
 
 export interface MageState {
   element: Element;
@@ -88,6 +96,8 @@ export interface MageState {
   flight: FlightState;
   /** Диск Отражения Воды; null — не стоит. */
   ward: WardState | null;
+  /** Ульта: заряд и идущий каст (ult.ts). Смерть заряд не сжигает, смена стихии — сжигает (Р2). */
+  ult: UltState;
   /** Где маг появился последним: в PvP — точка pickSpawn, на полигоне — своя. */
   spawn: Spawn;
   /** deaths — смерти от урона и падения, в том числе свои. */
@@ -117,6 +127,8 @@ export interface Unit {
   tow: Tow | null;
   /** Удар о стену, который ждёт в канале толчка. */
   slam: Slam | null;
+  /** Кто бил за последние 5 с (помощь, Р1): по одной записи на юнита, tick — последний удар. */
+  hitters: { unit: UnitId; tick: number }[];
 }
 
 /** Виды снарядов. Ответ Отражения — свой вид, засчитывается способности waterWard (PROJECTILE_SOURCE). */
@@ -125,7 +137,7 @@ export type ProjectileKind = (typeof PROJECTILE_KINDS)[number];
 /** После шага тика endTick − 1 снаряд исчезает (огненный шар — взрывается). power — урон попадания: по таблице вида, у Ответа — впитанное. */
 export interface Projectile { id: number; owner: UnitId; ability: ProjectileKind; pos: Vec3; vel: Vec3; bornTick: number; endTick: number; power: number }
 
-export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake" | "tornado" | "fireTornado" | "sandTornado" | "spring" | "steam" | "bog";
+export type ZoneKind = "fireWall" | "fireTrail" | "pillar" | "quake" | "tornado" | "fireTornado" | "sandTornado" | "spring" | "steam" | "bog" | "rift" | "tsunami";
 export type ZoneShape =
   | { type: "box"; box: AABB }
   | { type: "segment"; a: Vec3; b: Vec3; halfW: number }
@@ -153,7 +165,7 @@ export interface MatchState { tick: number; units: Unit[]; projectiles: Projecti
 
 export type ReactionKind = "steam" | "fireTornado" | "fireRampart" | "bog" | "boilOff" | "sandTornado";
 export type StatusKind = "burning" | "slow" | "root" | "airborne" | "wet";
-export type RejectReason = "cooldown" | "busy" | "notGrounded" | "noTarget" | "rooted";
+export type RejectReason = "cooldown" | "busy" | "notGrounded" | "noTarget" | "rooted" | "uncharged";
 
 export type MatchEvent =
   /** Нажатие принято: замах или мгновенный каст. pos — глаза, dir — прицел. */
@@ -192,7 +204,9 @@ export type MatchEvent =
   /** Лечение: amount — фактически прибавленное. */
   | { type: "heal"; target: UnitId; source: UnitId; amount: number; pos: Vec3 }
   /** Реакция стихий: облако пара, огненный смерч, «Огненный вал», «Топь» или «Выкипание»; zone — её зона. */
-  | { type: "reaction"; kind: ReactionKind; owner: UnitId; zone: number; pos: Vec3 };
+  | { type: "reaction"; kind: ReactionKind; owner: UnitId; zone: number; pos: Vec3 }
+  /** Ульта: ready — заряд дошёл до 100; release — конец телеграфа; end — каст снят (кончился или маг умер). */
+  | { type: "ult"; unit: UnitId; ability: UltId; phase: "ready" | "release" | "end"; pos: Vec3; dir: Vec3 };
 
 export interface MatchStep { state: MatchState; events: MatchEvent[] }
 
@@ -206,14 +220,17 @@ export interface MatchContext {
   readonly mageRespawnS?: number;
   /** Защита после появления, с. Нет поля — 0: защиты нет. */
   readonly spawnShieldS?: number;
+  /** Множитель заряда ульты (Р12): полигон 10, нет поля — 1. */
+  readonly ultChargeMul?: number;
 }
 
 /**
  * Что видит один тик: мир с рельефом на начало тика и куда писать события. Динамический коллайдер k
  * (номер colliders.length + k) — рельеф terrainIds[k], если k < terrainIds.length; дальше — стены огня и облака пара.
- * spawns, mageRespawnTicks и spawnShieldTicks stepMatch берёт из MatchContext (нет точек — null).
+ * spawns, mageRespawnTicks, spawnShieldTicks и ultChargeMul stepMatch берёт из MatchContext (нет точек — null, нет множителя — 1).
  */
 export interface TickCtx {
   readonly world: World; readonly terrainIds: readonly number[]; readonly killBelowY: number; readonly now: number; readonly ev: MatchEvent[];
   readonly spawns: readonly Spawn[] | null; readonly mageRespawnTicks: number; readonly spawnShieldTicks: number;
+  readonly ultChargeMul: number;
 }

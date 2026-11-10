@@ -9,7 +9,7 @@ import type { MatchContext, MatchEvent, MatchInput, MatchState, TickCtx, Unit, U
 import { moveUnits, stepLife } from "./units";
 
 const ctx = testContext();
-const tickOf = (s: MatchState): TickCtx => ({ world: ctx.world, terrainIds: [], killBelowY: ctx.killBelowY, now: s.tick, ev: [], spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 });
+const tickOf = (s: MatchState): TickCtx => ({ world: ctx.world, terrainIds: [], killBelowY: ctx.killBelowY, now: s.tick, ev: [], spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 });
 function step(s: MatchState, n: number, inputs: Partial<Record<UnitId, MatchInput>> = {}, each?: (s: MatchState) => void): void {
   for (let k = 0; k < n; k++) {
     const t = tickOf(s);
@@ -70,7 +70,7 @@ describe("dummies", () => {
 function stepIn(c: MatchContext, s: MatchState, n: number, each?: (s: MatchState) => void): MatchEvent[] {
   const ev: MatchEvent[] = [];
   for (let k = 0; k < n; k++) {
-    const t: TickCtx = { world: c.world, terrainIds: [], killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 };
+    const t: TickCtx = { world: c.world, terrainIds: [], killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 };
     moveUnits(s, t, {});
     stepStatuses(s, t);
     stepLife(s, t);

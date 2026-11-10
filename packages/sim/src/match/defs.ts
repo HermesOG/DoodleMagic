@@ -1,5 +1,5 @@
 import { TICK_HZ } from "../types";
-import type { AbilityId, Element, ProjectileKind, Slot } from "./types";
+import { ULT_IDS, type AbilityId, type DamageSource, type Element, type ProjectileKind, type Slot, type UltId } from "./types";
 
 /** Секунды → целые тики (60 Гц). */
 export const ticks = (s: number): number => Math.round(s * TICK_HZ);
@@ -24,6 +24,8 @@ export const FIRE = {
   // A6 фазы 4: скорость линейно (1 ± profile)·40 м/с, на выходе 9 м/с (было ровно 40 и 6,5)
   jetDash: { slot: "e", name: "Реактивный рывок", cooldownS: 8, distM: 8, durationS: 0.2, profile: 0.6, exitSpeed: 9, trailS: 2, trailDps: 6, trailHalfWidthM: 0.75 },
   fireWall: { slot: "c", name: "Стена огня", cooldownS: 12, rangeM: 15, lengthM: 10, heightM: 2.5, thickM: 0.6, lifeS: 5, telegraphS: 0.4, contactDamage: 30, rehitS: 1 }, // толщина и повтор — Р6
+  // Р6 фазы 5: вдох 0,6 с, поток 3 с конусом 12 м (полуугол 15°), 45 урона/с импульсами 7,5 раз в 10 тиков
+  dragonBreath: { slot: "x", name: "Дыхание дракона", windupS: 0.6, channelS: 3, rangeM: 12, halfAngleDeg: 15, pulseTicks: 10, pulseDamage: 7.5, runMul: 0.6 },
   passive: { name: "Кураж" },
 } as const;
 
@@ -47,6 +49,11 @@ export const EARTH = {
     slot: "c", name: "Землетрясение", cooldownS: 14, telegraphS: 0.4, radiusM: 7, heightM: 1.5, damage: 40,
     slowMul: 0.6, slowS: 2, rootRadiusM: 3, rootS: 0.5, knockback: { distM: 1, upM: 0 }, // высота — Р8; толчок — K2 фазы 4 (было 0,5)
   },
+  // Р7 фазы 5: линия 25 × 3 м по взгляду, удар в конце трещины 0,8 с, затем полоса шипов 6 с
+  tectonicRift: {
+    slot: "x", name: "Тектонический разлом", telegraphS: 0.8, startM: 1.5, lengthM: 25, halfWidthM: 1.5, belowM: 1.5, aboveM: 2,
+    damage: 100, knockback: { distM: 1, upM: 5 }, spikesS: 6, spikesHalfWidthM: 0.75, spikesDamage: 20, spikesKnock: { distM: 3, upM: 0 }, spikesRehitS: 1,
+  },
   passive: { name: "Корни", knockbackMul: 0.5 },
 } as const;
 
@@ -60,6 +67,8 @@ export const AIR = {
     slot: "c", name: "Смерч", cooldownS: 18, rangeM: 20, growS: 0.5, lifeS: 4, radiusM: 5, belowM: 0.5, aboveM: 4, pullSpeed: 2.5,
     pulseS: 0.5, pulseDamage: 4, firePulseDamage: 8, coreRadiusM: 1.5, coreLiftM: 3, ownerLiftM: 2, ownerLiftEveryS: 1, fireReachM: 3,
   },
+  // Р8 фазы 5: замах 0,8 с, удар по кругу 10 м; толчок 16 м у центра → ×0,5 на краю
+  hurricane: { slot: "x", name: "Ураган", windupS: 0.8, runMul: 0.5, radiusM: 10, halfHeightM: 4, damage: 60, knockback: { distM: 16, upM: 2 }, edgeKnockMul: 0.5, selfLiftM: 3, terrainDamage: 1000 },
   passive: { name: "Лёгкость", doubleJumpM: 1.25, glideFallSpeed: 2.5, glideAirControl: 1, glideS: 3 },
 } as const;
 
@@ -70,6 +79,8 @@ export const WATER = {
   waterGrab: { slot: "q", name: "Хват", cooldownS: 8, windupS: 0.25, damage: 25, projectile: { speed: 28, radiusM: 0.4, gravity: 0, rangeM: 15 }, towSpeed: 20, towMaxM: 7, towStopM: 1.5, safeStepM: 0.25, safeDropM: 3 },
   waterWard: { slot: "e", name: "Отражение", cooldownS: 9, durationS: 1, runMul: 0.7, padM: 0.5, answer: { name: "Ответ", minDamage: 20, maxDamage: 60, projectile: { speed: 45, radiusM: 0.35, gravity: 0, rangeM: 30 } } },
   spring: { slot: "c", name: "Родник", cooldownS: 14, rangeM: 15, telegraphS: 0.4, radiusM: 4, heightM: 1.5, lifeS: 6, healPerS: 12, healPulseS: 0.25, slowMul: 0.7, slowAfterS: 0.5 },
+  // Р9 фазы 5: волна 14 м поднимается 0,8 с в 2 м за магом и катится по взгляду 15 м/с на 30 м
+  tsunami: { slot: "x", name: "Цунами", growS: 0.8, backM: 2, widthM: 14, depthM: 2, belowM: 1, heightM: 2.5, speed: 15, travelM: 30, damage: 80, knockback: { distM: 10, upM: 1 } },
   passive: { name: "Круговорот", wetS: 3, drainFrac: 0.2 },
 } as const;
 
@@ -93,7 +104,15 @@ export const TELEGRAPH_MIN_S = 0.4;
 export const KNOCKBACK = {
   groundDecayPerS: 6, airDecayPerS: 1.5, maxSideM: 12, maxUpM: 6, juicePrimaryMaxM: 0.3, juiceAbilityMaxM: 1, stopSpeed: 0.05,
   staggerMinM: 1, staggerS: 0.2, staggerAccelMul: 0.3, slamMinSpeed: 6, flightProbeM: 30,
+  /** Р4 фазы 5: пределы толчка ульт ×1,5 — вбок 18 м, вверх 9 м (GDD 2.2). */
+  ultCapMul: 1.5,
 } as const;
+/**
+ * Заряд ульты (GDD 3, Р1 фазы 5): max очков; источнику 1 за каждые dealtPer нанесённого урона, цели 1 за каждые
+ * takenPer полученного; +kill за убийство или засчитанный сброс, +assist каждому, кто бил жертву за assistS секунд;
+ * +1 живому магу каждые passiveEveryS секунд.
+ */
+export const ULT_CHARGE = { max: 100, dealtPer: 15, takenPer: 30, kill: 6, assist: 3, passiveEveryS: 6, assistS: 5 } as const;
 /** Облако пара (Р9 фазы 4): диск 2,5 м высотой 3 м на 3 с, не больше 4 на арену, с одной цели — раз в 3 с. */
 export const STEAM = { radiusM: 2.5, heightM: 3, lifeS: 3, perArena: 4, everyS: 3 } as const;
 /**
@@ -130,17 +149,39 @@ export const PRESS_BUFFER_S = 0.3;
 export const LIMITS = { projectilesPerMage: 8, projectilesTotal: 48, zonesPerMage: 3, zonesTotal: 16, terrainPerMage: 3, terrainTotal: 24 } as const;
 
 export const ABILITY_OF: Readonly<Record<Element, Readonly<Record<Slot, AbilityId>>>> = {
-  fire: { primary: "fireFists", q: "fireball", e: "jetDash", c: "fireWall" },
-  earth: { primary: "stoneShot", q: "stonePillar", e: "stoneWall", c: "earthquake" },
-  air: { primary: "airSickle", q: "gust", e: "swoop", c: "tornado" },
-  water: { primary: "waterWhip", q: "waterGrab", e: "waterWard", c: "spring" },
+  fire: { primary: "fireFists", q: "fireball", e: "jetDash", c: "fireWall", x: "dragonBreath" },
+  earth: { primary: "stoneShot", q: "stonePillar", e: "stoneWall", c: "earthquake", x: "tectonicRift" },
+  air: { primary: "airSickle", q: "gust", e: "swoop", c: "tornado", x: "hurricane" },
+  water: { primary: "waterWhip", q: "waterGrab", e: "waterWard", c: "spring", x: "tsunami" },
 };
 export const ABILITY_NAME: Readonly<Record<AbilityId, string>> = {
   fireFists: FIRE.fireFists.name, fireball: FIRE.fireball.name, jetDash: FIRE.jetDash.name, fireWall: FIRE.fireWall.name,
   stoneShot: EARTH.stoneShot.name, stonePillar: EARTH.stonePillar.name, stoneWall: EARTH.stoneWall.name, earthquake: EARTH.earthquake.name,
   airSickle: AIR.airSickle.name, gust: AIR.gust.name, swoop: AIR.swoop.name, tornado: AIR.tornado.name,
   waterWhip: WATER.waterWhip.name, waterGrab: WATER.waterGrab.name, waterWard: WATER.waterWard.name, spring: WATER.spring.name,
+  dragonBreath: FIRE.dragonBreath.name, tectonicRift: EARTH.tectonicRift.name, hurricane: AIR.hurricane.name, tsunami: WATER.tsunami.name,
 };
+/** Способность — ульта (порог толчка ×1,5, свой урон не копит заряд). "burning" — нет. */
+export function isUlt(a: DamageSource): a is UltId {
+  return (ULT_IDS as readonly string[]).includes(a);
+}
+/** Как ульта двигает своего мага: бег ×runMul и без прыжка, до releaseTick ("release") или до конца каста ("end"). */
+export const ULT_MOVE: Readonly<Record<UltId, { runMul: number; noJump: boolean; until: "release" | "end" }>> = Object.freeze({
+  dragonBreath: Object.freeze({ runMul: FIRE.dragonBreath.runMul, noJump: true, until: "end" as const }),
+  tectonicRift: Object.freeze({ runMul: 1, noJump: false, until: "release" as const }),
+  hurricane: Object.freeze({ runMul: AIR.hurricane.runMul, noJump: true, until: "release" as const }),
+  tsunami: Object.freeze({ runMul: 1, noJump: false, until: "release" as const }),
+});
+/**
+ * Тайминг каста в тиках: телеграф и сколько длится после него (ult.cast.endTick = now + windup + active).
+ * Зоны Разлома и Цунами живут дольше каста: у них действие — один тик выпуска. 36 / 180, 48 / 1 ×3.
+ */
+export const ULT_TIMING: Readonly<Record<UltId, { windupTicks: number; activeTicks: number }>> = Object.freeze({
+  dragonBreath: Object.freeze({ windupTicks: ticks(FIRE.dragonBreath.windupS), activeTicks: ticks(FIRE.dragonBreath.channelS) }),
+  tectonicRift: Object.freeze({ windupTicks: ticks(EARTH.tectonicRift.telegraphS), activeTicks: 1 }),
+  hurricane: Object.freeze({ windupTicks: ticks(AIR.hurricane.windupS), activeTicks: 1 }),
+  tsunami: Object.freeze({ windupTicks: ticks(WATER.tsunami.growS), activeTicks: 1 }),
+});
 /** Стихия способности (по ABILITY_OF). */
 export const ELEMENT_OF: Readonly<Record<AbilityId, Element>> = Object.freeze(
   Object.fromEntries((Object.keys(ABILITY_OF) as Element[]).flatMap((e) => Object.values(ABILITY_OF[e]).map((a) => [a, e]))) as Record<AbilityId, Element>,
@@ -149,12 +190,12 @@ export const ELEMENT_OF: Readonly<Record<AbilityId, Element>> = Object.freeze(
 export const PROJECTILE_SOURCE: Readonly<Record<ProjectileKind, AbilityId>> = Object.freeze({
   fireFists: "fireFists", fireball: "fireball", stoneShot: "stoneShot", airSickle: "airSickle", waterGrab: "waterGrab", waterAnswer: "waterWard",
 });
-/** Заряды слотов на старте мага: у всех 0, у Воздуха e — AIR.swoop.charges. */
+/** Заряды слотов на старте мага: у всех 0, у Воздуха e — AIR.swoop.charges. X ждёт не заряды слота, а заряд ульты. */
 export const SLOT_CHARGES: Readonly<Record<Element, Readonly<Record<Slot, number>>>> = Object.freeze({
-  fire: Object.freeze({ primary: 0, q: 0, e: 0, c: 0 }),
-  earth: Object.freeze({ primary: 0, q: 0, e: 0, c: 0 }),
-  air: Object.freeze({ primary: 0, q: 0, e: AIR.swoop.charges, c: 0 }),
-  water: Object.freeze({ primary: 0, q: 0, e: 0, c: 0 }),
+  fire: Object.freeze({ primary: 0, q: 0, e: 0, c: 0, x: 0 }),
+  earth: Object.freeze({ primary: 0, q: 0, e: 0, c: 0, x: 0 }),
+  air: Object.freeze({ primary: 0, q: 0, e: AIR.swoop.charges, c: 0, x: 0 }),
+  water: Object.freeze({ primary: 0, q: 0, e: 0, c: 0, x: 0 }),
 });
 /** Экран выбора (GDD 4.1). */
 export const ELEMENT_INFO: Readonly<Record<Element, { name: string; title: string; motto: string; stars: string; hp: number; runSpeed: number; ult: string }>> = {
@@ -174,10 +215,11 @@ const CARDS = {
 
 /**
  * Полная перезарядка слота в тиках; у ЛКМ — интервал между выстрелами без перегрева; у слота с зарядами (Взмах) —
- * время одного заряда. air: 20, 480, 360, 1080; water: 24, 480, 540, 840.
+ * время одного заряда. air: 20, 480, 360, 1080; water: 24, 480, 540, 840. У X перезарядки нет (0): он ждёт заряд ульты.
  */
 export function slotCooldownTicks(element: Element, slot: Slot): number {
   const c = CARDS[element];
+  if (slot === "x") return 0;
   if (slot === "primary") return ticks(1 / c.primary.ratePerS);
   const card: { cooldownS: number } | { chargeS: number } = c[slot];
   return ticks("chargeS" in card ? card.chargeS : card.cooldownS);

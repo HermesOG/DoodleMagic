@@ -7,4 +7,5 @@ export * from "./dynamic";
 export * from "./terrain";
 export * from "./hooks";
 export * from "./dash";
+export * from "./ult";
 export { flightTime, isAnchored, knockbackSpeed, knockbackSpeedFor, pullMul } from "./combat";

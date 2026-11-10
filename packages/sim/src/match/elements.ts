@@ -1,17 +1,17 @@
 import { AIR_SIM } from "./air";
-import { EARTH_KIT } from "./earth";
-import { FIRE_KIT } from "./fire";
+import { EARTH_SIM } from "./earth";
+import { FIRE_SIM } from "./fire";
 import { mergeHooks, type ElementSim, type SimHooks } from "./hooks";
 import type { Element } from "./types";
 import { WATER_SIM } from "./water";
 
 /**
- * Реестр стихий sim. Его импортирует только match.ts: air.ts и water.ts не импортируют match.ts, циклов нет.
- * У Огня и Земли только кит: их зоны и снаряды шагает общий код.
+ * Реестр стихий sim. Его импортирует только match.ts: стихии не импортируют match.ts, циклов нет.
+ * Зоны и снаряды Огня и Земли фаз 2–4 шагает общий код; свои шаги (зоны ульт) они добавят в FIRE_SIM и EARTH_SIM.
  */
 export const ELEMENT_SIM: Readonly<Record<Element, ElementSim>> = Object.freeze({
-  fire: Object.freeze({ kit: FIRE_KIT }),
-  earth: Object.freeze({ kit: EARTH_KIT }),
+  fire: FIRE_SIM,
+  earth: EARTH_SIM,
   air: AIR_SIM,
   water: WATER_SIM,
 });

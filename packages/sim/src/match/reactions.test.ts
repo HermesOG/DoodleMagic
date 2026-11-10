@@ -21,7 +21,7 @@ const spot = (x: number, z: number, yaw = 0): Spawn => ({ pos: { x, y: 0, z }, y
 
 function tickOf(s: MatchState, ev: MatchEvent[], c: MatchContext = ctx): TickCtx {
   const tw = buildTickWorld(c.world, s);
-  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 };
+  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 };
 }
 
 type Log = { t: number; e: MatchEvent }[];

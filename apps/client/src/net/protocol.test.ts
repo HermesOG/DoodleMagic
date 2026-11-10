@@ -192,14 +192,14 @@ describe("parseClientMsg: rejected", () => {
     expect(parseClientMsg(inMsg([packed({ 0: 2 ** 60 })]))).toBeNull();
   });
 
-  it("rejects buttons outside 0…31 or fractional", () => {
-    expect(parseClientMsg(inMsg([packed({ 5: 32 })]))).toBeNull();
+  it("rejects buttons outside 0…63 or fractional", () => {
+    expect(parseClientMsg(inMsg([packed({ 5: 64 })]))).toBeNull();
     expect(parseClientMsg(inMsg([packed({ 5: -1 })]))).toBeNull();
     expect(parseClientMsg(inMsg([packed({ 5: 1.5 })]))).toBeNull();
   });
 
   it("rejects a bad packet even if the other inputs are fine", () => {
-    expect(parseClientMsg(inMsg([packed(), packed({ 5: 32 }), packed()]))).toBeNull();
+    expect(parseClientMsg(inMsg([packed(), packed({ 5: 64 }), packed()]))).toBeNull();
   });
 
   it("rejects a join with an unknown element, a non-finite version or no element", () => {

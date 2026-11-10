@@ -4,10 +4,11 @@ import { groundBelow } from "../raycast";
 import { TICK_DT, type MoveParams, type PlayerInput, type Spawn } from "../types";
 import { volumeAt, type World } from "../world";
 import { applyHit, courage, endTow, respawnAt } from "./combat";
-import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ticks } from "./defs";
+import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ULT_MOVE, ticks } from "./defs";
 import { NO_HOOKS, type SimHooks } from "./hooks";
 import { createDummyUnit, createMageUnit, idleInput, rightXZ, unitById } from "./state";
 import { NOBODY, type Element, type MatchInput, type MatchState, type TickCtx, type Unit, type UnitId } from "./types";
+import { ultOnKill } from "./ult";
 
 /**
  * Юниты: движение по вводу и ИИ манекенов, канал отбрасывания, сброс в пропасть и возрождение.
@@ -134,6 +135,7 @@ function dummyInput(world: World, u: Unit): PlayerInput {
 /**
  * Шаг движения живых юнитов; маги в рывке пропускаются (их ведёт кит), юнит на буксире идёт stepTow. Обездвиживание и
  * «В воздухе» отнимают шаги и прыжок, но не взгляд. Маг без ввода на этом тике стоит и смотрит, куда смотрел.
+ * Своя ульта (ULT_MOVE, до releaseTick или endTick каста) режет бег ×runMul и снимает прыжок из ввода.
  * Порядок у мага: хуки стихии before → params → stepPlayer → after → канал толчка (moveKnock).
  * Манекен, который шагает, но второй тик подряд стоит на месте (до шага и после него скорость по XZ ≈ 0), упёрся в
  * стену или рельеф: он разворачивается. На обычном развороте патруля скорость проходит через 0 только на одном тике.
@@ -150,6 +152,14 @@ export function moveUnits(s: MatchState, t: TickCtx, inputs: Readonly<Partial<Re
     let p: MoveParams = u.mage ? mageMoveParams(u.mage.element) : DUMMY_MOVE;
     if (t.now < st.rootUntil || t.now < st.noControlUntil) inp = { ...inp, moveX: 0, moveZ: 0, jump: false }; // взгляд не отнимаем (GDD 2.2)
     if (t.now < st.slowUntil) p = { ...p, runSpeed: p.runSpeed * st.slowMul };
+    const uc = u.mage?.ult.cast ?? null;
+    if (uc) {
+      const um = ULT_MOVE[uc.ability];
+      if (t.now < (um.until === "release" ? uc.releaseTick : uc.endTick)) {
+        if (um.runMul !== 1) p = { ...p, runSpeed: p.runSpeed * um.runMul };
+        if (um.noJump) inp = { ...inp, jump: false };
+      }
+    }
     // K1: после толчка ≥ 1 м своё ускорение ×0,3 (и в воздухе: там оно — доля наземного); торможение без ввода прежнее
     if (t.now < st.staggerUntil) p = { ...p, groundAccel: p.groundAccel * KNOCKBACK.staggerAccelMul };
     const h = u.mage ? hooks.move[u.mage.element] : undefined;
@@ -191,8 +201,8 @@ export function pickSpawn(s: Readonly<MatchState>, id: UnitId, spawns: readonly 
 }
 
 /**
- * Свежий юнит; маг сохраняет счёт и перезарядки. Маг встаёт на pickSpawn, если в тике есть точки PvP (иначе — на свою
- * mage.spawn), и получает защиту на t.spawnShieldTicks.
+ * Свежий юнит; маг сохраняет счёт, перезарядки и заряд ульты (каст к этому времени уже снят; Р2 фазы 5), hitters — [].
+ * Маг встаёт на pickSpawn, если в тике есть точки PvP (иначе — на свою mage.spawn), и получает защиту на t.spawnShieldTicks.
  */
 function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
   if (!u.mage) return createDummyUnit(u.id, u.dummy!.spot);
@@ -202,6 +212,7 @@ function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
   fresh.mage!.ready = { ...u.mage.ready };
   fresh.mage!.charges = { ...u.mage.charges };
   fresh.mage!.chargeAt = { ...u.mage.chargeAt };
+  fresh.mage!.ult = { charge: u.mage.ult.charge, cast: null };
   // маг встаёт в конце тика now: защита на полные spawnShieldTicks тиков, как у addMage и старта боя
   if (t.spawnShieldTicks > 0) fresh.status.shieldUntil = t.now + 1 + t.spawnShieldTicks;
   return fresh;
@@ -209,7 +220,8 @@ function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
 
 /**
  * Сброс: живой в зоне смерти или ниже killBelowY выбывает (маг +1 deaths, и когда упал сам); сброс засчитывается
- * последнему ударившему за 5 с (Р13), засчитанному магу — falls и «Кураж». Возрождение: на respawnTick юнит
+ * последнему ударившему за 5 с (Р13), засчитанному магу — falls и «Кураж»; засчитанный сброс даёт заряд ульты, как
+ * убийство (+6 и помощь, Р1 фазы 5). Возрождение: на respawnTick юнит
  * заменяется свежим (respawned) — по текущему состоянию: маги, вставшие раньше в этом тике, уже стоят на своих точках.
  */
 export function stepLife(s: MatchState, t: TickCtx): void {
@@ -232,6 +244,7 @@ export function stepLife(s: MatchState, t: TickCtx): void {
         c.mage.stats.falls += 1;
         courage(t, c);
       }
+      if (credit !== NOBODY) ultOnKill(s, t, u, credit);
     } else if (now >= u.respawnTick) {
       const fresh = respawned(s, t, u);
       s.units[i] = fresh;

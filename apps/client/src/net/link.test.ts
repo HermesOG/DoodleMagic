@@ -257,7 +257,7 @@ describe("openHostLink", () => {
 
   it("opens the room under the game peer id and keeps the signalling alive", async () => {
     await openHostLink("ABCD", handlers);
-    expect(p2p.openPeer).toHaveBeenCalledWith("doodlemagic-g2-abcd-host");
+    expect(p2p.openPeer).toHaveBeenCalledWith("doodlemagic-g3-abcd-host");
     expect(p2p.keepSignalling).toHaveBeenCalledWith(peer);
   });
 
@@ -466,7 +466,7 @@ describe("openJoinLink", () => {
     await join();
     expect(p2p.openPeer).toHaveBeenCalledWith(null);
     expect(p2p.keepSignalling).toHaveBeenCalledWith(peer);
-    expect(peer.connects).toEqual([{ id: "doodlemagic-g2-abcd-host", options: p2p.CONN_OPTIONS }]);
+    expect(peer.connects).toEqual([{ id: "doodlemagic-g3-abcd-host", options: p2p.CONN_OPTIONS }]);
   });
 
   it("rejects when the signalling is unavailable", async () => {

@@ -52,8 +52,8 @@ describe("match state", () => {
   const dummy = createDummyUnit(2, { pos: { x: -3, y: 0, z: 0 }, yaw: 0, patrolHalfM: 2 });
 
   it("creates plain-data units with full HP that survive JSON", () => {
-    expect([mage.hp, mage.maxHp, dummy.hp, mage.mage?.ready]).toEqual([170, 170, 170, { primary: 0, q: 0, e: 0, c: 0 }]);
-    expect(mage.mage?.pending).toEqual({ primary: NEVER, q: NEVER, e: NEVER, c: NEVER });
+    expect([mage.hp, mage.maxHp, dummy.hp, mage.mage?.ready]).toEqual([170, 170, 170, { primary: 0, q: 0, e: 0, c: 0, x: 0 }]);
+    expect(mage.mage?.pending).toEqual({ primary: NEVER, q: NEVER, e: NEVER, c: NEVER, x: NEVER });
     const s = createMatchState([mage, dummy]);
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
     expect([unitById(s, 2), unitById(s, 9)]).toEqual([s.units[1], undefined]);

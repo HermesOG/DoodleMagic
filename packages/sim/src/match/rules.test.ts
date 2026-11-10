@@ -20,7 +20,7 @@ const SPAWNS: Spawn[] = [
 const ctx: MatchContext = { ...testContext(), spawns: SPAWNS, mageRespawnS: PVP.respawnS, spawnShieldS: PVP.shieldS };
 /** Тик PvP для прямых вызовов боя (как его соберёт stepMatch из ctx). */
 const tickOf = (s: MatchState, ev: MatchEvent[]): TickCtx => ({
-  world: ctx.world, terrainIds: [], killBelowY: ctx.killBelowY, now: s.tick, ev, spawns: SPAWNS, mageRespawnTicks: ticks(PVP.respawnS), spawnShieldTicks: ticks(PVP.shieldS),
+  world: ctx.world, terrainIds: [], killBelowY: ctx.killBelowY, now: s.tick, ev, spawns: SPAWNS, mageRespawnTicks: ticks(PVP.respawnS), spawnShieldTicks: ticks(PVP.shieldS), ultChargeMul: 1,
 });
 const mageAt = (id: UnitId, el: Element, x: number, z: number, yaw = 0): Unit => createMageUnit(id, el, { pos: { x, y: 0, z }, yaw });
 const byId = (s: MatchState, id: UnitId): Unit => s.units.find((u) => u.id === id)!;
@@ -354,8 +354,8 @@ describe("setElement", () => {
   it("a dead mage switching element drops the old element's cooldowns; the same element changes nothing", () => {
     const g = gameWith("fire", "earth");
     Object.assign(mageOf(g, 1), { alive: false, hp: 0, respawnTick: g.match.tick + 5 });
-    mageOf(g, 1).mage!.ready = { primary: 50, q: 400, e: 400, c: 600 };
-    expect(mageOf(setElement(g, 1, "earth", ctx), 1).mage!.ready).toEqual({ primary: 0, q: 0, e: 0, c: 0 });
+    mageOf(g, 1).mage!.ready = { primary: 50, q: 400, e: 400, c: 600, x: 0 };
+    expect(mageOf(setElement(g, 1, "earth", ctx), 1).mage!.ready).toEqual({ primary: 0, q: 0, e: 0, c: 0, x: 0 });
     expect(setElement(g, 1, "fire", ctx)).toEqual(g);
     const alive = gameWith("fire", "earth");
     expect(setElement(alive, 1, "fire", ctx)).toEqual(alive);

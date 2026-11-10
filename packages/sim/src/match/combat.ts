@@ -1,9 +1,10 @@
 import { DEFAULT_MOVE } from "../player";
 import { groundBelow } from "../raycast";
 import { TICK_HZ, type Vec3 } from "../types";
-import { CC_LIMITS, DUMMY, EARTH, ELEMENT_OF, KNOCKBACK, MAGE_REGEN, STATUS, STEAM, WATER, ticks } from "./defs";
+import { CC_LIMITS, DUMMY, EARTH, ELEMENT_OF, KNOCKBACK, MAGE_REGEN, STATUS, STEAM, WATER, isUlt, ticks } from "./defs";
 import { unitById } from "./state";
 import { spawnSteam } from "./steam";
+import { ultOnDamage, ultOnKill } from "./ult";
 import { NOBODY, type AbilityId, type DamageSource, type Knockback, type MatchState, type StatusKind, type TickCtx, type Unit, type UnitId } from "./types";
 
 /**
@@ -104,9 +105,9 @@ function flightOf(t: TickCtx, u: Unit, k: Knockback, grounded: boolean): number 
  * Толчок v2 (Р1 фазы 4). Подброс — как прыжок, точной высоты upM; подброшенный манекен теряет свою скорость шага
  * (в воздухе его несёт только канал kb, а не 2 м/с патруля). K1: толчок ≥ 1 м гасит у жертвы её скорость к источнику
  * и на 0,2 с режет её ускорение (staggerUntil; не контроль, иммунитета нет). Канал: v₀ по фактическому времени полёта
- * цели до опоры, потолок 12 м.
+ * цели до опоры, потолок 12 м (у ульт — ×capMul, Р4 фазы 5).
  */
-function push(u: Unit, t: TickCtx, dir: { x: number; z: number }, k: Knockback): void {
+function push(u: Unit, t: TickCtx, dir: { x: number; z: number }, k: Knockback, capMul = 1): void {
   const vel = u.move.body.vel;
   const grounded = u.move.onGround;
   if (k.upM > 0) {
@@ -126,7 +127,8 @@ function push(u: Unit, t: TickCtx, dir: { x: number; z: number }, k: Knockback):
   u.kb.x += dir.x * v0;
   u.kb.z += dir.z * v0;
   const sp = Math.sqrt(u.kb.x * u.kb.x + u.kb.z * u.kb.z);
-  if (sp > KB_CAP) Object.assign(u.kb, { x: (u.kb.x * KB_CAP) / sp, z: (u.kb.z * KB_CAP) / sp });
+  const cap = KB_CAP * capMul;
+  if (sp > cap) Object.assign(u.kb, { x: (u.kb.x * cap) / sp, z: (u.kb.z * cap) / sp });
 }
 
 /** Пар с цели u (Р9): не чаще раза в 3 с на цель; облако в точке её подошвы, хозяин — owner. */
@@ -140,8 +142,9 @@ function steam(s: MatchState, t: TickCtx, u: Unit, owner: UnitId, ability: Abili
  * Наносит удар. Возвращает нанесённый урон: 0, если цель — сам источник, мертва, её нет или она под защитой после
  * появления (тогда ни урона, ни толчка, ни статусов, ни события hit).
  * Порядок: урон (+15 % по цели «В воздухе» от прежнего подброса) → отбрасывание (не под якорем; ×0,5 у мага Земли,
- * в иммунитете вбок ×1, вверх ×0,5; потолок 12 / 6 м) и удар о стену в канале → HP и засчитывание → событие hit →
- * подброс, обездвиживание, замедление → «Мокрый», Горение и пар (Р9) → буксир → «Круговорот» → смерть (цели +1 deaths).
+ * в иммунитете вбок ×1, вверх ×0,5; потолок 12 / 6 м, у ульт ×1,5 — 18 / 9 м) и удар о стену в канале → HP
+ * и засчитывание → событие hit → заряд ульты → подброс, обездвиживание, замедление → «Мокрый», Горение и пар (Р9) →
+ * буксир → «Круговорот» → смерть (цели +1 deaths, заряд за убийство и помощь).
  */
 export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
   if (h.source === h.target) return 0;
@@ -162,9 +165,10 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     const immune = now < st.immuneUntil;
     const sideMul = rootsMul(u) * (immune ? STATUS.immuneKnockSideMul : 1);
     const upMul = rootsMul(u) * (immune ? STATUS.immuneKnockUpMul : 1);
-    knock.distM = Math.min(KNOCKBACK.maxSideM, h.knock.distM * sideMul);
-    knock.upM = Math.min(KNOCKBACK.maxUpM, h.knock.upM * upMul);
-    push(u, t, h.dir, knock);
+    const capMul = isUlt(h.ability) ? KNOCKBACK.ultCapMul : 1; // Р4 фазы 5
+    knock.distM = Math.min(KNOCKBACK.maxSideM * capMul, h.knock.distM * sideMul);
+    knock.upM = Math.min(KNOCKBACK.maxUpM * capMul, h.knock.upM * upMul);
+    push(u, t, h.dir, knock, capMul);
     // Удар о стену ждёт свой толчок: «сок» ЛКМ (< 1 м) его не стирает, новый толчок ≥ 1 м или свой slam — заменяет.
     if (knock.distM > 0 && (h.slam !== undefined || knock.distM >= KNOCKBACK.staggerMinM)) {
       u.slam = h.slam !== undefined && h.slam > 0 && h.ability !== "burning" ? { by: h.source, ability: h.ability, damage: h.slam } : null;
@@ -181,6 +185,7 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     type: "hit", source: h.source, target: u.id, ability: h.ability, amount, pos: { x: h.pos.x, y: h.pos.y, z: h.pos.z },
     dir: { x: h.dir.x, y: 0, z: h.dir.z }, knock, airborne: air, dot: h.dot === true, killed,
   });
+  ultOnDamage(t, src, u, h.ability, amount);
 
   const status = (kind: StatusKind, n: number) => t.ev.push({ type: "status", target: u.id, status: kind, ticks: n, source: h.source });
   if (h.launch && !anchored && now >= st.immuneUntil) {
@@ -257,6 +262,7 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
       src.mage.stats.kills += 1;
       courage(t, src);
     }
+    ultOnKill(s, t, u, h.source);
   }
   return amount;
 }

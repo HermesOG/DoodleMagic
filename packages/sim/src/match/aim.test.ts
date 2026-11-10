@@ -11,7 +11,7 @@ import { moveUnits } from "./units";
 const ctx = testContext();
 function tickOf(s: MatchState, c: MatchContext, ev: MatchEvent[]): TickCtx {
   const tw = buildTickWorld(c.world, s);
-  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 };
+  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 };
 }
 const mage = () => createMageUnit(1, "fire", { pos: { x: 0, y: 0, z: 0 }, yaw: 0 });
 const dummy = (id: number, x: number, z: number) => createDummyUnit(id, { pos: { x, y: 0, z }, yaw: 0 });

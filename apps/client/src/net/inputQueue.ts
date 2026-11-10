@@ -7,7 +7,7 @@ export const STALE_INPUT_MS = 250;
 export const MAX_BACKLOG = 6;
 export const TRIM_TO = 2;
 export const MAX_PENDING = 64;
-const BUTTONS = ["jump", "primary", "q", "e", "c"] as const;
+const BUTTONS = ["jump", "primary", "q", "e", "c", "x"] as const;
 
 /** Очередь ввода одного игрока у хоста. ack — номер последнего применённого ввода (−1 — ни одного). */
 export interface InputQueue { ack: number; last: MatchInput | null; lastAt: number; pending: SeqInput[] }

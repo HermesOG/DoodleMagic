@@ -51,7 +51,7 @@ function play(n: number, input: (k: number, s: MatchState) => Partial<MatchInput
 /** Мир тика, как у stepMatch: для ударов и зон между шагами. */
 function tickOf(s: MatchState, ev: MatchEvent[] = [], c: MatchContext = ctx): TickCtx {
   const tw = buildTickWorld(c.world, s);
-  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0 };
+  return { world: tw.world, terrainIds: tw.terrainIds, killBelowY: c.killBelowY, now: s.tick, ev, spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 };
 }
 const of = <K extends MatchEvent["type"]>(log: Log, type: K) =>
   log.flatMap(({ t, e }) => (e.type === type ? [{ t, e: e as Extract<MatchEvent, { type: K }> }] : []));

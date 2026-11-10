@@ -1,15 +1,18 @@
 import { ELEMENTS, type Element, type MatchInput, type UnitId } from "@doodlemagic/sim";
 
-/** Версия сетевого протокола игры: хост и игрок разных версий вместе не играют. 2 — фаза 4: четыре стихии, прыжок в looks. */
-export const NET_VERSION = 2;
+/**
+ * Версия сетевого протокола игры: хост и игрок разных версий вместе не играют. 2 — фаза 4: четыре стихии, прыжок
+ * в looks; 3 — фаза 5: ульта на X (бит 32), заряд и каст ульты в снапшоте.
+ */
+export const NET_VERSION = 3;
 export const NAME_MAX = 16;
 /** Предел текстового сообщения игрока, знаков. */
 export const MAX_TEXT_CHARS = 4096;
 /** Сколько последних вводов несёт пакет игрока: пропавший пакет покрывают следующие. */
 export const INPUTS_PER_PACKET = 3;
 export const MAX_INPUTS_PER_PACKET = 8;
-export const BIT = { jump: 1, primary: 2, q: 4, e: 8, c: 16 } as const;
-const BUTTONS_MAX = 31;
+export const BIT = { jump: 1, primary: 2, q: 4, e: 8, c: 16, x: 32 } as const;
+const BUTTONS_MAX = 63;
 const RTT_MAX_MS = 10_000;
 const ROOM_MAX_CHARS = 8;
 const FALLBACK_NAME = "Маг";
@@ -31,7 +34,8 @@ export type HostText =
   | { t: "pong"; ct: number };
 
 export function packInput(seq: number, inp: MatchInput): PackedInput {
-  const buttons = (inp.jump ? BIT.jump : 0) | (inp.primary ? BIT.primary : 0) | (inp.q ? BIT.q : 0) | (inp.e ? BIT.e : 0) | (inp.c ? BIT.c : 0);
+  const buttons =
+    (inp.jump ? BIT.jump : 0) | (inp.primary ? BIT.primary : 0) | (inp.q ? BIT.q : 0) | (inp.e ? BIT.e : 0) | (inp.c ? BIT.c : 0) | (inp.x ? BIT.x : 0);
   return [seq, inp.moveX, inp.moveZ, inp.yaw, inp.pitch, buttons];
 }
 
@@ -39,7 +43,7 @@ export function unpackInput(p: PackedInput): MatchInput {
   const b = p[5];
   return {
     moveX: p[1], moveZ: p[2], yaw: p[3], pitch: p[4],
-    jump: (b & BIT.jump) !== 0, primary: (b & BIT.primary) !== 0, q: (b & BIT.q) !== 0, e: (b & BIT.e) !== 0, c: (b & BIT.c) !== 0,
+    jump: (b & BIT.jump) !== 0, primary: (b & BIT.primary) !== 0, q: (b & BIT.q) !== 0, e: (b & BIT.e) !== 0, c: (b & BIT.c) !== 0, x: (b & BIT.x) !== 0,
   };
 }
 
@@ -84,7 +88,7 @@ function parseObject(raw: unknown): Record<string, unknown> | null {
   return parsed as Record<string, unknown>;
 }
 
-/** Один ввод пакета: ровно 6 конечных чисел, seq — целое ≥ 0, кнопки — целое 0…31; движение зажимается в [−1, 1]. */
+/** Один ввод пакета: ровно 6 конечных чисел, seq — целое ≥ 0, кнопки — целое 0…63; движение зажимается в [−1, 1]. */
 function parsePacked(raw: unknown): SeqInput | null {
   if (!Array.isArray(raw) || raw.length !== 6 || !raw.every(isFiniteNumber)) return null;
   const [seq, moveX, moveZ, yaw, pitch, buttons] = raw as PackedInput;

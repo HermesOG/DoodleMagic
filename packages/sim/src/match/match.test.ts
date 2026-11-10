@@ -40,7 +40,7 @@ describe("match", () => {
     }
     const u = s.units[0]!;
     expect([u.move.yaw, u.move.pitch, u.mage!.held, Math.hypot(u.move.body.vel.x, u.move.body.vel.z) < 1e-6, events]).toEqual([
-      1.2, -0.4, { primary: false, q: false, e: false, c: false }, true, [],
+      1.2, -0.4, { primary: false, q: false, e: false, c: false, x: false }, true, [],
     ]);
   });
 

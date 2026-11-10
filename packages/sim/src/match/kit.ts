@@ -105,19 +105,23 @@ export type TryCast = (s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => R
 export const PRESS_BUFFER_TICKS = ticks(PRESS_BUFFER_S);
 /**
  * С какого тика отказ r снимет само время: перезарядка — с ready слота; замах — со следующего тика после выпуска
- * (input идёт раньше tick, который выпускает снаряд); диск Отражения Воды — с ward.endTick, когда он уже не стоит.
- * Прочие отказы (нет опоры, цели, обездвижен) время не снимет — null. У Огня, Земли и Воздуха диска нет (ward = null).
+ * (input идёт раньше tick, который выпускает снаряд); диск Отражения Воды — с ward.endTick, когда он уже не стоит;
+ * своя ульта — со следующего тика после endTick (stepUlts снимает каст после input).
+ * Прочие отказы (нет опоры, цели, обездвижен, нет заряда ульты) время не снимет — null. У Огня, Земли и Воздуха
+ * диска нет (ward = null).
  */
 function legalAt(m: NonNullable<Unit["mage"]>, slot: Slot, r: RejectReason, now: number): number | null {
   if (r === "cooldown") return m.ready[slot];
   if (r !== "busy") return null;
-  const free = m.windup ? m.windup.releaseTick + 1 : now + 1;
+  let free = m.windup ? m.windup.releaseTick + 1 : now + 1;
+  if (m.ult.cast) free = Math.max(free, m.ult.cast.endTick + 1);
   return m.ward && now < m.ward.endTick ? Math.max(free, m.ward.endTick) : free;
 }
 
 /**
- * Нажатия тика по слотам в порядке order (по умолчанию SLOTS: ЛКМ, Q, E, C). Слот пробует каст, если его кнопку
+ * Нажатия тика по слотам в порядке order (по умолчанию SLOTS: ЛКМ, Q, E, C, X). Слот пробует каст, если его кнопку
  * нажали на этом тике, если прежнее нажатие ещё ждёт в буфере, а ЛКМ — и пока она удержана (темп карточки, как раньше).
+ * Пока идёт своя ульта (m.ult.cast), слоты кроме X отказывают «занят», не пробуя каст (Р3 фазы 5).
  * - Отказ «перезарядка» или «замах», который снимется не позже PRESS_BUFFER_TICKS тиков после нажатия, держит нажатие
  *   в буфере: каст выходит на первом тике, когда он возможен, и отказа нет.
  * - Отказ, который за окно не снимется (долгая перезарядка), и прочие отказы — reject сразу, на этом тике: отказ
@@ -135,7 +139,7 @@ export function castSlots(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, p
     const at = m.pending[slot];
     const waiting = now - at <= PRESS_BUFFER_TICKS;
     if (!waiting && !(slot === "primary" && inp.primary)) continue;
-    const r = casts[slot](s, t, u, inp);
+    const r = slot !== "x" && m.ult.cast ? "busy" : casts[slot](s, t, u, inp);
     if (r === null) m.pending[slot] = NEVER;
     if (r === null || !waiting) continue;
     const legal = legalAt(m, slot, r, now);

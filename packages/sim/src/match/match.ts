@@ -9,6 +9,7 @@ import { stepProjectiles } from "./projectiles";
 import { clonePlain, createDummyUnit, createMageUnit, createMatchState, idleInput } from "./state";
 import { stepTerrain } from "./terrain";
 import type { Buttons, DummySpot, Element, MatchContext, MatchEvent, MatchInput, MatchState, MatchStep, TickCtx, UnitId } from "./types";
+import { stepUlts } from "./ult";
 import { moveUnits, stepLife } from "./units";
 import { stepZones } from "./zones";
 
@@ -35,8 +36,9 @@ export function createMatch(setup: MatchSetup): MatchState {
 }
 
 /**
- * Один тик. Порядок фиксирован, на нём держится детерминизм: ввод китов (все маги по id) → тики китов → движение
- * юнитов → снаряды → зоны → рельеф → статусы → жизнь. Мир тика — статика с рельефом и стенами огня на начало тика.
+ * Один тик. Порядок фиксирован, на нём держится детерминизм: ввод китов (все маги по id) → ульты (stepUlts) → тики
+ * китов → движение юнитов → снаряды → зоны → рельеф → статусы → жизнь. Мир тика — статика с рельефом и стенами огня
+ * на начало тика.
  * Ввод очищается (sanitizeInput, кнопки — только ровно true); нажатие — переход false → true к прошлому тику.
  * Нет ввода от мага на этом тике — idleInput: стоит, кнопки отпущены, взгляд прежний (как в moveUnits).
  */
@@ -47,18 +49,20 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
   const t: TickCtx = {
     world: tw.world, terrainIds: tw.terrainIds, killBelowY: ctx.killBelowY, now: s.tick, ev,
     spawns: ctx.spawns !== undefined && ctx.spawns.length > 0 ? ctx.spawns : null, mageRespawnTicks: ticks(ctx.mageRespawnS ?? MATCH.mageRespawnS), spawnShieldTicks: ticks(ctx.spawnShieldS ?? 0),
+    ultChargeMul: ctx.ultChargeMul ?? 1,
   };
   const clean: Partial<Record<UnitId, MatchInput>> = {};
   for (const u of s.units) {
     const m = u.mage;
     if (!m) continue;
     const raw = inputs[u.id] ?? idleInput(u);
-    const inp: MatchInput = { ...sanitizeInput(raw, u.move), primary: raw.primary === true, q: raw.q === true, e: raw.e === true, c: raw.c === true };
-    const pressed: Buttons = { primary: inp.primary && !m.held.primary, q: inp.q && !m.held.q, e: inp.e && !m.held.e, c: inp.c && !m.held.c };
+    const inp: MatchInput = { ...sanitizeInput(raw, u.move), primary: raw.primary === true, q: raw.q === true, e: raw.e === true, c: raw.c === true, x: raw.x === true };
+    const pressed: Buttons = { primary: inp.primary && !m.held.primary, q: inp.q && !m.held.q, e: inp.e && !m.held.e, c: inp.c && !m.held.c, x: inp.x && !m.held.x };
     clean[u.id] = inp;
-    m.held = { primary: inp.primary, q: inp.q, e: inp.e, c: inp.c };
+    m.held = { primary: inp.primary, q: inp.q, e: inp.e, c: inp.c, x: inp.x };
     if (u.alive) ELEMENT_SIM[m.element].kit.input(s, t, u, inp, pressed);
   }
+  stepUlts(s, t, clean);
   for (const u of s.units) if (u.mage && u.alive) ELEMENT_SIM[u.mage.element].kit.tick(s, t, u, clean[u.id]!);
   moveUnits(s, t, clean, SIM_HOOKS);
   stepProjectiles(s, t, SIM_HOOKS);
@@ -72,7 +76,8 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
 
 /**
  * Возрождение мага другой стихией (экран выбора): копия состояния, маг — свежий на своей точке появления с прежним
- * счётом; его снаряды, зоны и рельеф убраны. Событий нет. Нет такого мага — копия без изменений.
+ * счётом; его снаряды, зоны и рельеф убраны. Заряд ульты — прежний, если стихия та же, иначе 0 (Р2 фазы 5).
+ * Событий нет. Нет такого мага — копия без изменений.
  */
 export function respawnMage(state: Readonly<MatchState>, id: UnitId, element: Element): MatchState {
   const s = clonePlain(state as MatchState);
@@ -81,6 +86,7 @@ export function respawnMage(state: Readonly<MatchState>, id: UnitId, element: El
   if (!old?.mage) return s;
   const fresh = createMageUnit(id, element, old.mage.spawn);
   fresh.mage!.stats = { ...old.mage.stats };
+  if (old.mage.element === element) fresh.mage!.ult.charge = old.mage.ult.charge;
   s.units[k] = fresh;
   s.projectiles = s.projectiles.filter((p) => p.owner !== id);
   s.zones = s.zones.filter((z) => z.owner !== id);

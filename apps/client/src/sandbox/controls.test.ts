@@ -106,7 +106,7 @@ describe("clampSensitivity", () => {
 describe("buildMatchInput", () => {
   it("adds LMB and Q / E / C by physical code", () => {
     expect(buildMatchInput(new Set(["Mouse0", "KeyQ", "KeyW"]), { yaw: 0, pitch: 0 })).toEqual({
-      moveX: 0, moveZ: 1, jump: false, yaw: 0, pitch: 0, primary: true, q: true, e: false, c: false,
+      moveX: 0, moveZ: 1, jump: false, yaw: 0, pitch: 0, primary: true, q: true, e: false, c: false, x: false,
     });
     expect(Object.values(KEYS)).toEqual(expect.arrayContaining(["Mouse0", "KeyQ", "KeyE", "KeyC", "KeyX"]));
   });

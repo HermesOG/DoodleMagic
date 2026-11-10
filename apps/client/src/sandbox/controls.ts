@@ -90,9 +90,9 @@ export function buildInput(down: ReadonlySet<string>, look: Look): PlayerInput {
   return { ...moveAxes(down), jump: down.has(KEYS.jump), yaw: look.yaw, pitch: look.pitch };
 }
 
-/** Ввод мага на тик: движение и взгляд фазы 1 плюс ЛКМ, Q, E, C (зажаты сейчас; нажатие из них выделяет sim). */
+/** Ввод мага на тик: движение и взгляд фазы 1 плюс ЛКМ, Q, E, C и X — ульта (зажаты сейчас; нажатие из них выделяет sim). */
 export function buildMatchInput(down: ReadonlySet<string>, look: Look): MatchInput {
-  return { ...buildInput(down, look), primary: down.has(KEYS.primary), q: down.has(KEYS.q), e: down.has(KEYS.e), c: down.has(KEYS.c) };
+  return { ...buildInput(down, look), primary: down.has(KEYS.primary), q: down.has(KEYS.q), e: down.has(KEYS.e), c: down.has(KEYS.c), x: down.has(KEYS.ult) };
 }
 
 export function clampSensitivity(x: number): number {
