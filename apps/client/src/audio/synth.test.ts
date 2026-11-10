@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SOUND_IDS } from "../feel/effects";
 import { RECIPES } from "./recipes";
-import { BEHIND_SHELF_DB, BEHIND_SHELF_HZ, DEFAULT_VOLUME, MAX_VOICES, START_LEAD_S, createAudio, unlockOnGesture } from "./synth";
+import { BEHIND_SHELF_DB, BEHIND_SHELF_HZ, DEFAULT_VOLUME, HIT_TICK_PER_S, MAX_VOICES, START_LEAD_S, createAudio, unlockOnGesture } from "./synth";
 
 // Подделка Web Audio: только то, чем пользуется синтезатор, плюс правила, на которых падают настоящие браузеры.
 type Call = [op: string, value: number, time: number];
@@ -253,18 +253,33 @@ describe("synth", () => {
     expect(levels.filter((v) => v === 1).length).toBe(RECIPES.fireFist.layers[0]!.clicks);
   });
 
-  it("hitLight is a 1.8 kHz sine with a 3.6 kHz click, at most 4 a second", () => {
+  it("hitLight is a 1.6 kHz triangle tick with a click and a 3.2 kHz glint, at most 6 a second (phase 9, L2)", () => {
     const { audio, ctx } = setup();
     audio.unlock();
-    for (const t of [0, 0.1, 0.2, 0.25, 0.3, 0.5]) {
+    for (const t of [0, 0.1, 0.17, 0.2, 0.34, 0.51]) {
       ctx().currentTime = t;
       audio.play("hitLight", null, 1);
     }
-    const ticks = ctx().sources().filter((s) => s instanceof FakeOsc && s.frequency.calls[0]![1] === 1800);
+    const ticks = ctx().sources().filter((s) => s instanceof FakeOsc && s.type === "triangle" && s.frequency.calls[0]![1] === 1600);
     expect(START_LEAD_S).toBe(0.005);
-    expect(ticks.map((s) => s.started[0]! - START_LEAD_S).map((t) => Math.round(t * 1000))).toEqual([0, 250, 500]);
-    expect(ctx().sources().length).toBe(6);
-    expect(ctx().sources().every((s) => s instanceof FakeOsc && s.type === "sine")).toBe(true);
+    expect(HIT_TICK_PER_S).toBe(6);
+    expect(ticks.map((s) => s.started[0]! - START_LEAD_S).map((t) => Math.round(t * 1000))).toEqual([0, 170, 340, 510]);
+    expect(ctx().sources().length).toBe(4 * RECIPES.hitLight.layers.length);
+  });
+
+  it("pitch multiplies every layer's frequency; a broken pitch plays as without it", () => {
+    const { audio, ctx } = setup();
+    audio.unlock();
+    const tri = () => ctx().sources().filter((s): s is FakeOsc => s instanceof FakeOsc && s.type === "triangle").map((s) => s.frequency.calls[0]![1]);
+    audio.play("hitLight", null, 1, undefined, 2 ** (4 / 12));
+    ctx().currentTime = 1;
+    audio.play("hitLight", null, 1, undefined, Number.NaN);
+    ctx().currentTime = 2;
+    audio.play("hitLight", null, 1, undefined, -1);
+    const f = tri();
+    expect([f[0], f[1], f[2]]).toEqual([expect.closeTo(1600 * 2 ** (4 / 12), 6), 1600, 1600]);
+    const glints = ctx().sources().filter((s): s is FakeOsc => s instanceof FakeOsc && s.type === "sine").map((s) => s.frequency.calls[0]![1]);
+    expect(glints[0]).toBeCloseTo(3200 * 2 ** (4 / 12), 6);
   });
 
   it(`caps concurrent voices at ${MAX_VOICES}: extra sounds do not start, and slots free up when voices end`, () => {
@@ -421,7 +436,7 @@ describe("synth", () => {
     expect(ctx().sources().length).toBe(2 * RECIPES.hitHeavy.layers.length);
   });
 
-  it("sends medium and large sounds to the reverb; a reverb that fails to build leaves the sound dry, not silent", () => {
+  it("sends LMB, medium and large sounds to the reverb; a reverb that fails to build leaves the sound dry, not silent", () => {
     FakeCtx.made = [];
     class WithReverb extends FakeCtx {
       createConvolver() {
@@ -437,9 +452,10 @@ describe("synth", () => {
     const sends = () => c.of("gain").filter((g) => g.outs.includes(conv!)).map((g) => (g.gain as FakeParam).value);
     wet.play("hitLight", null, 1);
     expect(sends()).toEqual([]);
+    wet.play("fistHit", null, 1);
     wet.play("fireballBoom", null, 1);
     wet.play("kill", null, 1);
-    expect(sends()).toEqual([0.2, 0.35]);
+    expect(sends()).toEqual([0.06, 0.2, 0.35]);
 
     FakeCtx.made = [];
     class BadReverb extends FakeCtx {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ABILITY_IDS, NOBODY, createMageUnit, createMatchState, type AbilityId, type MatchEvent } from "@doodlemagic/sim";
 import type { Effect } from "./effects";
-import { AREA_TRAUMA, effectsFor, hitTier } from "./eventMap";
+import { AREA_TRAUMA, LMB_VICTIM_KICK_DEG, effectsFor, hitTickPitch, hitTier } from "./eventMap";
 
 const V = (x = 0, y = 0, z = 0) => ({ x, y, z });
 const ME = 1;
@@ -81,11 +81,14 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     expect(pick(onMe({}), "sound").map((e) => e.id)).toEqual(["fistHit"]);
   });
 
-  it("releases with a beat: the stone's 0.6° recoil and a throw sound on the release, a launch sound for the fireball (A1)", () => {
+  it("releases with a beat: the stone's 0.9° recoil and a throw sound on the release, a launch sound for the fireball (A1, phase 9 Р6)", () => {
     const eye = V(0, 1.6, 0);
-    expect(pick(fx(cast(ME, "stoneShot", eye)), "kick")).toEqual([{ kind: "kick", pitchDeg: 0.2, yawDeg: 0, rollDeg: 0 }]);
+    // нажатие камня камеру не толкает — толчок на броске
+    expect(pick(fx(cast(ME, "stoneShot", eye)), "kick")).toEqual([{ kind: "kick", pitchDeg: 0, yawDeg: 0, rollDeg: 0, recoil: true }]);
     const stone = fx({ type: "release", unit: ME, ability: "stoneShot", projectile: 9, pos: eye, dir: V(0, 0, -1) });
-    expect([pick(stone, "kick")[0]?.pitchDeg, pick(stone, "sound")[0]?.id]).toEqual([0.6, "stoneThrow"]);
+    expect([pick(stone, "kick")[0], pick(stone, "sound")[0]?.id]).toEqual([{ kind: "kick", pitchDeg: 0.9, yawDeg: 0, rollDeg: 0, recoil: true }, "stoneThrow"]);
+    // кулак: 0,6° вверх и 0,15° вбок от руки удара (у левой — зеркально, это решает камера по руке)
+    expect(pick(fx(cast(ME, "fireFists", eye)), "kick")).toEqual([{ kind: "kick", pitchDeg: 0.6, yawDeg: 0.15, rollDeg: 0, recoil: true, hand: "auto" }]);
     const ball = fx({ type: "release", unit: ME, ability: "fireball", projectile: 9, pos: eye, dir: V(0, 0, -1) });
     expect(pick(ball, "sound").map((e) => e.id)).toEqual(["fireballLaunch"]);
     expect(fx({ type: "release", unit: OTHER, ability: "fireball", projectile: 9, pos: V(6, 1.6, -8), dir: V(0, 0, -1) })).toEqual([
@@ -106,11 +109,13 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     expect(pick(theirs, "sound")).toEqual([{ kind: "sound", id: "fistHit", pos: V(0, 1, -2), gain: 1 }]);
     const boom = fx({ type: "explosion", ability: "fireball", owner: ME, pos: V(0, 1, -20), radius: 3 });
     expect(pick(boom, "sound")[0]?.floor).toBe(0.6);
-    // промах (цели нет) звучит по расстоянию, без пола
+    // свой промах (цели нет) — пол 0,35: слышно, куда лёг выстрел (фаза 9, L8); чужой промах — по расстоянию
     const miss = fx({ type: "impact", ability: "stoneShot", owner: ME, pos: V(0, 1, -20), normal: V(0, 0, 1), target: NOBODY, terrain: -1 });
-    expect(pick(miss, "sound")).toEqual([{ kind: "sound", id: "stoneImpact", pos: V(0, 1, -20), gain: 1 }]);
+    expect(pick(miss, "sound")).toEqual([{ kind: "sound", id: "stoneImpact", pos: V(0, 1, -20), gain: 1, floor: 0.35 }]);
     const wall = fx({ type: "impact", ability: "fireFists", owner: ME, pos: V(0, 1, -20), normal: V(0, 0, 1), target: NOBODY, terrain: 4 });
-    expect(pick(wall, "sound")[0]?.floor).toBeUndefined();
+    expect(pick(wall, "sound")[0]?.floor).toBe(0.35);
+    const theirMiss = fx({ type: "impact", ability: "fireFists", owner: OTHER, pos: V(0, 1, -20), normal: V(0, 0, 1), target: NOBODY, terrain: 4 });
+    expect(pick(theirMiss, "sound")[0]?.floor).toBeUndefined();
   });
 
   it("does not count the victim's shake twice: area + hit trauma add up to fireball 0.5, pillar 0.5, quake 0.65", () => {
@@ -123,5 +128,33 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     expect(AREA_TRAUMA.stonePillar + onMe("stonePillar", 30)).toBeCloseTo(0.5);
     expect(AREA_TRAUMA.earthquake + onMe("earthquake", 40)).toBeCloseTo(0.65);
     expect(onMe("earthquake", 40)).toBe(0);
+  });
+
+  it("raises the hit tick toward the target's death: ×2^((1 − hp/max)·4/12), up to a major third (phase 9, L2)", () => {
+    expect([hitTickPitch(100, 100), hitTickPitch(50, 100), hitTickPitch(0, 100), hitTickPitch(-5, 100), hitTickPitch(10, 0)]).toEqual([
+      1,
+      expect.closeTo(2 ** (2 / 12), 9),
+      expect.closeTo(2 ** (4 / 12), 9),
+      expect.closeTo(2 ** (4 / 12), 9),
+      1,
+    ]);
+    // HP цели — из состояния события (после удара): у раненой цели тик выше
+    const other = view.state.units.find((u) => u.id === OTHER)!;
+    const hurt = { localId: ME, state: { ...view.state, units: view.state.units.map((u) => (u.id === OTHER ? { ...u, hp: other.maxHp / 4 } : u)) } };
+    const tick = effectsFor(hit({ ability: "stoneShot", amount: 30 }), hurt).find((e) => e.kind === "sound");
+    expect(tick).toEqual({ kind: "sound", id: "hitLight", pos: null, gain: 1, pitch: expect.closeTo(2 ** (0.75 * 4 / 12), 9) });
+    expect(pick(fx(hit({ ability: "fireFists", amount: 15 })), "sound")[0]).toMatchObject({ id: "hitLight", pitch: 1 });
+  });
+
+  it("kicks a victim of LMB at least 0.3° even for a fist, and no more than the tier allows (phase 9, L10)", () => {
+    const kickOf = (over: Partial<Hit>) => pick(fx(hit({ source: OTHER, target: ME, ...over })), "kick")[0]!;
+    const size = (k: Extract<Effect, { kind: "kick" }>) => Math.abs(k.pitchDeg) + Math.abs(k.yawDeg);
+    expect(LMB_VICTIM_KICK_DEG).toBe(0.3);
+    expect(size(kickOf({ ability: "fireFists", amount: 15 }))).toBeCloseTo(0.3, 9);
+    expect(size(kickOf({ ability: "fireFists", amount: 15, dir: V(0.6, 0, -0.8) }))).toBeCloseTo(0.3, 9);
+    expect(size(kickOf({ ability: "fireFists", amount: 15, dir: V(0, -1, 0) }))).toBeCloseTo(0.3, 9);
+    expect(size(kickOf({ ability: "stoneShot", amount: 30 }))).toBeCloseTo(0.75 * 30 / 40, 9);
+    // не ЛКМ — по-прежнему по урону, без пола
+    expect(size(kickOf({ ability: "fireball", amount: 4 }))).toBeCloseTo(1.25 * 4 / 40, 9);
   });
 });

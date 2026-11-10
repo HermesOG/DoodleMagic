@@ -1,5 +1,5 @@
 import type { AIR_SOUND_IDS } from "../feel/airIds";
-import { REVERB_SEND, SIG, noise, tone, type Recipe } from "./layers";
+import { REVERB_SEND, SHOT_CLICK, SIG, noise, tone, type Recipe } from "./layers";
 
 /**
  * Звуки Воздуха (02-air, «Читается»; GDD 5). Подпись — узкий шум bandpass в полосе 800–4000 Гц: свист и шорох
@@ -9,17 +9,22 @@ import { REVERB_SEND, SIG, noise, tone, type Recipe } from "./layers";
 export type AirSoundId = (typeof AIR_SOUND_IDS)[number];
 
 export const AIR_RECIPES: Readonly<Record<AirSoundId, Recipe>> = {
-  // серп: узкий свист 2,2 → 3 кГц и тихий тон под ним — 3 раза в секунду, поэтому разброс высоты
+  // серп (фаза 9, L1): щелчок, узкий свист-подпись 2,2 → 3 кГц, «вшух» bandpass 1200 → 400 Гц и хвост ветра —
+  // «вжик», а не «фью»; 3 раза в секунду, поэтому разброс высоты
   sickleThrow: {
     vary: 0.06,
+    reverb: REVERB_SEND.lmb,
     layers: [
+      SHOT_CLICK,
       noise("bandpass", 2200, 3000, 0.16, 0.5, { q: 6, attack: 0.01, ...SIG }),
-      tone("sine", 2600, 2100, 0.12, 0.08, { attack: 0.01 }),
+      noise("bandpass", 1200, 400, 0.09, 0.45, { q: 1.5, attack: 0.002 }),
+      noise("bandpass", 1800, 1000, 0.2, 0.15, { q: 2, attack: 0.02 }),
     ],
   },
   // попадание серпа: сухой «фьюп» 1,8 → 1,1 кГц и мягкий щелчок снизу
   sickleHit: {
     vary: 0.05,
+    reverb: REVERB_SEND.lmb,
     layers: [
       noise("bandpass", 1800, 1100, 0.09, 0.6, { q: 2, attack: 0.001, ...SIG }),
       noise("lowpass", 600, 200, 0.06, 0.35, { q: 0, attack: 0.001 }),

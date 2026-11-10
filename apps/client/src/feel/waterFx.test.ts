@@ -62,7 +62,8 @@ describe("waterEffects: casts and releases of Water's own abilities", () => {
       { kind: "gesture", ability: "waterWhip" },
       { kind: "palm", hand: "right", element: "water", preset: "flash" },
       { kind: "sound", id: "whipSwish", pos: null, gain: 1 },
-      { kind: "kick", pitchDeg: 0.2, yawDeg: 0, rollDeg: 0 },
+      // замах — чуть-чуть (фаза 9, Р6), сильная отдача — на ударе (beam)
+      { kind: "kick", pitchDeg: 0.1, yawDeg: 0, rollDeg: 0, recoil: true },
     ]);
     expect(kinds(c("waterGrab"))).toEqual(["gesture", "palm", "sound:grabWindup", "kick"]);
     expect(kinds(c("waterWard"))).toEqual(["gesture", "palm", "sound:wardUp", "kick"]);
@@ -125,7 +126,11 @@ describe("waterEffects: the whip's beam, the grab and the Answer landing", () =>
     const from = V(0, 1.6, 0);
     const to = V(0, 1, -12);
     const e = fx({ type: "beam", unit: ME, ability: "waterWhip", from, to, target: FOE });
-    expect(kinds(e)).toEqual(["burst:whipArc", "sound:whipCrack", "burst:whipSplash", "sound:whipHit"]);
+    expect(kinds(e)).toEqual(["burst:whipArc", "sound:whipCrack", "burst:whipSplash", "sound:whipHit", "kick"]);
+    // удар — самый сильный момент хлыста: отдача 0,6° вверх и 0,25° влево, по дуге правой (фаза 9, Р6)
+    expect(e?.at(-1)).toEqual({ kind: "kick", pitchDeg: 0.6, yawDeg: 0.25, rollDeg: 0, recoil: true });
+    const miss = fx({ type: "beam", unit: ME, ability: "waterWhip", from, to, target: NOBODY });
+    expect(kinds(miss)).toEqual(["burst:whipArc", "sound:whipCrack", "kick"]);
     expect(burstOf(e, "whipArc")).toMatchObject({ pos: to, dir: { x: 0, y: expect.closeTo(0.6, 6), z: 12 }, owner: ME });
     expect(soundOf(e, "whipCrack")?.pos).toBeNull();
     expect(soundOf(e, "whipHit")).toMatchObject({ pos: to, floor: 0.6 });

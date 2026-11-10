@@ -25,6 +25,7 @@ import { addFeel, addLanding, createCameraFeel, stepCameraFeel, type CameraOffse
 import type { Effect } from "../feel/effects";
 import { elementFrameEffects } from "../feel/elementFx";
 import { effectsFor } from "../feel/eventMap";
+import { createWhizzFrame } from "../feel/whizz";
 import { createVfx } from "../fx/vfx";
 import { createGestures, isFistGesture, startGesture, stepGestures } from "../hands/gestures";
 import { createMittens } from "../hands/mittens";
@@ -163,6 +164,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   const moves = createMoveTracker();
   let gestures = createGestures();
   let fistHand: "left" | "right" = "right";
+  /** Свист чужого снаряда мимо уха (L12): своя память снарядов на этот вид. */
+  const whizz = createWhizzFrame();
   let hitstopUntil = 0;
   let handRig = createHandRig();
   let auto: AutoQuality | null = settings.quality === "auto" ? createAutoQuality("high") : null;
@@ -204,8 +207,9 @@ export function mountGameView(o: GameViewOptions): GameView | null {
           if (isFistGesture(e.ability)) fistHand = gestures.nextFist;
           gestures = startGesture(gestures, e.ability);
         } else if (sink === "vfx") vfx.apply(e, nowS, fistHand);
-        else if (e.kind === "sound") audio.play(e.id, e.pos, e.gain, e.floor);
-        else if (sink === "camera") feel = addFeel(feel, e);
+        else if (e.kind === "sound") audio.play(e.id, e.pos, e.gain, e.floor, e.pitch);
+        // отдача кулака и серпа вбок — по руке этого удара (как palm "auto")
+        else if (sink === "camera") feel = addFeel(feel, e, fistHand);
         // пауза рук — только если жест ещё идёт: у снаряда жест кончился раньше, чем он долетел (round3/01, H2)
         else if (e.kind === "hitstop") {
           if (gestures.active.length > 0) hitstopUntil = Math.max(hitstopUntil, nowS + e.ms / 1000);
@@ -412,6 +416,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     for (const ev of frame.late) onEvent(ev, cur);
     // непрерывное у стихий (зёрна парения, гул Смерча, журчание Родника) — раз в кадр
     for (const e of guard.run("effects", () => elementFrameEffects({ prev, cur, alpha, localId, nowS, dtS }), NO_EFFECTS)) route(e, nowS);
+    // свист чужого снаряда мимо уха — раз в кадр, по отрезку снаряда между кадрами (L12)
+    for (const e of guard.run("effects", () => whizz({ prev, cur, alpha, localId, nowS, dtS }), NO_EFFECTS)) route(e, nowS);
     // руки после возрождения — в покое, а не с отставанием и креном от падения
     if (respawned) handRig = createHandRig();
     // приземление садит камеру: −0,006 м на 1 м/с, не глубже 8 см (M1)

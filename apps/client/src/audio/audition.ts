@@ -52,6 +52,10 @@ export const SOUND_LABELS: Record<SoundId, string> = {
   jump: "Прыжок",
   land: "Приземление",
   knockWhoosh: "Отбрасывание: вжух",
+  whizzFire: "Свист мимо: огонь",
+  whizzStone: "Свист мимо: камень",
+  whizzSickle: "Свист мимо: серп",
+  whizzWater: "Свист мимо: вода",
   ...AIR_SOUND_LABELS,
   ...WATER_SOUND_LABELS,
 };

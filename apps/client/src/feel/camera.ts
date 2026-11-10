@@ -7,7 +7,8 @@ import type { Effect } from "./effects";
  * не трогает: взгляд игрока остаётся прежним, сдвигается только камера.
  * Два профиля шума (round3/01, 2.1): Огонь — 20–25 Гц, коротко, без смещения; Земля — 7–9 Гц, дольше и уводит
  * камеру вниз. У каждого своя trauma: удары разных стихий не смешивают частоты.
- * Толчок (отдача, удар по мне) — критически задемпфированная пружина с точным шагом, отдельно от тряски.
+ * Толчок (отдача, удар по мне) — критически задемпфированная пружина с точным шагом, отдельно от тряски. Отдача ЛКМ
+ * (фаза 9, Р6) — своя пружина ω 40: пик через 25 мс, к 120 мс камера почти на месте, и к следующему кулаку прицел стоит.
  * FOV-удар — импульс (M3): подъём с жёсткостью 30, пик через ≈ 33 мс, возврат с жёсткостью 12.
  * Проседание — пружина высоты глаз (приземление, удар ладонями в землю), ω 12: пик через ≈ 83 мс.
  */
@@ -17,10 +18,28 @@ export const SHAKE = {
   decayPerS: 1.5,
   earthDecayPerS: 0.8,
   kickOmega: 25,
+  recoilOmega: 40,
   fovUpOmega: 30,
   fovBackOmega: 12,
   dipOmega: 12,
 } as const;
+/**
+ * Отдача ЛКМ у стреляющего (фаза 9, Р6), градусы: вверх и вбок. Вбок — по руке и взмаху: правая бьёт к центру,
+ * взгляд уходит чуть влево (yaw > 0); у кулака и серпа рука — очередь ударов (hand "auto"), хлыст — всегда правая.
+ * Камень на нажатии не толкает — толчок на броске; хлыст чуть толкает на замахе и сильно — на ударе (beam).
+ */
+export const RECOIL = {
+  fist: { pitchDeg: 0.6, yawDeg: 0.15 },
+  stoneCast: { pitchDeg: 0, yawDeg: 0 },
+  stoneThrow: { pitchDeg: 0.9, yawDeg: 0 },
+  sickle: { pitchDeg: 0.4, yawDeg: 0.2 },
+  whipCast: { pitchDeg: 0.1, yawDeg: 0 },
+  whipStrike: { pitchDeg: 0.6, yawDeg: 0.25 },
+} as const;
+/** Эффект отдачи ЛКМ по таблице RECOIL; auto — вбок по руке удара кулаком. */
+export function recoilKick(r: (typeof RECOIL)[keyof typeof RECOIL], auto = false): Effect {
+  return { kind: "kick", pitchDeg: r.pitchDeg, yawDeg: r.yawDeg, rollDeg: 0, recoil: true, ...(auto ? { hand: "auto" as const } : {}) };
+}
 /** Приземление (M1): проседание 0,006 м на 1 м/с скорости касания, не глубже 8 см; слабее 1 м/с не замечаем. */
 export const LANDING = { mPerMs: 0.006, maxM: 0.08, minSpeed: 1 } as const;
 /** FOV-удары складываются, но не дальше ±12°. */
@@ -39,6 +58,9 @@ export interface CameraFeel {
   pitch: Spring;
   yaw: Spring;
   roll: Spring;
+  /** Отдача ЛКМ, рад: своя быстрая пружина (SHAKE.recoilOmega). */
+  recoilPitch: Spring;
+  recoilYaw: Spring;
   /** FOV-удар, градусы. */
   fov: Spring;
   /** Проседание глаз по вертикали мира, м (≤ 0 — вниз). */
@@ -63,7 +85,7 @@ const clamp1 = (v: number): number => (v < -1 ? -1 : v > 1 ? 1 : v);
 const finite = (v: number): number => (Number.isFinite(v) ? v : 0);
 
 export function createCameraFeel(): CameraFeel {
-  return { trauma: 0, traumaEarth: 0, t: 0, pitch: REST, yaw: REST, roll: REST, fov: REST, dip: REST };
+  return { trauma: 0, traumaEarth: 0, t: 0, pitch: REST, yaw: REST, roll: REST, recoilPitch: REST, recoilYaw: REST, fov: REST, dip: REST };
 }
 
 /** Импульс скорости v += amount·ω·e: у критически задемпфированной пружины из покоя пик ровно amount через 1/ω. */
@@ -72,23 +94,24 @@ const push = (s: Spring, amount: number, omega: number): Spring => ({ x: s.x, v:
 /**
  * trauma — складывается до 1 в своём профиле, а с floor — поднимает trauma профиля до amount (тряска, которую держат
  * весь поток, не замораживает чужие удары: они гаснут как обычно, но не ниже пола); kick — импульс толчка, а dropM —
- * камера вниз на столько метров; fov — импульс FOV-удара на deg. Остальные эффекты камеру не трогают.
+ * камера вниз на столько метров; у отдачи ЛКМ (recoil) — импульс своей пружины, вбок с hand "auto" — по руке удара
+ * hand (её знает вид); fov — импульс FOV-удара на deg. Остальные эффекты камеру не трогают.
  */
-export function addFeel(f: CameraFeel, e: Effect): CameraFeel {
+export function addFeel(f: CameraFeel, e: Effect, hand: "left" | "right" = "right"): CameraFeel {
   if (e.kind === "trauma") {
     const a = Math.max(0, finite(e.amount));
     const add = (t: number): number => clamp01(e.floor ? Math.max(t, a) : t + a);
     return e.profile === "earth" ? { ...f, traumaEarth: add(f.traumaEarth) } : { ...f, trauma: add(f.trauma) };
   }
   if (e.kind === "kick") {
+    const yawDeg = e.hand === "auto" && hand === "left" ? -e.yawDeg : e.yawDeg;
+    const dip = e.dropM ? push(f.dip, -Math.abs(e.dropM), SHAKE.dipOmega) : f.dip;
     const k = SHAKE.kickOmega * DEG;
-    return {
-      ...f,
-      pitch: push(f.pitch, e.pitchDeg, k),
-      yaw: push(f.yaw, e.yawDeg, k),
-      roll: push(f.roll, e.rollDeg, k),
-      dip: e.dropM ? push(f.dip, -Math.abs(e.dropM), SHAKE.dipOmega) : f.dip,
-    };
+    if (e.recoil) {
+      const r = SHAKE.recoilOmega * DEG;
+      return { ...f, recoilPitch: push(f.recoilPitch, e.pitchDeg, r), recoilYaw: push(f.recoilYaw, yawDeg, r), roll: push(f.roll, e.rollDeg, k), dip };
+    }
+    return { ...f, pitch: push(f.pitch, e.pitchDeg, k), yaw: push(f.yaw, yawDeg, k), roll: push(f.roll, e.rollDeg, k), dip };
   }
   if (e.kind === "fov") return { ...f, fov: push(f.fov, e.deg, SHAKE.fovUpOmega) };
   return f;
@@ -136,6 +159,8 @@ export function stepCameraFeel(f: CameraFeel, dt: number, motion: number, roll =
     pitch: stepSpring(f.pitch, 0, SHAKE.kickOmega, h),
     yaw: stepSpring(f.yaw, 0, SHAKE.kickOmega, h),
     roll: stepSpring(f.roll, 0, SHAKE.kickOmega, h),
+    recoilPitch: stepSpring(f.recoilPitch, 0, SHAKE.recoilOmega, h),
+    recoilYaw: stepSpring(f.recoilYaw, 0, SHAKE.recoilOmega, h),
     fov,
     dip: stepSpring(f.dip, 0, SHAKE.dipOmega, h),
   };
@@ -155,8 +180,8 @@ export function stepCameraFeel(f: CameraFeel, dt: number, motion: number, roll =
   const offset: CameraOffset = {
     x: sx * shift + 0,
     y: sy * shift + 0,
-    pitch: sp * rot + feel.pitch.x * m + 0,
-    yaw: sw * rot + feel.yaw.x * m + 0,
+    pitch: sp * rot + (feel.pitch.x + feel.recoilPitch.x) * m + 0,
+    yaw: sw * rot + (feel.yaw.x + feel.recoilYaw.x) * m + 0,
     roll: roll ? feel.roll.x * m + 0 : 0,
     fovDeg: fovDeg * m + 0,
     lift: feel.dip.x * m + 0,

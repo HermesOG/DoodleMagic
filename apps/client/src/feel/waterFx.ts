@@ -13,6 +13,7 @@ import {
   type Vec3,
   type Zone,
 } from "@doodlemagic/sim";
+import { RECOIL, recoilKick } from "./camera";
 import type { BurstPreset, Effect, SoundId } from "./effects";
 import type { FrameView } from "./elementFx";
 import type { EventView } from "./eventMap";
@@ -82,9 +83,9 @@ const CAST_SOUND: Readonly<Record<"waterWhip" | "waterGrab" | "waterWard" | "spr
 function ownCast(a: keyof typeof CAST_SOUND): Effect[] {
   const hand = a === "waterWhip" || a === "waterGrab" ? "right" : "both";
   const out: Effect[] = [{ kind: "gesture", ability: a }, { kind: "palm", hand, element: "water", preset: "flash" }, sound(CAST_SOUND[a])];
-  // ЛКМ — 0,2° (малая ступень); Родник — ладони вниз, к луже; остальное — 0,6°
+  // ЛКМ — отдача 0,1° на замахе (фаза 9, Р6: сильная — на ударе, beam); Родник — ладони вниз, к луже; остальное — 0,6°
   if (a === "spring") out.push({ kind: "kick", pitchDeg: -0.8, yawDeg: 0, rollDeg: 0, dropM: 0.02 });
-  else out.push({ kind: "kick", pitchDeg: a === "waterWhip" ? 0.2 : 0.6, yawDeg: 0, rollDeg: 0 });
+  else out.push(a === "waterWhip" ? recoilKick(RECOIL.whipCast) : { kind: "kick", pitchDeg: 0.6, yawDeg: 0, rollDeg: 0 });
   return out;
 }
 
@@ -147,6 +148,8 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
       const arc: Effect = { kind: "burst", preset: "whipArc", pos: ev.to, dir: sub(ev.from, ev.to), scale: 1, owner: ev.unit };
       const out: Effect[] = [arc, at("whipCrack", ev.from, own)];
       if (ev.target !== NOBODY) out.push(burst("whipSplash", ev.to, unitDir(sub(ev.from, ev.to))), hitSound("whipHit", ev.to, own));
+      // свой удар — самый сильный момент хлыста: руку дёрнуло вверх и влево, по дуге правой (Р6)
+      if (own) out.push(recoilKick(RECOIL.whipStrike));
       return out;
     }
     case "impact": {

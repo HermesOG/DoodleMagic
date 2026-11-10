@@ -65,7 +65,8 @@ describe("airEffects: own events", () => {
       { kind: "gesture", ability: "airSickle" },
       { kind: "palm", hand: "auto", element: "air", preset: "flash" },
       { kind: "sound", id: "sickleThrow", pos: null, gain: 1 },
-      { kind: "kick", pitchDeg: 0.2, yawDeg: 0, rollDeg: 0 },
+      // отдача ЛКМ (фаза 9, Р6): 0,4° вверх и 0,2° по взмаху руки этого удара
+      { kind: "kick", pitchDeg: 0.4, yawDeg: 0.2, rollDeg: 0, recoil: true, hand: "auto" },
     ]);
     // замах Порыва: кольцо ветра сходится у ладоней, свист нарастает; камера — на выпуске
     expect(gust).toEqual([{ kind: "gesture", ability: "gust" }, { kind: "palm", hand: "both", element: "air", preset: "charge" }, { kind: "sound", id: "gustWindup", pos: null, gain: 1 }]);
@@ -90,6 +91,9 @@ describe("airEffects: own events", () => {
     const wall = fx({ type: "impact", ability: "airSickle", owner: OTHER, pos: V(), normal: V(0, 1, 0), target: -1, terrain: 3 });
     expect(bursts(wall)).toEqual(["sicklePuff", "terrainChips"]);
     expect(wall?.at(-1)).toEqual({ kind: "sound", id: "sickleHit", pos: V(), gain: 1 });
+    // свой промах — пол 0,35 (фаза 9, L8)
+    const miss = fx({ type: "impact", ability: "airSickle", owner: ME, pos: V(0, 1, -20), normal: V(0, 0, 1), target: -1, terrain: -1 });
+    expect(miss?.at(-1)).toEqual({ kind: "sound", id: "sickleHit", pos: V(0, 1, -20), gain: 1, floor: 0.35 });
   });
 
   it("blown, slam on me (sound at the ear; the medium shake comes from the slam's hit), double jump ring, glide pulse, charge chime, swoop FOV like a dash", () => {
