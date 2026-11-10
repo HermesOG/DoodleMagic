@@ -16,7 +16,7 @@ import {
   type Texture,
 } from "three";
 import { PRESETS, lineRadiusFor, pixelRatioFor, type Preset, type PresetId } from "./quality";
-import { OVERLAY_DEPTH_RANGE, createStyleMaterial, inverseDepth } from "./stylePass";
+import { OVERLAY_DEPTH_RANGE, createStyleMaterial, inverseDepth, styleShared } from "./stylePass";
 
 export { OVERLAY_DEPTH_RANGE };
 
@@ -164,9 +164,13 @@ export class StyleRenderer {
   /**
    * Кадр: мир и (необязательно) руки в G-буфер, потом стилевой проход на экран и (необязательно) проход света.
    * У холста нет своего буфера глубины: материалы света сами сверяются с G-буфером (depthTest и depthWrite выключены).
+   * Общее время стилевого прохода (`styleShared.time`, секунды от загрузки страницы) пишется здесь, до G-буфера:
+   * его же читают качание травы и частицы окружения. `styleShared.dayDim` рендер не пишет: его ставит проход
+   * света, а стилевой проход только читает.
    */
   render(world: Scene, overlay?: Scene, fx?: FxLayers): void {
     const gl = this.gl;
+    styleShared.time.value = performance.now() / 1000;
     gl.info.reset();
     gl.setRenderTarget(this.target);
     gl.setClearColor(0x000000, 0);
