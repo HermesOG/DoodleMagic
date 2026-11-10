@@ -54,6 +54,9 @@ function hue(c: RGB): number | null {
   return (h * 60 + 360) % 360;
 }
 
+/** Не красный: оттенок вне 340…15° (серое без оттенка — не красное). */
+const notRed = (h: number | null): boolean => h === null || (h > 15 && h < 340);
+
 describe("ink table", () => {
   it("gives every arena material its own ink and fits the shader array", () => {
     const ids = MATERIALS.map(inkOf);
@@ -116,9 +119,10 @@ describe("three brightness layers (GDD 6)", () => {
     for (const ink of ["stone", "floor"] as const) expect(luminance(washColor(ink, 0)), ink).toBeLessThanOrEqual(0.66);
     // руна и корона (gold) — знак цели «беги сюда», варежка — светлая по замыслу: им предел 0,72 не ставим,
     // но и они темнее ядра магии (правило ниже)
-    for (const ink of [...DECOR, "sleeve" as const]) {
-      for (const l of tones(ink).map(luminance)) expect(l, ink).toBeLessThanOrEqual(0.72);
+    for (const ink of DECOR) {
+      for (const l of tones(ink).map(luminance)) expect(l, ink).toBeLessThanOrEqual(0.66);
     }
+    for (const l of tones("sleeve").map(luminance)) expect(l, "sleeve").toBeLessThanOrEqual(0.72);
   });
 
   it("keeps eye-level shadow at 0.35 or lighter, so the enemy stands out of it", () => {
@@ -155,7 +159,6 @@ describe("three brightness layers (GDD 6)", () => {
  * оттенки им не ограничены; рукав Огня всё равно не уходит к красному HP.
  */
 describe("decor colour rule", () => {
-  const notRed = (h: number | null): boolean => h === null || (h > 15 && h < 340);
   it("has no red, bright orange, jade, azure or light lilac in decor", () => {
     for (const ink of DECOR) {
       for (const c of tones(ink)) {
@@ -164,6 +167,8 @@ describe("decor colour rule", () => {
         const tag = `${ink} ${c.map((x) => x.toFixed(2)).join(",")}`;
         expect(notRed(h), tag).toBe(true);
         if (h === null) continue;
+        // рабочее определение (GDD 6): «оранжевый» — оттенок 15–40° при насыщенности ≥ 0,4; приглушённые охра
+        // знамени и окно фонаря (насыщенность < 0,4) разрешены продюсером (design/round4/04-producer.md)
         if (h > 15 && h < 40 && s >= 0.4) expect(luminance(c), `${tag}: orange`).toBeLessThanOrEqual(0.55);
         expect(h > 120 && h < 170, `${tag}: jade`).toBe(false);
         expect(h > 188 && h < 218 && s >= 0.25, `${tag}: azure`).toBe(false);
@@ -199,6 +204,7 @@ describe("marks", () => {
       const c = washColor(ink, 0);
       expect(saturation(c), ink).toBeGreaterThanOrEqual(0.45);
       expect(hue(c)!, ink).toBeGreaterThanOrEqual(20);
+      expect(notRed(hue(c)), ink).toBe(true);
       expect(luminance(c), ink).toBeLessThan(core);
     }
     expect(luminance(washColor("haloBurn", 0))).toBeGreaterThanOrEqual(0.75);

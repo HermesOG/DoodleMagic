@@ -97,6 +97,7 @@ export const INK_STYLE: Record<InkName, InkStyle> = {
   // кровля и венцы — индиго, тёмный силуэт монастыря на небе (выше 3 м)
   roof: { wash: hex(0x2b3652), bands: [0.6, 0.72, 0.82], line: LINE },
   // сухая трава-солома: цвет говорит «горит»
+  // плотность света 0,54, а не 0,55 плана: при 0,55 насыщенность в свету 0,352 > предела 0,35
   grass: { wash: hex(0x8c7533), bands: [0.54, 0.62, 0.7], line: [0.25, 0.2, 0.1] },
   // кромка ущелья и цоколи — рисунок тушью у самого пола
   edge: { wash: [0.15, 0.14, 0.13], bands: [0.75, 0.78, 0.8], line: [0.05, 0.05, 0.05] },
@@ -117,6 +118,7 @@ export const INK_STYLE: Record<InkName, InkStyle> = {
   // окно фонаря — ровная тёплая бумага тоном ≤ 0,66 в рамке тушью; не светит
   lantern: { wash: hex(0xbba57c), bands: [1, 1, 1], line: LINE },
   // рукав: тушь по стихии (по умолчанию — Огонь), в шейдере её меняет setSleeveElement
+  // тень 0,78, а не 0,8 плана: при 0,8 тень рукава Огня даёт насыщенность 0,458 > предела 0,45
   sleeve: { wash: SLEEVE_WASH.fire, bands: [0.5, 0.65, 0.78], line: HAND_LINE },
   // глаза в маске — чистый цвет стихии, без тона
   eyeFire: { wash: hex(0xff7a1a), bands: [1, 1, 1], line: eyeLine(hex(0xff7a1a)) },
@@ -162,7 +164,8 @@ export function washColor(ink: InkName, band: 0 | 1 | 2, wash: RGB = INK_STYLE[i
 export const SKY = {
   zenith: hex(0x8fb0d6),
   horizon: hex(0xf0d9ba),
-  sunGlow: [0.08, 0.05, 0.01] as RGB,
+  // красный ≤ 0,055: горизонт + пятно + зерно бумаги не упираются в 1
+  sunGlow: [0.055, 0.04, 0.01] as RGB,
   cloud: hex(0xf4eee2),
   ridgeFar: hex(0xa9b4c8),
   ridgeNear: hex(0x7d889f),

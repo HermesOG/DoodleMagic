@@ -218,9 +218,11 @@ vec2 airAt(vec2 uv, float d, out vec3 wp, out float dist) {
   vec4 v = uProjInv * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
   vec3 vp = v.xyz / v.w;
   wp = (uCamWorld * vec4(vp, 1.0)).xyz;
-  dist = -vp.z;
+  // евклидова дальность — как у неба ниже горизонта: дымка не шьётся с ним и не поворачивается с камерой
+  dist = length(vp);
   float gorge = 0.0;
-  if (wp.y < GORGE_EDGE + GORGE_SWAY) {
+  // верх края облаков совпал бы с полом (y = 0): шум глубины пола платил бы шум края — порог чуть ниже
+  if (wp.y < GORGE_EDGE + GORGE_SWAY - 0.05) {
     float top = gorgeEdge(wp.xz);
     gorge = 1.0 - smoothstep(top - GORGE_FADE, top, wp.y);
   }
@@ -249,7 +251,8 @@ vec3 skyColor(vec3 dir, vec3 cam) {
     float t = clamp((GORGE_FLOOR - cam.y) / min(e, -1e-3), 0.0, 400.0);
     vec3 below = gorgeCloud(cam + dir * t, t);
     below = mix(below, uHaze, FOG_MAX * smoothstep(uFog.x, uFog.y, t));
-    col = mix(below, uHaze, smoothstep(-0.1, 0.0, e));
+    // к горизонту снизу — в цвет горизонта, без ступеньки под хребтами
+    col = mix(below, col, smoothstep(-0.1, 0.0, e));
   }
   // два слоя гор: дальний светлее и выше; подножия обоих уходят в дымку
   float farRidge = 0.05 + 0.11 * noise(az * 2.2 + 17.0) + 0.03 * noise(az * 7.0 + 3.0);
@@ -369,7 +372,7 @@ void main() {
       vec3 wp;
       float dist;
       vec2 air = airAt(vUv, dC, wp, dist);
-      col = mix(col, gorgeCloud(wp, dist) * day, air.y);
+      if (air.y > 0.0) col = mix(col, gorgeCloud(wp, dist) * day, air.y);
       col = mix(col, uHaze * day, air.x);
     }
   }
@@ -379,7 +382,8 @@ void main() {
   float dry = mix(0.3, 1.0, smoothstep(0.14, 0.28, noise(css * 0.05 + 231.0)));
   float pressure = ovF ? 1.0 : mix(1.0, 0.8, smoothstep(8.0, 60.0, 1.0 / wF));
   float lineFog = 0.0;
-  if (!ovF && dF < 1.0) {
+  // без линии (edge = 0) дымка линии не нужна — второй airAt не считаем
+  if (!ovF && dF < 1.0 && edge > 0.0) {
     vec3 wpF;
     float distF;
     vec2 airF = airAt(vUv, dF, wpF, distF);
