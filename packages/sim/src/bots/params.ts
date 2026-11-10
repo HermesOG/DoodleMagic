@@ -77,21 +77,21 @@ export interface BotParams {
 export const BOT_PARAMS: Readonly<Record<BotLevel, Readonly<BotParams>>> = Object.freeze({
   novice: Object.freeze<BotParams>({
     reactionMs: 600, reactionJitterMs: 120, reactionMinMs: 200, thinkHz: 4, turnDegS: 150, turnAccelDegS2: 900,
-    aimSigmaDeg: 4.5, aimDriftS: 0.4, aimMoveMul: 1.3, aimNewTargetMul: 2, aimNewTargetS: 0.6, aimTrack: 0.4, lead: 0,
+    aimSigmaDeg: 4.5, aimDriftS: 0.4, aimMoveMul: 1.3, aimNewTargetMul: 2, aimNewTargetS: 0.6, aimTrack: 0.6, lead: 0,
     dodgeTelegraph: 0.25, dodgeProjectile: 0.15, castDelayS: Object.freeze([1, 3] as const), rescueChance: 0.3, healFrac: 0.25, memoryS: 2,
     maxPerTarget: 2, maxPerHuman: 1, humanGraceS: 8, antiBullyS: 20, rune: "near", runeNearM: 10, edgeStepAway: false, lateAirFix: true,
     ult: "inRange", ultWaitS: 0, noChainCc: true, combos: false, combatJumpChance: 0.03, heatCap: null,
   }),
   mage: Object.freeze<BotParams>({
     reactionMs: 400, reactionJitterMs: 70, reactionMinMs: 200, thinkHz: 6, turnDegS: 300, turnAccelDegS2: 2400,
-    aimSigmaDeg: 2.5, aimDriftS: 0.4, aimMoveMul: 1.3, aimNewTargetMul: 2, aimNewTargetS: 0.6, aimTrack: 0.7, lead: 0.6,
+    aimSigmaDeg: 2.5, aimDriftS: 0.4, aimMoveMul: 1.3, aimNewTargetMul: 2, aimNewTargetS: 0.6, aimTrack: 0.85, lead: 0.6,
     dodgeTelegraph: 0.5, dodgeProjectile: 0.35, castDelayS: Object.freeze([0.5, 1.5] as const), rescueChance: 0.7, healFrac: 0.4, memoryS: 4,
     maxPerTarget: 2, maxPerHuman: 2, humanGraceS: 3, antiBullyS: 20, rune: "present", runeNearM: 10, edgeStepAway: true, lateAirFix: false,
     ult: "twoOrHurt", ultWaitS: 0, noChainCc: true, combos: false, combatJumpChance: 0.06, heatCap: 85,
   }),
   archmage: Object.freeze<BotParams>({
     reactionMs: 250, reactionJitterMs: 40, reactionMinMs: 200, thinkHz: 10, turnDegS: 500, turnAccelDegS2: 5000,
-    aimSigmaDeg: 1.5, aimDriftS: 0.4, aimMoveMul: 1.3, aimNewTargetMul: 2, aimNewTargetS: 0.6, aimTrack: 0.85, lead: 0.85,
+    aimSigmaDeg: 1.5, aimDriftS: 0.4, aimMoveMul: 1.3, aimNewTargetMul: 2, aimNewTargetS: 0.6, aimTrack: 0.92, lead: 0.85,
     dodgeTelegraph: 0.7, dodgeProjectile: 0.55, castDelayS: Object.freeze([0.2, 0.6] as const), rescueChance: 0.95, healFrac: 0.45, memoryS: 6,
     maxPerTarget: 2, maxPerHuman: 2, humanGraceS: 0, antiBullyS: 0, rune: "warn", runeNearM: 10, edgeStepAway: true, lateAirFix: false,
     ult: "patient", ultWaitS: 20, noChainCc: false, combos: true, combatJumpChance: 0.1, heatCap: 85,
