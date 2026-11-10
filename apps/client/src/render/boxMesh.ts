@@ -47,6 +47,28 @@ export function buildBoxArrays(boxes: readonly AABB[]): BoxArrays {
   return { positions, normals, indices };
 }
 
+/**
+ * Атрибут качания `aSway` (Р8) в порядке вершин buildBoxArrays: на вершину — вес (0 у закреплённого края бокса,
+ * 1 у свободного) и середина бокса x, z. Трава закреплена внизу, знамя (`hanging`) — вверху, под венцом.
+ */
+export function buildSwayArrays(boxes: readonly AABB[], hanging = false): Float32Array {
+  const out = new Float32Array(boxes.length * 24 * 3);
+  let v = 0;
+  for (const b of boxes) {
+    const cx = (b.min.x + b.max.x) / 2;
+    const cz = (b.min.z + b.max.z) / 2;
+    for (const face of FACES) {
+      for (const [, cy] of face.c) {
+        out[v * 3] = hanging ? 1 - cy : cy;
+        out[v * 3 + 1] = cx;
+        out[v * 3 + 2] = cz;
+        v++;
+      }
+    }
+  }
+  return out;
+}
+
 /** Боксы арены по номерам чернил: одна корзина — один draw call. Корзины по возрастанию номера (числом), порядок отрисовки один и тот же. */
 export function groupByInk(render: readonly RenderBox[]): Map<number, AABB[]> {
   const byInk = new Map<number, AABB[]>();
