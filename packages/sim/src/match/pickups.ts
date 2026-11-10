@@ -44,15 +44,16 @@ function dist2ToBody(u: Unit, p: Vec3): number {
 }
 
 /**
- * Кто берёт объект (Р3): живой маг в досягаемости; сферу — только раненый (HP < максимума): полный пробегает насквозь.
- * Касаются двое — ближний, при равенстве — меньший id. Никого — undefined.
+ * Кто берёт объект (Р3): живой маг в досягаемости; сферу — только раненый (HP < максимума): полный пробегает насквозь
+ * (на полигоне, anyHp, — берёт и полный: там маг не ранится). Касаются двое — ближний, при равенстве — меньший id.
+ * Никого — undefined.
  */
-function taker(s: MatchState, p: PickupState): Unit | undefined {
+function taker(s: MatchState, p: PickupState, anyHp: boolean): Unit | undefined {
   const reach2 = p.kind === "orb" ? ORB_REACH2 : RUNE_REACH2;
   let best: Unit | undefined;
   let bestD2 = Infinity;
   for (const u of s.units) {
-    if (!u.alive || !u.mage || (p.kind === "orb" && !(u.hp < u.maxHp))) continue;
+    if (!u.alive || !u.mage || (p.kind === "orb" && !anyHp && !(u.hp < u.maxHp))) continue;
     const d2 = dist2ToBody(u, p.pos);
     if (d2 > reach2) continue;
     if (d2 < bestD2 || (d2 === bestD2 && best !== undefined && u.id < best.id)) {
@@ -82,7 +83,7 @@ export function stepPickups(s: MatchState, t: TickCtx): void {
     if (p.kind === "rune" && now === p.readyAt - RUNE_WARN_TICKS) t.ev.push({ type: "pickup", kind: p.kind, index, phase: "warn", unit: NOBODY, pos: copy(p.pos) });
     if (now === p.readyAt) t.ev.push({ type: "pickup", kind: p.kind, index, phase: "spawn", unit: NOBODY, pos: copy(p.pos) });
     if (!pickupPresent(p, now)) return;
-    const u = taker(s, p);
+    const u = taker(s, p, t.orbsAtFullHp === true);
     if (!u) return;
     t.ev.push({ type: "pickup", kind: p.kind, index, phase: "take", unit: u.id, pos: copy(p.pos) });
     if (p.kind === "orb") {

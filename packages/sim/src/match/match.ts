@@ -53,7 +53,7 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
   const t: TickCtx = {
     world: tw.world, terrainIds: tw.terrainIds, killBelowY: ctx.killBelowY, now: s.tick, ev,
     spawns: ctx.spawns !== undefined && ctx.spawns.length > 0 ? ctx.spawns : null, mageRespawnTicks: ticks(ctx.mageRespawnS ?? MATCH.mageRespawnS), spawnShieldTicks: ticks(ctx.spawnShieldS ?? 0),
-    ultChargeMul: ctx.ultChargeMul ?? 1,
+    ultChargeMul: ctx.ultChargeMul ?? 1, orbsAtFullHp: ctx.orbsAtFullHp === true,
   };
   stepFuryEnd(s, t);
   const clean: Partial<Record<UnitId, MatchInput>> = {};

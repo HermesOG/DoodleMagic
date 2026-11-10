@@ -174,6 +174,60 @@ describe("pickupVfx: takes and appearances from the state", () => {
     vfx.dispose();
   });
 
+  it("another mage's take that reached me only by a snapshot (in the past of my window) still bursts, once", () => {
+    const vfx = createPickupVfx({ gbuffer, time: { value: 0 } });
+    const lying = after(520, [mage(ME), mage(OTHER, V(-11.9, 0, -11))]);
+    vfx.sync(frame(lying, lying, fresh()));
+    // снапшот: взята на 510, а мой кадр уже видел 520
+    const cur = next(lying, (n) => {
+      n.tick = 531;
+      n.pickups[0]!.readyAt = 510 + 900;
+    });
+    const sink = fresh();
+    vfx.sync(frame(lying, cur, sink));
+    expect(sink.specs.length).toBeGreaterThan(10);
+    expect(sink.specs.every((p) => dist(p.pos, ORBS[0]!) < 0.6)).toBe(true);
+    const again = fresh();
+    vfx.sync(frame(cur, next(cur), again));
+    expect(again.specs.length).toBe(0);
+    vfx.dispose();
+  });
+
+  it("after a background tab the old spawns and takes do not play: the frame window is at most 60 ticks", () => {
+    const vfx = createPickupVfx({ gbuffer, time: { value: 0 } });
+    const s = after(100, [mage(ME), mage(OTHER, V(-11.9, 0, -11))]);
+    s.pickups[RUNE_INDEX]!.readyAt = 100_000;
+    vfx.sync(frame(s, s, fresh()));
+    const late = next(s, (n) => {
+      n.tick = 5001;
+      n.pickups[0]!.readyAt = 1000 + 900; // взята давно и уже вернулась
+      n.pickups[1]!.readyAt = 4000; // взята давно, вернулась давно
+    });
+    const sink = fresh();
+    vfx.sync(frame(s, late, sink));
+    expect(sink.specs.length).toBe(0);
+    vfx.dispose();
+  });
+
+  it("an orb taken while I stand on it at full HP and a wounded mage is near: the burst is theirs, not my low ring", () => {
+    const feet = V(-11.9, 0, -11.25);
+    const run = (otherHp: number) => {
+      const vfx = createPickupVfx({ gbuffer, time: { value: 0 } });
+      const prev = after(500, [mage(ME, feet), mage(OTHER, V(-11.9, 0, -10.3))]);
+      unit(prev, OTHER).hp = otherHp;
+      const cur = next(prev, (n) => (n.pickups[0]!.readyAt = 501 + 900));
+      const sink = fresh();
+      vfx.sync(frame(prev, cur, sink, { eye: V(feet.x, 1.6, feet.z) }));
+      vfx.dispose();
+      return sink.specs;
+    };
+    const theirs = run(60);
+    const mine = run(unit(after(0, [mage(OTHER)]), OTHER).maxHp);
+    // свой — низкое кольцо у ног; чужой — искры у самой сферы
+    expect(theirs.every((p) => dist(p.pos, ORBS[0]!) < 0.6)).toBe(true);
+    expect(mine.every((p) => dist(p.pos, ORBS[0]!) < 0.6)).toBe(false);
+  });
+
   it("my own take is low: a ring of sparks along the floor whose paths stay well below my eyes", () => {
     // сфера: стою на ней
     const vfx = createPickupVfx({ gbuffer, time: { value: 0 } });

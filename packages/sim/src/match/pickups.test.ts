@@ -170,6 +170,12 @@ describe("health orbs (Р1, Р3)", () => {
     expect([take(0.9), take(0.7)]).toEqual([0, 1]);
   });
 
+  it("on the training ground (orbsAtFullHp) a full mage takes the orb: no heal, the orb is back after 900 ticks", () => {
+    const training = { ...ctx, orbsAtFullHp: true };
+    const r = steps(first(at(pick(ORB))), 1, training);
+    expect([pickupLog(r.log), ofType(r.log, "heal"), r.s.pickups[ORB]!.readyAt]).toEqual([[[0, "orb", ORB, "take", 1]], [], 900]);
+  });
+
   it("a wounded farther mage takes it past a full nearer one", () => {
     const s = createMatch({ mages: [{ element: "fire", spawn: at(pick(ORB)) }, { element: "earth", spawn: at(pick(ORB), 0, 0.7) }], dummies: [] });
     u(s, 2).hp = 50;

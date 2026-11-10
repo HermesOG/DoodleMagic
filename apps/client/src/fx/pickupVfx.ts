@@ -90,6 +90,8 @@ const RUNE_SEAL_FULL: Readonly<SealLook> = { ink: RUNE_SEAL_INK, gold: RUNE_SEAL
 const COLUMN_R_M = 1.2;
 /** Сферу взял ближний к точке живой маг (не дальше 1,6 м по горизонтали): так видно, моё ли взятие. */
 const ORB_TAKER_M = 1.6;
+/** Позднее и давнее (как LATE_FX_MAX_AGE у событий): окно кадра не длиннее этого, тиков; взятие, пришедшее снапшотом, — не старше. */
+const LATE_TICKS = 60;
 const ORB_RESPAWN_TICKS = Math.round(PICKUPS.orb.respawnS * TICK_HZ);
 const FURY_TICKS = Math.round(PICKUPS.rune.furyS * TICK_HZ);
 /** Свет — только при доле яркости ≥ 0,3: почти погасшее свечение не держит источник пресета. */
@@ -470,6 +472,8 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
 
   /** Тик t — в окне кадра (seenNow, frameNow]: событие на нём случилось с прошлого кадра. */
   const inWin = (t: number): boolean => t > seenNow && t <= frameNow;
+  /** Не старше LATE_TICKS: чужое взятие, которое пришло только снапшотом (у игрока — в прошлом окна). */
+  const lateWin = (t: number): boolean => t > frameNow - LATE_TICKS && t <= frameNow;
 
   /** Сколько частиц родить за кадр по темпу rate (остаток копится в acc под ключом id). */
   function due<K>(acc: Map<K, number>, id: K, rate: number, dt: number): number {
@@ -496,24 +500,39 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
     ns++;
   }
 
-  /** Кто взял сферу (взятие известно по сроку): ближний к точке живой маг, не дальше ORB_TAKER_M; никого — NOBODY. */
+  /**
+   * Кто взял сферу (взятие известно по сроку): ближний к точке живой маг, не дальше ORB_TAKER_M; раненый в prev — раньше
+   * полного (в PvP полный её не берёт, на полигоне — берёт: тогда ближний из всех); никого — NOBODY.
+   */
   function orbTaker(f: ElementVfxFrame, p: PickupState): UnitId {
     let best: UnitId = NOBODY;
     let bestD = ORB_TAKER_M;
+    let bestHurt = false;
     for (const it of f.units) {
       if (!it.u.mage) continue;
       const b = it.u.move.body.pos;
       const d = Math.hypot(b.x - p.pos.x, b.z - p.pos.z);
-      if (d > bestD || p.pos.y < b.y - 1 || p.pos.y > b.y + 2.5) continue;
+      if (d > ORB_TAKER_M || p.pos.y < b.y - 1 || p.pos.y > b.y + 2.5) continue;
+      const was = f.prev.units.find((q) => q.id === it.id);
+      const hurt = was !== undefined && was.hp < was.maxHp;
+      if (bestHurt && !hurt) continue;
+      if (hurt === bestHurt && d > bestD) continue;
       best = it.id;
       bestD = d;
+      bestHurt = hurt;
     }
     return best;
   }
 
-  /** Кто взял руну: маг, у которого ярость началась в окне кадра (furyUntil − 12 с); никого — NOBODY. */
-  function runeTaker(f: ElementVfxFrame): UnitId {
-    for (const u of f.cur.units) if (u.mage && inWin(u.status.furyUntil - FURY_TICKS)) return u.id;
+  /**
+   * Кто взял руну: маг, у которого ярость началась в окне кадра (furyUntil − 12 с); late — руна лежала, а взятие пришло
+   * снапшотом: не старше LATE_TICKS. Никого — NOBODY.
+   */
+  function runeTaker(f: ElementVfxFrame, late: boolean): UnitId {
+    for (const u of f.cur.units) {
+      const at = u.status.furyUntil - FURY_TICKS;
+      if (u.mage && (inWin(at) || (late && lateWin(at)))) return u.id;
+    }
     return NOBODY;
   }
 
@@ -688,6 +707,8 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
         flashS = list.map(() => -Infinity);
         warnAcc.clear();
       }
+      // фоновая вкладка или долгий прогрев: давнее не играем — окно кадра не длиннее LATE_TICKS
+      seenNow = Math.max(seenNow, frameNow - LATE_TICKS);
       for (let i = 0; i < list.length; i++) {
         const p = list[i]!;
         const old = seenReady[i]!;
@@ -697,12 +718,15 @@ export const createPickupVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVf
         const spawned = inWin(old) || inWin(p.readyAt);
         let who: UnitId = NOBODY;
         let took = false;
+        // лежал на прошлом кадре, а срок сменился: взятие могло прийти снапшотом в прошлое окна (чужой маг у игрока)
+        const late = p.readyAt !== old && old <= seenNow;
         if (p.kind === "orb") {
-          took = inWin(p.readyAt - ORB_RESPAWN_TICKS);
+          const at = p.readyAt - ORB_RESPAWN_TICKS;
+          took = inWin(at) || (late && lateWin(at));
           if (took) who = orbTaker(f, p);
         } else if (p.readyAt !== old) {
           // руна ушла со своего срока: взята, если кто-то получил ярость в окне; иначе перенесена (отсчёт, новый бой)
-          who = runeTaker(f);
+          who = runeTaker(f, late);
           took = who !== NOBODY;
         }
         if (spawned) appear(f, i, p, floorY);

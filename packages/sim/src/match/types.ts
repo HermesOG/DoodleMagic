@@ -236,6 +236,8 @@ export interface MatchContext {
   readonly ultChargeMul?: number;
   /** Объекты на карте: matchContext берёт их из арены. Нет поля — объектов нет. */
   readonly pickups?: readonly Pickup[];
+  /** Полигон: маг там не ранится, поэтому сферу берёт и маг с полным HP (лечения нет, подбор виден). Нет поля — только раненый (Р1 фазы 6). */
+  readonly orbsAtFullHp?: boolean;
 }
 
 /**
@@ -247,4 +249,6 @@ export interface TickCtx {
   readonly world: World; readonly terrainIds: readonly number[]; readonly killBelowY: number; readonly now: number; readonly ev: MatchEvent[];
   readonly spawns: readonly Spawn[] | null; readonly mageRespawnTicks: number; readonly spawnShieldTicks: number;
   readonly ultChargeMul: number;
+  /** MatchContext.orbsAtFullHp; нет поля — false. */
+  readonly orbsAtFullHp?: boolean;
 }
