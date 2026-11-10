@@ -156,18 +156,16 @@ const CAST_SOUND: Readonly<Record<AbilityId, SoundId>> = {
 };
 /**
  * Отдача камеры у кастующего на нажатии, градусы: ЛКМ — по таблице RECOIL (фаза 9, Р6: кулак 0,6° вверх и вбок по руке
- * удара, камень на нажатии 0 — 0,9° на броске; серп и хлыст — в файлах своих стихий), ладони в землю — вниз
- * (GROUND_SLAM, A2: столб, стена, Разлом), замах землетрясения — 0 (удар вниз придёт с ударом), вдох Дыхания — 0,4°
- * вверх (выдох толкнёт сильнее), остальное 1°.
+ * удара; камень на нажатии не толкает — 0,9° на броске; серп и хлыст здесь — запасной вариант, их перехватывают файлы
+ * стихий), ладони в землю — вниз (GROUND_SLAM, A2: столб, стена, Разлом), замах землетрясения — 0 (удар вниз придёт
+ * с ударом), вдох Дыхания — 0,4° вверх (выдох толкнёт сильнее), остальное 1°. null — толчка нет.
  */
-const castKick = (a: AbilityId): Effect =>
+const castKick = (a: AbilityId): Effect | null =>
   a === "stonePillar" || a === "stoneWall" || a === "tectonicRift"
     ? GROUND_SLAM
-    : a === "fireFists"
-      ? recoilKick(RECOIL.fist, true)
-      : a === "stoneShot"
-        ? recoilKick(RECOIL.stoneCast)
-        : { kind: "kick", pitchDeg: a === "earthquake" ? 0 : a === "dragonBreath" ? 0.4 : 1, yawDeg: 0, rollDeg: 0 };
+    : isPrimary(a)
+      ? a === "fireFists" ? recoilKick(RECOIL.fist, true) : a === "airSickle" ? recoilKick(RECOIL.sickle, true) : a === "waterWhip" ? recoilKick(RECOIL.whipCast) : null
+      : { kind: "kick", pitchDeg: a === "earthquake" ? 0 : a === "dragonBreath" ? 0.4 : 1, yawDeg: 0, rollDeg: 0 };
 /** Чем попали в меня — глухой удар плюс отпечаток стихии (round1/03, п. 3); у кулака свой треск попадания (H3). */
 const HIT_SOUND: Readonly<Record<DamageSource, SoundId>> = {
   fireFists: "fistHit", fireball: "fireballBoom", jetDash: "fireWallIgnite", fireWall: "fireWallIgnite", burning: "fireWallIgnite",
@@ -408,8 +406,9 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
           preset: ev.ability === "fireball" || ev.ability === "stoneShot" || ev.ability === "dragonBreath" ? "charge" : "flash",
         },
         sound(CAST_SOUND[ev.ability]),
-        castKick(ev.ability),
       ];
+      const kick = castKick(ev.ability);
+      if (kick) out.push(kick);
       // камень вырывается из пола у ног
       if (ev.ability === "stoneShot" && caster) out.push(burst("stoneCrumble", { ...caster.move.body.pos }));
       // ладони Разлома бьют в пол: тряска по профилю Земли (удар шипов — крупная ступень на взводе)
@@ -432,8 +431,10 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       const stone = ev.ability === "stoneShot";
       const fx = IMPACT_FX[ev.ability] ?? IMPACT_FX.fireFists!;
       const preset: BurstPreset = ev.terrain >= 0 ? "terrainChips" : fx.burst;
-      // своё попадание в цель — пол 0,6; свой промах — пол 0,35 (L8: слышно, куда лёг выстрел); чужое — по расстоянию
-      const hit = ownSound(fx.sound, ev.pos, mine(ev.owner), ev.target !== NOBODY ? OWN_HIT_FLOOR : OWN_MISS_FLOOR);
+      // своё попадание в цель — пол 0,6; свой промах ЛКМ — пол 0,35 (L8: слышно, куда лёг выстрел); шар в стену и
+      // чужое — по расстоянию
+      const onTarget = ev.target !== NOBODY;
+      const hit = ownSound(fx.sound, ev.pos, mine(ev.owner) && (onTarget || isPrimary(ev.ability)), onTarget ? OWN_HIT_FLOOR : OWN_MISS_FLOOR);
       // Земле вместо света — белая бумажная вспышка (H3)
       return stone && ev.terrain < 0 ? [burst(preset, ev.pos, ev.normal), burst("paperFlash", ev.pos), hit] : [burst(preset, ev.pos, ev.normal), hit];
     }

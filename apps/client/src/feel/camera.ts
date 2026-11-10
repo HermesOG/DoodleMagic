@@ -30,7 +30,6 @@ export const SHAKE = {
  */
 export const RECOIL = {
   fist: { pitchDeg: 0.6, yawDeg: 0.15 },
-  stoneCast: { pitchDeg: 0, yawDeg: 0 },
   stoneThrow: { pitchDeg: 0.9, yawDeg: 0 },
   sickle: { pitchDeg: 0.4, yawDeg: 0.2 },
   whipCast: { pitchDeg: 0.1, yawDeg: 0 },

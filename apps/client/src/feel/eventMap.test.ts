@@ -84,7 +84,7 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
   it("releases with a beat: the stone's 0.9° recoil and a throw sound on the release, a launch sound for the fireball (A1, phase 9 Р6)", () => {
     const eye = V(0, 1.6, 0);
     // нажатие камня камеру не толкает — толчок на броске
-    expect(pick(fx(cast(ME, "stoneShot", eye)), "kick")).toEqual([{ kind: "kick", pitchDeg: 0, yawDeg: 0, rollDeg: 0, recoil: true }]);
+    expect(pick(fx(cast(ME, "stoneShot", eye)), "kick")).toEqual([]);
     const stone = fx({ type: "release", unit: ME, ability: "stoneShot", projectile: 9, pos: eye, dir: V(0, 0, -1) });
     expect([pick(stone, "kick")[0], pick(stone, "sound")[0]?.id]).toEqual([{ kind: "kick", pitchDeg: 0.9, yawDeg: 0, rollDeg: 0, recoil: true }, "stoneThrow"]);
     // кулак: 0,6° вверх и 0,15° вбок от руки удара (у левой — зеркально, это решает камера по руке)
@@ -116,6 +116,9 @@ describe("effectsFor: feedback tiers (round3/01, 2.1)", () => {
     expect(pick(wall, "sound")[0]?.floor).toBe(0.35);
     const theirMiss = fx({ type: "impact", ability: "fireFists", owner: OTHER, pos: V(0, 1, -20), normal: V(0, 0, 1), target: NOBODY, terrain: 4 });
     expect(pick(theirMiss, "sound")[0]?.floor).toBeUndefined();
+    // пол промаха — только у ЛКМ: свой шар в стену звучит по расстоянию (взрыв слышно своим полом)
+    const ballWall = fx({ type: "impact", ability: "fireball", owner: ME, pos: V(0, 1, -20), normal: V(0, 0, 1), target: NOBODY, terrain: 4 });
+    expect(pick(ballWall, "sound")[0]?.floor).toBeUndefined();
   });
 
   it("does not count the victim's shake twice: area + hit trauma add up to fireball 0.5, pillar 0.5, quake 0.65", () => {
