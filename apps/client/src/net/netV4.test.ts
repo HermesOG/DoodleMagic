@@ -26,7 +26,6 @@ function snapshot(): SnapshotMsg {
 }
 
 describe("net v4", () => {
-
   it("a snapshot carries the pickups and the fury; without pickups it is not a snapshot", async () => {
     const s = snapshot();
     expect(s.game.match.pickups.map((p) => [p.kind, p.readyAt])).toEqual(ctx.pickups!.map((p) => [p.kind, p.kind === "rune" ? 2700 : NEVER]));

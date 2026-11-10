@@ -254,10 +254,11 @@ describe("deaths and scoring", () => {
 
   it("the final minute and sudden death: back in 2 s (Р3 фазы 9); 61 s before the end and in warmup — in 3 s", () => {
     const cases: [GameState, number][] = [];
-    for (const leftS of [59, 61]) {
+    // граница — включительно: ровно 60 с (3600 тиков) — уже финал, 3601 тик — ещё нет
+    for (const [left, back] of [[ticks(59), 120], [3600, 120], [3601, 180], [ticks(61), 180]] as const) {
       const g = unshield(live("fire", "earth"));
-      g.phaseEnd = g.match.tick + ticks(leftS);
-      cases.push([g, leftS === 59 ? 120 : 180]);
+      g.phaseEnd = g.match.tick + left;
+      cases.push([g, back]);
     }
     const sd = unshield(live("fire", "earth"));
     Object.assign(sd, { suddenDeath: true, phaseEnd: sd.match.tick + 3600 });
@@ -287,7 +288,7 @@ describe("phases", () => {
 
   it("the countdown ends in 180 ticks: scores reset, mages on different points, the arena cleared, a respawn each", () => {
     const g = gameWith("fire", "earth", "fire");
-    for (const u of g.match.units) Object.assign(u.mage!.stats, { damage: 40, kills: 2, falls: 1, deaths: 1 });
+    for (const u of g.match.units) Object.assign(u.mage!.stats, { damage: 40, kills: 2, falls: 1, deaths: 1, streak: 4, multi: 2, lastScoreTick: 50 });
     Object.assign(posOf(g, 1), { x: 10, z: -30 });
     Object.assign(mageOf(g, 2), { alive: false, respawnTick: 1e6 });
     litter(g, 1);
