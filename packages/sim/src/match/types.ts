@@ -102,8 +102,11 @@ export interface MageState {
   ult: UltState;
   /** Где маг появился последним: в PvP — точка pickSpawn, на полигоне — своя. */
   spawn: Spawn;
-  /** deaths — смерти от урона и падения, в том числе свои. */
-  stats: { damage: number; kills: number; falls: number; deaths: number };
+  /**
+   * deaths — смерти от урона и падения, в том числе свои. Серии (Р4 фазы 9): streak — очков с последней своей смерти,
+   * multi — очков подряд в окне STREAK.multiWindowS, lastScoreTick — тик прошлого очка (−1 — после смерти не было).
+   */
+  stats: { damage: number; kills: number; falls: number; deaths: number; streak: number; multi: number; lastScoreTick: number };
 }
 
 /** Манекен ходит вдоль rightXZ(yaw) на ±patrolHalfM от точки; без patrolHalfM стоит. */
@@ -218,7 +221,14 @@ export type MatchEvent =
   /** Объект на карте: warn — руна через 10 с; spawn — появился (unit NOBODY у обоих); take — взят магом unit. index — номер в state.pickups. */
   | { type: "pickup"; kind: PickupKind; index: number; phase: "warn" | "spawn" | "take"; unit: UnitId; pos: Vec3 }
   /** Ярость снята: end — время вышло; slain — носитель погиб, by — убийца или засчитанный сбросивший (+10 к ульте) или NOBODY. pos — подошва. */
-  | { type: "fury"; unit: UnitId; phase: "end" | "slain"; by: UnitId; pos: Vec3 };
+  | { type: "fury"; unit: UnitId; phase: "end" | "slain"; by: UnitId; pos: Vec3 }
+  /** «Добыча» (Р1 фазы 9): живой маг unit за очко по victim прибавил amount HP (0 — события нет). pos — середина его тела. */
+  | { type: "loot"; unit: UnitId; victim: UnitId; amount: number; pos: Vec3 }
+  /**
+   * Очко мага unit (Р4 фазы 9): multi и streak — уже с этим очком. broke — жертва, если её серия до смерти была ≥ 3
+   * (иначе NOBODY), brokeStreak — эта серия (иначе 0).
+   */
+  | { type: "streak"; unit: UnitId; multi: number; streak: number; broke: UnitId; brokeStreak: number };
 
 export interface MatchStep { state: MatchState; events: MatchEvent[] }
 

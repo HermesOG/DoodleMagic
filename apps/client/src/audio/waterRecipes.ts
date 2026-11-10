@@ -1,5 +1,5 @@
 import type { WATER_SOUND_IDS } from "../feel/waterIds";
-import { REVERB_SEND, SIG, noise, tone, type Recipe } from "./layers";
+import { REVERB_SEND, SHOT_CLICK, SIG, noise, tone, type Recipe } from "./layers";
 
 /** Звуки Воды. Подпись — в полосе Воды 300–1500 Гц (GDD 5). */
 export type WaterSoundId = (typeof WATER_SOUND_IDS)[number];
@@ -19,14 +19,21 @@ const absorb = (f: number): Recipe => ({
  * короткое «тело» 60–200 Гц. Все звуки ≤ 0,8 с; журчание Родника — зерно 0,5 с, его повторяет waterFrame.
  */
 export const WATER_RECIPES: Readonly<Record<WaterSoundId, Recipe>> = {
-  // замах хлыста 0,12 с: тихий «вжик» вверх — отклик на нажатие, щелчок придёт с дугой
+  // замах хлыста 0,12 с (фаза 9, L1): щелчок, «вжик» вверх — громче и с быстрой атакой, нажатие слышно сразу — и тихий
+  // хвост плеска; щелчок хлыста придёт с дугой
   whipSwish: {
     vary: 0.08,
-    layers: [noise("bandpass", 600, 1300, 0.11, 0.3, { q: 1.4, attack: 0.05, ...SIG })],
+    reverb: REVERB_SEND.lmb,
+    layers: [
+      SHOT_CLICK,
+      noise("bandpass", 600, 1300, 0.11, 0.5, { q: 1.4, attack: 0.015, ...SIG }),
+      noise("bandpass", 900, 450, 0.2, 0.15, { q: 1.2, attack: 0.01 }),
+    ],
   },
   // щелчок хлыста: плеск bandpass 1,4 → 0,5 кГц, «пик» 900 → 300 Гц и короткий хлёст сверху
   whipCrack: {
     vary: 0.06,
+    reverb: REVERB_SEND.lmb,
     layers: [
       noise("bandpass", 1400, 500, 0.09, 0.85, { q: 1.5, attack: 0.001, sweep: 0.5, ...SIG }),
       tone("sine", 900, 300, 0.06, 0.45, { attack: 0.001, sweep: 0.4 }),
@@ -36,6 +43,7 @@ export const WATER_RECIPES: Readonly<Record<WaterSoundId, Recipe>> = {
   // попадание хлыста: мокрый шлепок и глухое тело
   whipHit: {
     vary: 0.05,
+    reverb: REVERB_SEND.lmb,
     layers: [
       noise("lowpass", 1200, 400, 0.14, 0.8, { q: 2, attack: 0.002, sweep: 0.6, ...SIG }),
       tone("sine", 220, 110, 0.1, 0.5, { attack: 0.002, sweep: 0.5 }),

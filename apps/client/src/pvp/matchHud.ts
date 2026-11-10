@@ -1,8 +1,10 @@
 import { ELEMENT_INFO, PVP, TICK_HZ, statusFlags, unitById, type Element, type GameState, type UnitId } from "@doodlemagic/sim";
 import type { Frame } from "../game/driver";
 import type { GameView } from "../game/view";
+import type { SoundId } from "../feel/effects";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine, withKnownNames,
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, matchPointText, resultsHint, resultsTitle, respawnLine, scoreRows, stepArc,
+  streakFeedLines, topParts, withKnownNames, createArc,
   type ScoreRow,
 } from "./format";
 import type { PvpDriver } from "./hostDriver";
@@ -77,6 +79,8 @@ function fillTable(t: Table, rows: readonly ScoreRow[]): void {
 interface FeedItem {
   text: string;
   mine: boolean;
+  /** Печать «×N» у строки мульти; "" — без печати. */
+  stamp: string;
   at: number;
 }
 
@@ -90,6 +94,14 @@ interface FeedItem {
 export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameView): MatchHud {
   const hud = div("mh");
   const top = div("pvp-top");
+  // строка сверху: часы (краснеют в последнюю минуту), остальное и печать матч-пойнта (T7)
+  const topClock = document.createElement("span");
+  topClock.className = "pvp-clock";
+  const topRest = document.createElement("span");
+  const topMatchPoint = document.createElement("span");
+  topMatchPoint.className = "pvp-mp";
+  topMatchPoint.hidden = true;
+  top.append(topClock, topRest, topMatchPoint);
   const count = div("mh-count");
   count.hidden = true;
   // всё, что видно только в игре (мышь захвачена)
@@ -104,6 +116,15 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     d.hidden = true;
     feedBox.append(d);
     return d;
+  });
+  // строка килфида — текст и печать «×N» (серии, Р5): текст по-прежнему только через textContent
+  const feedParts = feedEls.map((d) => {
+    const text = document.createElement("span");
+    const seal = document.createElement("span");
+    seal.className = "mh-feed-stamp";
+    seal.hidden = true;
+    d.append(text, seal);
+    return { text, seal };
   });
   /** Последняя записанная прозрачность строки килфида ("" — без угасания). */
   const feedOpacity = feedEls.map(() => "");
@@ -168,6 +189,12 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   let topFor: GameState | null = null;
   let topSec = Number.NaN;
   let topNames: ReadonlyMap<UnitId, string> | null = null;
+  /** Дуга матча (T7): что уже прозвучало (меняется на месте); по какой игре, составу и секунде она считана. */
+  const arc = createArc();
+  let arcFor: GameState | null = null;
+  let arcSec = Number.NaN;
+  let arcNames: ReadonlyMap<UnitId, string> | null = null;
+  let matchPointShown = "";
   /** Имена всех магов за сессию (для таблицы и итогов: вышедший победитель — по имени); пересчёт — со сменой состава. */
   let known: ReadonlyMap<UnitId, string> = new Map();
   let knownFrom: ReadonlyMap<UnitId, string> | null = null;
@@ -225,7 +252,10 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       const item = feed[k];
       setHidden(el, !item);
       if (!item) continue;
-      setText(el, item.text);
+      const parts = feedParts[k]!;
+      setText(parts.text, item.text);
+      setText(parts.seal, item.stamp);
+      setHidden(parts.seal, item.stamp === "");
       el.classList.toggle("is-mine", item.mine);
       const left = FEED_S - (nowS - item.at);
       const opacity = left < FEED_FADE_S ? (Math.max(0, left) / FEED_FADE_S).toFixed(2) : "";
@@ -244,7 +274,43 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     topFor = c;
     topSec = sec;
     topNames = names;
-    setText(top, topLine(c, driver.localId, names, driver.isHost, now));
+    const p = topParts(c, driver.localId, names, driver.isHost, now);
+    setText(topClock, p.clock);
+    setText(topRest, p.clock !== "" && p.rest !== "" ? ` · ${p.rest}` : p.rest);
+  };
+
+  const sound = (id: SoundId): void => view.route({ kind: "sound", id, pos: null, gain: 1 });
+  /**
+   * Дуга матча (T7) по подтверждённой игре и часам «сейчас»: часы краснеют печатью, один раз «Последняя минута!» (в
+   * строке серий, если она свободна) и гонг — и без музыки; щелчки последних 10 с; печать матч-пойнта и барабан.
+   */
+  const renderArc = (c: GameState, now: number, names: ReadonlyMap<UnitId, string>, nowS: number): void => {
+    // дуга меняется со снапшотом, составом или секундой часов — между ними не считаем (как строка сверху)
+    const sec = Math.ceil((c.phaseEnd - now) / TICK_HZ);
+    if (c === arcFor && sec === arcSec && names === arcNames) return;
+    const fresh = c !== arcFor || names !== arcNames;
+    arcFor = c;
+    arcSec = sec;
+    arcNames = names;
+    const a = stepArc(arc, c, now);
+    topClock.classList.toggle("is-final", a.final);
+    if (a.lastMinute) {
+      stamp(topClock, [{ transform: "scale(1.4)" }, { transform: "scale(1)" }], 180);
+      view.streak.lastMinute(nowS);
+      sound("lastMinute");
+    }
+    if (a.click) sound(a.click === "last" ? "clockTickLast" : "clockTick");
+    // текст печати — только с новой игрой или составом
+    const mp = fresh ? (matchPointText(a.ids, driver.localId, names) ?? "") : matchPointShown;
+    if (mp !== matchPointShown) {
+      matchPointShown = mp;
+      setText(topMatchPoint, mp);
+      setHidden(topMatchPoint, mp === "");
+    }
+    if (a.matchPoint) {
+      stamp(topMatchPoint, [{ transform: "scale(1.4)" }, { transform: "scale(1)" }], 180);
+      sound("streakDrums");
+    }
   };
 
   return {
@@ -269,9 +335,17 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       // килфид и причина смерти — только по событиям хоста
       let fresh = false;
       for (const ev of f.confirmed) {
+        // серии — строками другим, не в разминке и отсчёте (Р5); решающее очко переводит игру в итоги — его строка остаётся
+        if (ev.type === "streak") {
+          if (c.phase === "warmup" || c.phase === "countdown") continue;
+          const lines = streakFeedLines(ev, names, id);
+          for (const l of lines) feed.unshift({ text: l.text, mine: l.mine, stamp: l.stamp, at: nowS });
+          if (lines.length > 0) fresh = true;
+          continue;
+        }
         const line = feedLine(ev, names, id);
         if (!line) continue;
-        feed.unshift({ text: line.text, mine: line.mine, at: nowS });
+        feed.unshift({ text: line.text, mine: line.mine, stamp: "", at: nowS });
         fresh = true;
         if ((ev.type === "death" || ev.type === "fall") && ev.target === id) deathText = deathLine(ev, c, names);
       }
@@ -280,6 +354,7 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       if (fresh && locked) stamp(feedEls[0]!, [{ opacity: 0, transform: "translateX(14px)" }, { opacity: 1, transform: "none" }], 180);
 
       renderTop(c, now, names);
+      renderArc(c, now, names, nowS);
 
       const counting = c.phase === "countdown";
       setHidden(count, !counting);

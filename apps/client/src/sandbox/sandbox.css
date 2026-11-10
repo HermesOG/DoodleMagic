@@ -75,6 +75,10 @@
   background: transparent;
   accent-color: #1d1b16;
 }
+/* музыка выключена — её ползунок бледный */
+.sb-card input[type="range"]:disabled {
+  opacity: 0.4;
+}
 .sb-card .sb-check {
   display: flex;
   align-items: center;

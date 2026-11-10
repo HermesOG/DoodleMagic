@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDummyUnit, createMageUnit, createMatchState, type MatchEvent } from "@doodlemagic/sim";
 import { createGestures, startGesture, stepGestures } from "../hands/gestures";
-import { addFeel, addLanding, createCameraFeel, stepCameraFeel } from "./camera";
+import { RECOIL, SHAKE, addFeel, addLanding, createCameraFeel, recoilKick, stepCameraFeel } from "./camera";
 import type { Effect } from "./effects";
 import { effectsFor } from "./eventMap";
 
@@ -133,6 +133,39 @@ describe("camera feel", () => {
       path.push(r.offset.pitch / (1.5 * deg));
     }
     expect([Math.max(...path) > 0.9, Math.max(...path) < 1.05, Math.abs(path.at(-1)!) < 0.1]).toEqual([true, true, true]);
+  });
+
+  it("recoils an LMB shot on its own fast spring: peak at 25 ms, sideways by the punching hand, off at camera motion 0 (phase 9, Р6)", () => {
+    const trace = (e: Effect, hand: "left" | "right", motion = 1) => {
+      let f = addFeel(createCameraFeel(), e, hand);
+      let top = 0;
+      let at = 0;
+      let yawTop = 0;
+      for (let k = 1; k <= 200; k++) {
+        const r = stepCameraFeel(f, 1 / 1000, motion);
+        f = r.feel;
+        if (r.offset.pitch > top) [top, at] = [r.offset.pitch, k / 1000];
+        if (Math.abs(r.offset.yaw) > Math.abs(yawTop)) yawTop = r.offset.yaw;
+      }
+      return { top: top / deg, at, yaw: yawTop / deg, end: stepCameraFeel(f, 0, motion).offset.pitch / deg };
+    };
+    const fist = recoilKick(RECOIL.fist, true);
+    const right = trace(fist, "right");
+    expect([right.top, right.at, right.yaw]).toEqual([expect.closeTo(0.6, 3), expect.closeTo(1 / SHAKE.recoilOmega, 3), expect.closeTo(0.15, 3)]);
+    // к 200 мс камера на месте: к следующему кулаку (через 250 мс) прицел стоит
+    expect(Math.abs(right.end)).toBeLessThan(0.01);
+    expect(trace(fist, "left").yaw).toBeCloseTo(-0.15, 3);
+    // хлыст бьёт только правой: вбок всегда в одну сторону
+    expect(trace(recoilKick(RECOIL.whipStrike), "left").yaw).toBeCloseTo(0.25, 3);
+    expect(SHAKE.recoilOmega).toBe(40);
+    // прочие толчки — на прежней пружине ω 25
+    expect(trace({ kind: "kick", pitchDeg: 1, yawDeg: 0, rollDeg: 0 }, "right").at).toBeCloseTo(1 / SHAKE.kickOmega, 3);
+    // ползунок «Движение камеры» гасит отдачу целиком
+    const still = trace(fist, "right", 0);
+    expect([still.top, still.yaw]).toEqual([0, 0]);
+    expect([RECOIL.fist, RECOIL.stoneThrow.pitchDeg, RECOIL.sickle, RECOIL.whipCast.pitchDeg, RECOIL.whipStrike]).toEqual([
+      { pitchDeg: 0.6, yawDeg: 0.15 }, 0.9, { pitchDeg: 0.4, yawDeg: 0.2 }, 0.1, { pitchDeg: 0.6, yawDeg: 0.25 },
+    ]);
   });
 
   it("punches the FOV as an impulse: the dash's +8° peaks within ≈ 35 ms and eases back; still at camera motion 0 (M3)", () => {
