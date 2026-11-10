@@ -25,6 +25,7 @@ import { addFeel, addLanding, createCameraFeel, stepCameraFeel, type CameraOffse
 import type { Effect } from "../feel/effects";
 import { elementFrameEffects } from "../feel/elementFx";
 import { effectsFor } from "../feel/eventMap";
+import { ambientSpots, createAmbient } from "../fx/ambient";
 import { createVfx } from "../fx/vfx";
 import { createGestures, isFistGesture, startGesture, stepGestures } from "../hands/gestures";
 import { createMittens } from "../hands/mittens";
@@ -140,6 +141,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   const vfx = createVfx(renderer.gbuffer, renderer.preset.id);
   const scene = new Scene();
   scene.add(buildArenaMeshes(arena.render), vfx.worldGroup);
+  const ambient = createAmbient(renderer.gbuffer, ambientSpots(arena), renderer.preset.id);
+  vfx.fx.world.add(ambient.mesh);
   const mittens = createMittens();
   const combat = createCombatHud(root);
   // звук: контекст создаёт первый жест (клик «Играть», выбор стихии, любая клавиша); без Web Audio — тишина, не сбой
@@ -177,6 +180,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
 
   const setPreset = (p: PresetId): void => {
     renderer.setPreset(p);
+    ambient.setPreset(p);
     guard.run(
       "vfx",
       () => {
