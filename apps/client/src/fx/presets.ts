@@ -2,10 +2,30 @@ import type { Element, ProjectileKind, Vec3 } from "@doodlemagic/sim";
 import type { BurstPreset } from "../feel/effects";
 import { AIR_BURSTS, AIR_PALM, AIR_TRAILS } from "./presets.air";
 import { WATER_BURSTS, WATER_PALM, WATER_TRAILS } from "./presets.water";
-import { FX_COLOR, L, UP, emit, randomUnit, spawn, lerp, type Layer, type PalmLayers, type ParticleSpec, type TrailFn } from "./particleKit";
+import { FX_COLOR, L, UP, clamp01, emit, hex, mixRGB, randomUnit, spawn, lerp, type Layer, type PalmLayers, type ParticleSpec, type TrailFn } from "./particleKit";
+import { luminance } from "../render/palette";
 import type { PresetId } from "../render/quality";
 
 export { FX_COLOR, SMOKE_ALPHA, type ParticleSpec } from "./particleKit";
+
+/**
+ * Золото объектов карты (фаза 6; GDD 6: руна, корона и сферы — «золото с печатью»): желтее и светлее огня, чтобы
+ * руна не читалась Огнём. deep — искры и угли, light — тело света и свечения, pale — ядро и блик.
+ */
+export const GOLD = { deep: hex(0xe0a526), light: hex(0xffd04d), pale: hex(0xfff2c6) } as const;
+
+/**
+ * Свет частиц (альфа 0) — в золото на месте: по яркости исходного цвета слоя — от deep (угли) через light (свечение)
+ * к pale (ядро). Плотные частицы не трогает. Возвращает тот же массив.
+ */
+export function toGold<T extends ParticleSpec[]>(specs: T): T {
+  for (const s of specs) {
+    if (s.alpha > 0) continue;
+    const k = clamp01((luminance(s.color) - 0.3) / 0.6);
+    s.color = k < 0.5 ? mixRGB(GOLD.deep, GOLD.light, k * 2) : mixRGB(GOLD.light, GOLD.pale, k * 2 - 1);
+  }
+  return specs;
+}
 
 /** Частиц на кадр по пресету качества (план, Global Constraints): мировой пул — 4/5, пул ладоней — 1/5. */
 export const PARTICLE_BUDGET: Readonly<Record<PresetId, number>> = { low: 600, medium: 1500, high: 3000 };
@@ -137,6 +157,32 @@ const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
     L("dust", 14, "up", [1, 2.5], [0.8, 1.3], [0.4, 0.6], [1.1, 1.6], { r0: 2.2 }),
     L("jade", 4, "up", [2, 4], [0.3, 0.5], [0.06, 0.09], [0.02, 0.03], { r0: 1.2 }),
   ],
+  // объекты на карте (фаза 6): свет этих слоёв перекрашивается в золото (toGold). Сфера вернулась — кольцо искр
+  // поднимается из печати (≤ 30); взята — золотые искры вверх (≤ 40)
+  orbSpawn: [
+    L("core", 2, "sphere", [0, 0.3], [0.12, 0.18], [0.25, 0.35], [0.45, 0.6]),
+    L("glow", 10, "ring", [0.3, 0.8], [0.3, 0.45], [0.08, 0.12], [0.03, 0.05], { r0: 0.15, r1: 0.45, up: 1.2, gravity: -0.5 }),
+    L("ember", 14, "up", [1.2, 2.6], [0.3, 0.5], [0.03, 0.05], [0.015, 0.02], { r0: 0.35, gravity: 2, cone: 0.35 }),
+  ],
+  orbTake: [
+    L("core", 3, "sphere", [0, 0.4], [0.1, 0.16], [0.3, 0.4], [0.55, 0.75]),
+    L("ember", 24, "up", [2, 4.5], [0.35, 0.6], [0.04, 0.06], [0.015, 0.025], { cone: 0.5, gravity: 3 }),
+    L("glow", 10, "sphere", [0.4, 1.2], [0.4, 0.6], [0.08, 0.12], [0.02, 0.04], { up: 1.5, gravity: -0.8 }),
+  ],
+  // руна появилась — столб искр из печати и кольцо по её кругу (≤ 120); взята — искры во все стороны (≤ 120)
+  runeSpawn: [
+    L("core", 6, "up", [0.5, 2], [0.2, 0.35], [0.5, 0.8], [1.0, 1.4], { r0: 0.3, cone: 0.15 }),
+    L("ember", 60, "up", [4, 9], [0.5, 0.9], [0.05, 0.08], [0.02, 0.03], { r0: 0.45, cone: 0.12, gravity: 1.5 }),
+    L("glow", 30, "up", [1.5, 4], [0.6, 1.0], [0.12, 0.2], [0.04, 0.07], { r0: 0.6, cone: 0.2, gravity: -0.5 }),
+    L("glow", 18, "ring", [1.5, 3], [0.4, 0.6], [0.1, 0.15], [0.04, 0.06], { r0: 0.6, r1: 1.5, up: 0.6, gravity: 0 }),
+  ],
+  runeTake: [
+    L("core", 6, "sphere", [0, 1], [0.15, 0.25], [0.5, 0.7], [1.1, 1.5]),
+    L("ember", 56, "sphere", [4, 9], [0.4, 0.7], [0.05, 0.08], [0.02, 0.03], { up: 2, gravity: 4 }),
+    L("glow", 36, "sphere", [1.5, 3.5], [0.5, 0.8], [0.12, 0.18], [0.03, 0.06], { r0: 0.4, gravity: -0.6 }),
+  ],
+  // искра за носителем ярости: одна, всплывает и отстаёт — за бегущим тянется золотой след
+  furyMote: [L("ember", 1, "up", [0.3, 0.9], [0.5, 0.8], [0.05, 0.07], [0.015, 0.025], { gravity: -0.8, cone: 0.6 })],
   // Воздух и Вода — своими таблицами (presets.air.ts, presets.water.ts)
   ...AIR_BURSTS,
   ...WATER_BURSTS,
@@ -180,6 +226,9 @@ const PALM: Readonly<Record<Element, PalmLayers>> = {
 /** Следы снарядов стихий фазы 4 (у Огня и Земли — свои ветки trailParticles). */
 const ELEMENT_TRAILS: Readonly<Partial<Record<ProjectileKind, TrailFn>>> = { ...AIR_TRAILS, ...WATER_TRAILS };
 
+/** Всплески объектов на карте: их свет — золото (toGold), а не огонь. */
+const GOLD_BURSTS: ReadonlySet<BurstPreset> = new Set<BurstPreset>(["orbSpawn", "orbTake", "runeSpawn", "runeTake", "furyMote"]);
+
 /**
  * Частицы всплеска `p` в точке pos. Число — round(n × clamp(scale, 0,5, 3)), не больше MAX_BURST.
  * rng снаружи: в игре Math.random (клиент — не симуляция), в тестах — с семенем.
@@ -188,7 +237,8 @@ export function burstParticles(p: BurstPreset, pos: Vec3, dir: Vec3, scale: numb
   const layers = BURSTS[p];
   const s = Math.min(3, Math.max(0.5, Number.isFinite(scale) ? scale : 1));
   const base = layers.reduce((a, l) => a + l.n, 0);
-  return emit(layers, Math.min(MAX_BURST, Math.round(base * s)), pos, dir, rng);
+  const out = emit(layers, Math.min(MAX_BURST, Math.round(base * s)), pos, dir, rng);
+  return GOLD_BURSTS.has(p) ? toGold(out) : out;
 }
 
 /** Вспышка, заряд или «пшик» у ладони: pos и направления — в пространстве камеры рук (вперёд — −z). */
