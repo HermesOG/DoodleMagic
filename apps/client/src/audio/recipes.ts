@@ -3,7 +3,7 @@ import type { SoundId } from "../feel/effects";
 import { AIR_SOUND_IDS } from "../feel/airIds";
 import { WATER_SOUND_IDS } from "../feel/waterIds";
 import { AIR_RECIPES } from "./airRecipes";
-import { SIG, noise, tone, REVERB_SEND, type Recipe } from "./layers";
+import { SHOT_CLICK, SIG, noise, tone, REVERB_SEND, type Recipe } from "./layers";
 import { WATER_RECIPES } from "./waterRecipes";
 
 export { REVERB_SEND } from "./layers";
@@ -17,11 +17,16 @@ export type { Layer, Recipe } from "./layers";
  */
 export const RECIPES: Record<SoundId, Recipe> = {
   // ── Огонь ──
+  // кулак (L1): треск-подпись, щелчок, «пух» пламени — шум lowpass 300 → 1200 Гц (шум, а не синус: синус 30–200 Гц —
+  // подпись Земли) и хвост треска
   fireFist: {
     vary: 0.06,
+    reverb: REVERB_SEND.lmb,
     layers: [
       noise("highpass", 4000, 3000, 0.07, 0.6, { q: 0, ceiling: 8000, clicks: 3, ...SIG }),
-      noise("bandpass", 2400, 1100, 0.06, 0.3, { q: 1.4 }),
+      SHOT_CLICK,
+      noise("lowpass", 300, 1200, 0.08, 0.6, { q: 2, attack: 0.002 }),
+      noise("highpass", 2500, 2000, 0.2, 0.15, { q: 0, ceiling: 6000, attack: 0.01, clicks: 4 }),
     ],
   },
   fireballCharge: {
@@ -54,6 +59,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
   // попадание кулаком (H3): треск и сухой хлопок 1–2 кГц — не тот же звук, что у каста
   fistHit: {
     vary: 0.06,
+    reverb: REVERB_SEND.lmb,
     layers: [
       noise("highpass", 3500, 3000, 0.06, 0.55, { q: 0, ceiling: 8000, clicks: 3, ...SIG }),
       noise("bandpass", 2000, 1000, 0.04, 0.7, { q: 1.2, attack: 0.001 }),
@@ -109,28 +115,34 @@ export const RECIPES: Record<SoundId, Recipe> = {
   },
 
   // ── Земля ──
+  // нажатие: камень вырывается из пола — 100 мс, весь замах 0,12 с (фаза 9, Р2): бросок звучит своим рецептом
   stoneCast: {
     vary: 0.05,
     layers: [
-      tone("sine", 90, 40, 0.16, 0.85, { sweep: 0.5, drive: 2, ...SIG }),
-      noise("lowpass", 400, 220, 0.12, 0.6, { q: 0, clicks: 3 }),
+      tone("sine", 90, 40, 0.1, 0.85, { sweep: 0.5, drive: 2, ...SIG }),
+      noise("lowpass", 400, 220, 0.08, 0.6, { q: 0, clicks: 3 }),
     ],
   },
-  // бросок камня (A1): свист lowpass 800 → 300 Гц, щелчок 2 кГц на 20 мс и короткий глухой толчок — подпись Земли
+  // бросок камня (A1, L1): каменный щелчок 1,2 кГц на 15 мс, свист lowpass 800 → 300 Гц, короткий глухой толчок —
+  // подпись Земли — и хвост осыпи
   stoneThrow: {
     vary: 0.05,
+    reverb: REVERB_SEND.lmb,
     layers: [
+      noise("bandpass", 1200, 1200, 0.015, 0.4, { q: 4, attack: 0.001 }),
       noise("lowpass", 800, 300, 0.14, 0.55, { q: 4, attack: 0.01 }),
-      tone("sine", 2000, 1800, 0.02, 0.3, { attack: 0.001 }),
       tone("sine", 120, 50, 0.1, 0.7, { sweep: 0.5, drive: 1.5, ...SIG }),
+      noise("lowpass", 500, 150, 0.2, 0.15, { q: 0, attack: 0.01, clicks: 3 }),
     ],
   },
+  // попадание камня: саб, глухой хруст lowpass и (L11, доделка A4) хруст 1,8 → 1,0 кГц на 0,6 — слышно на ноутбуке
   stoneImpact: {
     vary: 0.05,
+    reverb: REVERB_SEND.lmb,
     layers: [
       tone("sine", 90, 40, 0.26, 1, { sweep: 0.4, drive: 2.5, ...SIG }),
       noise("lowpass", 400, 200, 0.2, 0.7, { q: 2, clicks: 5 }),
-      noise("bandpass", 1100, 700, 0.04, 0.3, { q: 1.5 }),
+      noise("bandpass", 1800, 1000, 0.03, 0.6, { q: 1.5, attack: 0.001 }),
     ],
   },
   pillarTelegraph: {
@@ -207,9 +219,14 @@ export const RECIPES: Record<SoundId, Recipe> = {
   },
 
   // ── Общие ──
-  // подтверждение по ступеням (H3): малая — 1,8 кГц и щелчок 3,6 кГц, 30 мс
+  // подтверждение по ступеням (H3). Малая — «тик» 65 мс (фаза 9, L2): щелчок bandpass 4,5 кГц на 8 мс, треугольник
+  // 1,6 → 1,5 кГц и блеск 3,2 кГц на 20 мс; сухой, высоту поднимает HP цели (pitch у звукового эффекта)
   hitLight: {
-    layers: [tone("sine", 1800, 1800, 0.03, 0.5, { attack: 0.002 }), tone("sine", 3600, 3600, 0.012, 0.3, { attack: 0.001 })],
+    layers: [
+      noise("bandpass", 4500, 4500, 0.008, 0.4, { q: 2, attack: 0.001 }),
+      tone("triangle", 1600, 1500, 0.065, 0.45, { attack: 0.002 }),
+      tone("sine", 3200, 3200, 0.02, 0.2, { attack: 0.001 }),
+    ],
   },
   // средняя — то же, плюс «тело» 160 → 80 Гц на 90 мс и бумажный надрыв bandpass 1,5 кГц на 60 мс
   hitHeavy: {
@@ -346,6 +363,34 @@ export const RECIPES: Record<SoundId, Recipe> = {
   },
   // «вжух» отбрасывания (K3): bandpass 1,2 → 0,4 кГц, 0,3 с
   knockWhoosh: { layers: [noise("bandpass", 1200, 400, 0.3, 0.6, { q: 2, attack: 0.05 })] },
+  // ── Свист мимо уха (фаза 9, L12): чужой снаряд прошёл рядом. Нарастает к сближению и уходит вниз (допплер);
+  // подпись — в полосе стихии стрелка ──
+  // кулак и шар: треск 3 → 2 кГц и спад полосы 3 → 1,2 кГц, 180 мс
+  whizzFire: {
+    vary: 0.06,
+    layers: [
+      noise("highpass", 3000, 2000, 0.18, 0.5, { q: 0, ceiling: 7000, attack: 0.04, clicks: 5, ...SIG }),
+      noise("bandpass", 3000, 1200, 0.18, 0.45, { q: 2, attack: 0.04 }),
+    ],
+  },
+  // камень: «вумм» — lowpass 500 → 180 Гц и низ 110 → 60 Гц под ним, 200 мс
+  whizzStone: {
+    vary: 0.05,
+    layers: [
+      noise("lowpass", 500, 180, 0.2, 0.6, { q: 3, attack: 0.06 }),
+      tone("sine", 110, 60, 0.2, 0.5, { attack: 0.06, drive: 1.5, ...SIG }),
+    ],
+  },
+  // серп: свист 3,5 → 1,5 кГц, 150 мс
+  whizzSickle: {
+    vary: 0.06,
+    layers: [noise("bandpass", 3500, 1500, 0.15, 0.6, { q: 5, attack: 0.04, ...SIG })],
+  },
+  // снаряды Воды (Хват, Ответ): плеск 1,2 → 0,5 кГц, 160 мс
+  whizzWater: {
+    vary: 0.06,
+    layers: [noise("bandpass", 1200, 500, 0.16, 0.6, { q: 1.5, attack: 0.04, clicks: 3, ...SIG })],
+  },
   // ── Воздух и Вода — своими таблицами (airRecipes.ts, waterRecipes.ts) ──
   ...AIR_RECIPES,
   ...WATER_RECIPES,
@@ -400,6 +445,10 @@ export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
   jump: null,
   land: null,
   knockWhoosh: null,
+  whizzFire: "fire",
+  whizzStone: "earth",
+  whizzSickle: "air",
+  whizzWater: "water",
 };
 
 /** Полоса слоя-подписи [низ, верх] в Гц; без подписи — самого громкого слоя. */

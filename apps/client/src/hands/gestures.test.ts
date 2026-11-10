@@ -20,12 +20,22 @@ describe("hand gestures", () => {
   });
 
   it("strikes with an ease-out and returns with a 10 % overshoot past rest (round3/01, A5)", () => {
-    // кулак: удар 0 → 0,05 с — к 30 мс рука уже на 94 % пути; возврат 0,05 → 0,2 с перелетает покой на ≈ 10 %
+    // кулак (фаза 9, L9): удар 0 → 0,035 с — к 25 мс рука уже на 90 % пути; возврат 0,035 → 0,2 с перелетает покой на ≈ 10 %
     const at = (t: number) => stepGestures(startGesture(createGestures(), "fireFists"), t).pose.right.z;
-    expect(at(0.03) / -0.12).toBeGreaterThan(0.9);
+    expect(at(0.025) / -0.15).toBeGreaterThan(0.9);
     let over = 0;
-    for (let t = 0.05; t < 0.2; t += 0.002) over = Math.max(over, at(t));
-    expect(over / 0.12).toBeCloseTo(0.1, 2);
+    for (let t = 0.035; t < 0.2; t += 0.002) over = Math.max(over, at(t));
+    expect(over / 0.15).toBeCloseTo(0.1, 2);
+  });
+
+  it("punches toward the crosshair: in to the centre and a little up, mirrored for the left hand (phase 9, L9)", () => {
+    const r = stepGestures(startGesture(createGestures(), "fireFists"), 0.035).pose;
+    expect([r.right.x, r.right.y, r.right.z, r.right.pitch]).toEqual([-0.03, 0.02, -0.15, -0.25].map((v) => expect.closeTo(v, 6)));
+    const l = stepGestures(startGesture(startGesture(createGestures(), "fireFists"), "fireFists"), 0.035).pose;
+    expect(l.left.x).toBeCloseTo(0.03, 2);
+    // камень: бросок (рука вперёд, кисть верхом вперёд) — в замах 0,12–0,15 с
+    const stone = (t: number) => stepGestures(startGesture(createGestures(), "stoneShot"), t).pose.right;
+    expect([stone(0.1).z > -0.01, stone(0.14).z, stone(0.14).pitch]).toEqual([true, expect.closeTo(-0.1, 6), expect.closeTo(-0.25, 6)]);
   });
 
   // ладони нужны частицам у рук каждый кадр: те же векторы, сдвинутые жестом, а без жеста — снова поза покоя

@@ -47,8 +47,11 @@ export interface Recipe {
   reverb?: number;
 }
 
-/** Посыл в реверб по ступени отклика (round3/01, 2.1). */
-export const REVERB_SEND = { small: 0, medium: 0.2, large: 0.35 } as const;
+/**
+ * Посыл в реверб по ступени отклика (round3/01, 2.1). lmb — выстрелы и попадания ЛКМ (фаза 9, L1): чуть-чуть, чтобы
+ * хвост выстрела звучал в пространстве, а не «в вату»; подтверждение попадания (hitLight) остаётся сухим.
+ */
+export const REVERB_SEND = { small: 0, lmb: 0.06, medium: 0.2, large: 0.35 } as const;
 
 export type Opt = Partial<Pick<Layer, "q" | "delay" | "attack" | "signature" | "sweep" | "drive" | "clicks" | "ceiling">>;
 
@@ -79,3 +82,10 @@ export const tone = (wave: OscillatorType, freq: number, freqEnd: number, dur: n
 });
 
 export const SIG = { signature: true } as const;
+
+/**
+ * Выстрел ЛКМ в три слоя (фаза 9, L1): щелчок — шум 5–7 кГц на 4 мс, тело стихии, хвост — тихий шум 150–250 мс,
+ * который уходит в реверб (REVERB_SEND.lmb). Щелчок и хвост — не подписи: подпись стихии остаётся в своей полосе.
+ * У Земли щелчок свой — каменный, 1,2 кГц на 15 мс (stoneThrow).
+ */
+export const SHOT_CLICK: Layer = noise("bandpass", 6000, 6000, 0.004, 0.5, { q: 3, attack: 0.0005 });

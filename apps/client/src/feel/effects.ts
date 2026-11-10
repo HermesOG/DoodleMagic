@@ -28,6 +28,8 @@ export const SOUND_IDS = [
   "breathInhale", "breathRoar", "riftRumble", "riftStrike",
   // объекты на карте (фаза 6): сфера жизни, руна ярости и сама ярость — «нейтральный язык», колокола без подписи стихии
   "orbTake", "runeWarn", "runeSpawn", "runeTake", "furyEnd", "furySlain",
+  // свист чужого снаряда мимо уха (фаза 9, L12) — по стихии стрелка; Воздух и Вода тоже здесь, рядом с Огнём и Землёй
+  "whizzFire", "whizzStone", "whizzSickle", "whizzWater",
   ...AIR_SOUND_IDS, ...WATER_SOUND_IDS,
 ] as const;
 export type SoundId = (typeof SOUND_IDS)[number];
@@ -44,12 +46,14 @@ export type Effect =
   | { kind: "burst"; preset: BurstPreset; pos: Vec3; dir: Vec3; scale: number; owner?: UnitId }
   | { kind: "palm"; hand: Hand; element: Element; preset: "flash" | "charge" | "fizzle" }
   | { kind: "gesture"; ability: AbilityId }
-  // pos null — у слушателя; floor — громкость не ниже этой после расстояния (своё попадание слышно и с 20 м)
-  | { kind: "sound"; id: SoundId; pos: Vec3 | null; gain: number; floor?: number }
+  // pos null — у слушателя; floor — громкость не ниже этой после расстояния (своё попадание слышно и с 20 м);
+  // pitch — множитель частот всех слоёв (тик попадания выше к смерти цели, фаза 9, L2)
+  | { kind: "sound"; id: SoundId; pos: Vec3 | null; gain: number; floor?: number; pitch?: number }
   // profile — шум тряски: Огонь (по умолчанию) или Земля; floor — не прибавка, а пол: trauma не ниже amount
   | { kind: "trauma"; amount: number; profile?: "fire" | "earth"; floor?: true }
-  // dropM — камера вниз в мире на столько метров (удары ладонями в землю)
-  | { kind: "kick"; pitchDeg: number; yawDeg: number; rollDeg: number; dropM?: number }
+  // dropM — камера вниз в мире на столько метров (удары ладонями в землю); recoil — отдача ЛКМ на своей быстрой
+  // пружине (фаза 9, Р6); hand "auto" — yawDeg задан для правой руки, у левой (рука удара кулаком) — зеркально
+  | { kind: "kick"; pitchDeg: number; yawDeg: number; rollDeg: number; dropM?: number; recoil?: true; hand?: "auto" }
   // FOV-удар — импульс с пиком deg через ≈ 33 мс (round3/01, M3); holdS больше не читается — для старых таблиц
   | { kind: "fov"; deg: number; holdS?: number }
   | { kind: "hitstop"; ms: number } // визуальный: замирают руки, пока идёт жест (GDD 2.2)
