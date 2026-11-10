@@ -2,9 +2,11 @@ import { ELEMENT_INFO, PVP, TICK_HZ, statusFlags, unitById, type Element, type G
 import type { Frame } from "../game/driver";
 import type { GameView } from "../game/view";
 import { glyphSvg } from "../hud/glyphs";
+import type { SoundId } from "../feel/effects";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedElement, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
-  withKnownNames, type ScoreRow,
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, deathTip, feedElement, feedLine, matchPointText, resultsHint, resultsTitle, respawnLine,
+  scoreRows, stepArc, streakFeedLines, topParts, withKnownNames, createArc,
+  type ScoreRow,
 } from "./format";
 import type { PvpDriver } from "./hostDriver";
 import "./pvp.css";
@@ -110,6 +112,8 @@ interface FeedItem {
   mine: boolean;
   /** Стихия того, с чьего имени начинается строка (feedElement); null — строка без печати. */
   element: Element | null;
+  /** Печать «×N» у строки мульти; "" — без печати. */
+  stamp: string;
   at: number;
 }
 
@@ -123,6 +127,14 @@ interface FeedItem {
 export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameView): MatchHud {
   const hud = div("mh");
   const top = div("pvp-top");
+  // строка сверху: часы (краснеют в последнюю минуту), остальное и печать матч-пойнта (T7)
+  const topClock = document.createElement("span");
+  topClock.className = "pvp-clock";
+  const topRest = document.createElement("span");
+  const topMatchPoint = document.createElement("span");
+  topMatchPoint.className = "pvp-mp";
+  topMatchPoint.hidden = true;
+  top.append(topClock, topRest, topMatchPoint);
   const count = div("mh-count");
   count.hidden = true;
   // всё, что видно только в игре (мышь захвачена)
@@ -142,6 +154,14 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     feedBox.append(d);
     return { el: d, seal: s, text };
   });
+  // строка килфида — текст и печать «×N» (серии, Р5): текст по-прежнему только через textContent
+  const feedParts = feedEls.map((d) => {
+    const stamp = document.createElement("span");
+    stamp.className = "mh-feed-stamp";
+    stamp.hidden = true;
+    d.el.append(stamp);
+    return { stamp };
+  });
   /** Последняя записанная прозрачность строки килфида ("" — без угасания). */
   const feedOpacity = feedEls.map(() => "");
   /** Последняя записанная стихия печати строки ("" — без печати): разметку знака пишем только при смене. */
@@ -150,6 +170,9 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   death.hidden = true;
   const cause = div("mh-death-cause");
   const respawn = div("mh-death-respawn");
+  // совет против стихии бота (Р17 фазы 8) — тем же мелким шрифтом, что «Возрождение через»
+  const tip = div("mh-death-respawn mh-death-tip");
+  tip.hidden = true;
   const choice = div("mh-death-els");
   const chips = ELEMENT_KEYS.map((k, i) => {
     if (i > 0) {
@@ -166,7 +189,7 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     choice.append(s);
     return { el: s, element: k.element };
   });
-  death.append(cause, respawn, choice);
+  death.append(cause, tip, respawn, choice);
   const board = div("mh-board");
   board.hidden = true;
   const boardCard = div("mh-card");
@@ -199,6 +222,7 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   let feed: FeedItem[] = [];
   /** Причина последней смерти своего мага: считается один раз, по событию (HP убийцы — на тот момент). */
   let deathText = "";
+  let tipText = "";
   /** Стихия, выбранная на экране смерти: подсвечена сразу, хост применит её при возрождении. */
   let picked: Element | null = null;
   let deadShown = false;
@@ -208,6 +232,12 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   let topFor: GameState | null = null;
   let topSec = Number.NaN;
   let topNames: ReadonlyMap<UnitId, string> | null = null;
+  /** Дуга матча (T7): что уже прозвучало (меняется на месте); по какой игре, составу и секунде она считана. */
+  const arc = createArc();
+  let arcFor: GameState | null = null;
+  let arcSec = Number.NaN;
+  let arcNames: ReadonlyMap<UnitId, string> | null = null;
+  let matchPointShown = "";
   /** Имена всех магов за сессию (для таблицы и итогов: вышедший победитель — по имени); пересчёт — со сменой состава. */
   let known: ReadonlyMap<UnitId, string> = new Map();
   let knownFrom: ReadonlyMap<UnitId, string> | null = null;
@@ -266,6 +296,9 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       setHidden(el, !item);
       if (!item) continue;
       setText(text, item.text);
+      const parts = feedParts[k]!;
+      setText(parts.stamp, item.stamp);
+      setHidden(parts.stamp, item.stamp === "");
       el.classList.toggle("is-mine", item.mine);
       const element = item.element ?? "";
       if (feedSeal[k] !== element) {
@@ -290,7 +323,43 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     topFor = c;
     topSec = sec;
     topNames = names;
-    setText(top, topLine(c, driver.localId, names, driver.isHost, now));
+    const p = topParts(c, driver.localId, names, driver.isHost, now, driver.roomCode === "");
+    setText(topClock, p.clock);
+    setText(topRest, p.clock !== "" && p.rest !== "" ? ` · ${p.rest}` : p.rest);
+  };
+
+  const sound = (id: SoundId): void => view.route({ kind: "sound", id, pos: null, gain: 1 });
+  /**
+   * Дуга матча (T7) по подтверждённой игре и часам «сейчас»: часы краснеют печатью, один раз «Последняя минута!» (в
+   * строке серий, если она свободна) и гонг — и без музыки; щелчки последних 10 с; печать матч-пойнта и барабан.
+   */
+  const renderArc = (c: GameState, now: number, names: ReadonlyMap<UnitId, string>, nowS: number): void => {
+    // дуга меняется со снапшотом, составом или секундой часов — между ними не считаем (как строка сверху)
+    const sec = Math.ceil((c.phaseEnd - now) / TICK_HZ);
+    if (c === arcFor && sec === arcSec && names === arcNames) return;
+    const fresh = c !== arcFor || names !== arcNames;
+    arcFor = c;
+    arcSec = sec;
+    arcNames = names;
+    const a = stepArc(arc, c, now);
+    topClock.classList.toggle("is-final", a.final);
+    if (a.lastMinute) {
+      stamp(topClock, [{ transform: "scale(1.4)" }, { transform: "scale(1)" }], 180);
+      view.streak.lastMinute(nowS);
+      sound("lastMinute");
+    }
+    if (a.click) sound(a.click === "last" ? "clockTickLast" : "clockTick");
+    // текст печати — только с новой игрой или составом
+    const mp = fresh ? (matchPointText(a.ids, driver.localId, names) ?? "") : matchPointShown;
+    if (mp !== matchPointShown) {
+      matchPointShown = mp;
+      setText(topMatchPoint, mp);
+      setHidden(topMatchPoint, mp === "");
+    }
+    if (a.matchPoint) {
+      stamp(topMatchPoint, [{ transform: "scale(1.4)" }, { transform: "scale(1)" }], 180);
+      sound("streakDrums");
+    }
   };
 
   return {
@@ -315,17 +384,29 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       // килфид и причина смерти — только по событиям хоста
       let fresh = false;
       for (const ev of f.confirmed) {
+        // серии — строками другим, не в разминке и отсчёте (Р5); решающее очко переводит игру в итоги — его строка остаётся
+        if (ev.type === "streak") {
+          if (c.phase === "warmup" || c.phase === "countdown") continue;
+          const lines = streakFeedLines(ev, names, id);
+          for (const l of lines) feed.unshift({ text: l.text, mine: l.mine, element: null, stamp: l.stamp, at: nowS });
+          if (lines.length > 0) fresh = true;
+          continue;
+        }
         const line = feedLine(ev, names, id);
         if (!line) continue;
-        feed.unshift({ text: line.text, mine: line.mine, element: feedElement(ev, c, names), at: nowS });
+        feed.unshift({ text: line.text, mine: line.mine, element: feedElement(ev, c, names), stamp: "", at: nowS });
         fresh = true;
-        if ((ev.type === "death" || ev.type === "fall") && ev.target === id) deathText = deathLine(ev, c, names);
+        if ((ev.type === "death" || ev.type === "fall") && ev.target === id) {
+          deathText = deathLine(ev, c, names);
+          tipText = deathTip(ev, c, driver.pings());
+        }
       }
       if (feed.length > FEED_LINES) feed.length = FEED_LINES;
       renderFeed(nowS);
       if (fresh && locked) stamp(feedEls[0]!.el, [{ opacity: 0, transform: "translateX(14px)" }, { opacity: 1, transform: "none" }], 180);
 
       renderTop(c, now, names);
+      renderArc(c, now, names, nowS);
 
       const counting = c.phase === "countdown";
       setHidden(count, !counting);
@@ -354,9 +435,14 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       if (dead && me) {
         setText(cause, deathText);
         setHidden(cause, deathText === "");
+        setText(tip, tipText);
+        setHidden(tip, tipText === "");
         setText(respawn, respawnLine(me.respawnTick, now));
         renderChoice(picked ?? me.mage?.element ?? null);
-      } else deathText = "";
+      } else {
+        deathText = "";
+        tipText = "";
+      }
 
       // таблица по Tab или итоги: пересборка не чаще BOARD_EVERY_S; имена — всех за сессию (вышедший — не «Маг»)
       const kind = over ? "results" : boardHeld ? "board" : null;

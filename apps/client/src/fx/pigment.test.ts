@@ -338,7 +338,7 @@ describe("V7: ink strike on a hit", () => {
       const { vfx, mesh, sync } = harness();
       const s = createMatchState([createMageUnit(ME, "fire", { pos: V(), yaw: 0 }), createMageUnit(OTHER, "earth", { pos: V(0, 0, -8), yaw: Math.PI })]);
       sync(s, 1);
-      vfx.apply({ kind: "number", target: OTHER, amount: 20, pos: V(0, 1.2, -7.7), dot: false, air: false }, 1.01, "right");
+      vfx.apply({ kind: "number", target: OTHER, amount: 20, pos: V(0, 1.2, -7.7), dot: false, air: false, lmb: false }, 1.01, "right");
       vfx.apply({ kind: "flash", target: OTHER }, 1.01, "right");
       vfx.apply({ kind: "flinch", target: OTHER, dir: V(0, 0, -1), amount }, 1.01, "right");
       const pool = mesh("fx-particles");

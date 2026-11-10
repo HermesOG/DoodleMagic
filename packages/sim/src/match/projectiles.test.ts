@@ -48,17 +48,17 @@ describe("projectiles", () => {
     expect(w?.dist).toBeCloseTo(5.5, 9);
   });
 
-  it("fire fist: 12 damage and a small tempo-scaled push; gone after 24 m (36 ticks)", () => {
+  it("fire fist: 15 damage and a small tempo-scaled push; gone after 24 m (29 ticks at 50 m/s, фаза 9, Р2)", () => {
     const s = createMatchState([mage(), dummy(2, 0, -10)]);
     shoot(s, ctx, "fireFists");
     const ev = fly(s, ctx, 30);
     const hit = ev.find((e) => e.type === "hit");
-    expect(hit).toMatchObject({ source: 1, target: 2, ability: "fireFists", amount: 12 });
-    expect(hit?.type === "hit" && Number(hit.knock.distM.toFixed(9))).toBe(0.12);
+    expect(hit).toMatchObject({ source: 1, target: 2, ability: "fireFists", amount: 15 });
+    expect(hit?.type === "hit" && Number(hit.knock.distM.toFixed(9))).toBe(0.15);
     expect(ev).toContainEqual(expect.objectContaining({ type: "impact", ability: "fireFists", target: 2 }));
     const free = createMatchState([mage()]);
     shoot(free, ctx, "fireFists");
-    fly(free, ctx, 35);
+    fly(free, ctx, 28);
     expect(free.projectiles).toHaveLength(1);
     fly(free, ctx, 1);
     expect([s.projectiles.length, free.projectiles.length]).toEqual([0, 0]);
@@ -68,7 +68,7 @@ describe("projectiles", () => {
     const s = createMatchState([mage()]);
     shoot(s, ctx, "stoneShot");
     fly(s, ctx, 30);
-    expect(s.projectiles[0]!.pos.z).toBeCloseTo(-20, 6);
+    expect(s.projectiles[0]!.pos.z).toBeCloseTo(-23, 6); // 46 м/с × 0,5 с — фаза 9, Р2
     expect(s.projectiles[0]!.pos.y).toBeCloseTo(1.6 - 0.5 * EARTH.stoneShot.projectile.gravity * 0.25, 6);
     const w = createMatchState([mage()]);
     const id = spawnTerrain(w, tickOf(w, ctx, []), 1, "wall", aabb(-2, 0, -6.3, 2, 2.5, -5.7), { growTicks: 18, solidTicks: 0, lifeTicks: 360, hp: 250 });

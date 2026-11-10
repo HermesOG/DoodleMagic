@@ -16,8 +16,11 @@ const KEY_OF: Readonly<Record<string, Element>> = Object.fromEntries(
  * подсвеченная (byClick: false). byClick: true — выбрал сам игрок кликом или клавишей: это жест пользователя, и в его
  * обработчике странице можно сразу захватить мышь и включить звук (keydown в Chrome — такой же жест, как клик). Выбор
  * по таймеру — не жест: после него нужен клик «Играть».
+ * top — узел над заголовком (панель режима на «/», фаза 8): клик или фокус в нём останавливает таймер выбора.
  */
-export function showElementSelect(root: HTMLElement, initial: Element, autoS = 10): Promise<{ element: Element; byClick: boolean }> {
+export function showElementSelect(
+  root: HTMLElement, initial: Element, autoS = 10, top: HTMLElement | null = null,
+): Promise<{ element: Element; byClick: boolean }> {
   const auto = Number.isFinite(autoS) && autoS > 0 ? autoS : 0;
   const card = (e: Element, n: number): string => {
     const i = ELEMENT_INFO[e];
@@ -40,12 +43,25 @@ export function showElementSelect(root: HTMLElement, initial: Element, autoS = 1
     <div class="es-cards">${ELEMENTS.map((e, k) => card(e, k + 1)).join("")}</div>
     <p class="es-hint">${hint}</p>
   </section>`;
+  if (top) screen.querySelector(".es-panel")!.prepend(top);
   root.append(screen);
 
   return new Promise((resolve) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // игрок настраивает режим: подсвеченная карточка сама не выбирается
+    const hold = (): void => {
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timer = undefined;
+      screen.classList.add("es-held");
+      screen.querySelector(".es-hint")!.textContent = "1–4 или клик";
+    };
+    top?.addEventListener("pointerdown", hold);
+    top?.addEventListener("focusin", hold);
     const done = (element: Element, byClick: boolean): void => {
       if (timer !== undefined) clearTimeout(timer);
+      top?.removeEventListener("pointerdown", hold);
+      top?.removeEventListener("focusin", hold);
       window.removeEventListener("keydown", onKey);
       screen.remove();
       resolve({ element, byClick });

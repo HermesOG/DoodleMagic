@@ -1,0 +1,95 @@
+/*
+ * Серии убийств и дуга матча (фаза 9, задача 5): «кисть и печать», как боевой HUD. Строка объявления — над прицелом,
+ * ниже тостов (max(14vh, 126px)): тушь с бумажным ореолом и красная печать-ханко «×N». Кадр двигает только transform
+ * и opacity; текст и кегль меняются раз на объявление.
+ */
+.sh-line {
+  position: absolute;
+  left: 50%;
+  top: 30vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%);
+  transform-origin: 50% 40%;
+  opacity: 0;
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+.sh-big {
+  display: flex;
+  align-items: center;
+  gap: 0.22em;
+  color: var(--ch-ink);
+  font: 700 48px/1 var(--ch-head);
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 3px #f6f3ea, 0 0 3px #f6f3ea, 0 0 10px rgba(246, 243, 234, 0.95);
+}
+/* печать-ханко: киноварь с бумажным знаком, чуть повёрнута против строки */
+.sh-stamp {
+  padding: 0.16em 0.3em 0.12em;
+  border-radius: 3px 5px 4px 2px / 4px 3px 5px 3px;
+  background: var(--ch-red);
+  box-shadow: 0 0 0 2px rgba(246, 243, 234, 0.85);
+  color: var(--ch-paper);
+  font: 800 0.5em/1 var(--ch-ui);
+  text-shadow: none;
+  transform: rotate(8deg);
+}
+/* мазок-подчёркивание: дорисовывается слева направо (scaleX из кадра) */
+.sh-stroke {
+  width: 72%;
+  height: 4px;
+  margin-top: 3px;
+  border-radius: 2px 5px 3px 1px / 2px 3px 4px 2px;
+  background: var(--ch-ink);
+  box-shadow: 0 0 3px rgba(246, 243, 234, 0.9);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}
+.sh-sub {
+  margin-top: 6px;
+  color: var(--ch-ink);
+  font: 700 34px/1 var(--ch-head);
+  letter-spacing: 0.02em;
+  text-shadow: var(--ch-halo);
+}
+/* «Последняя минута!» — без печати и мазка */
+.sh-line.is-final .sh-stroke {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- дуга матча PvP (T7) и килфид серий */
+/* часы краснеют с последней минуты (и во внезапной смерти); строка сверху тёмная — киноварь светлее */
+.pvp-clock.is-final {
+  color: #ff8a80;
+  font-weight: 800;
+}
+.pvp-clock,
+.pvp-mp {
+  display: inline-block;
+}
+/* «Матч-пойнт: Имя» — красная печать в строке сверху, пока это правда */
+.pvp-mp {
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 3px 5px 4px 2px / 4px 3px 5px 3px;
+  background: #c8322a;
+  color: #f6f3ea;
+  font-weight: 800;
+}
+.pvp-mp[hidden],
+.mh-feed-stamp[hidden] {
+  display: none;
+}
+/* печать «×N» у строки мульти в килфиде */
+.mh-feed-stamp {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px 5px 4px 2px / 4px 3px 5px 3px;
+  background: #c8322a;
+  color: #f6f3ea;
+  font-weight: 800;
+  transform: rotate(-4deg);
+}

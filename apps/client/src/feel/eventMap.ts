@@ -24,7 +24,8 @@ import {
   type ZoneShape,
 } from "@doodlemagic/sim";
 import { isFistGesture } from "../hands/gestures";
-import { SHAKE } from "./camera";
+import { BROKE_TEXT, STREAK_LOUD_FROM, streakStep } from "../hud/streakHud";
+import { RECOIL, SHAKE, recoilKick } from "./camera";
 import type { BurstPreset, Effect, FeelTier, SoundId } from "./effects";
 import { elementEffects, type FrameView } from "./elementFx";
 
@@ -84,6 +85,13 @@ const hitstopMs = (tier: FeelTier, a: DamageSource): number => (a === ABILITY_OF
 export const AREA_TRAUMA = { stonePillar: 0.35, earthquake: 0.65, fireball: 0.15 } as const;
 /** Своё попадание и взрыв слышно не тише этого и издалека (round3/01, H3): на 20 м было 25 %. */
 const OWN_HIT_FLOOR = 0.6;
+/** Свой снаряд в мир (промах, фаза 9, L8): на 20 м было 25 % — выстрел «пропадал». */
+export const OWN_MISS_FLOOR = 0.35;
+/** Толчок камеры жертве ЛКМ не меньше этого (фаза 9, L10): у кулака было 0,11° — удара не чувствовалось. */
+export const LMB_VICTIM_KICK_DEG = 0.3;
+/** Тик попадания выше к смерти цели (фаза 9, L2): ×2^((1 − hp/maxHp)·4/12), до большой терции. */
+export const hitTickPitch = (hp: number, maxHp: number): number =>
+  maxHp > 0 && Number.isFinite(hp) ? 2 ** ((1 - clampTo(hp / maxHp, 0, 1)) * (4 / 12)) : 1;
 /** Толчок от 2 м по полу — это ≥ 4 м/с (v₀ ≈ 2·distM, Р3): жертве FOV-удар и «вжух» (round3/01, K3). */
 const KNOCK_FEEL_M = 2;
 /** Удар ладонями в землю (round3/01, A2): камера вниз на 1,2° и на 4 см. */
@@ -128,6 +136,8 @@ export const RIFT_NEAR_TRAUMA = 0.3;
 export const RIFT_BURSTS = 5;
 /** Тост убийцы ультой (round3/01, 2.1: крупная ступень — тост). */
 const ULT_KILL_TOAST: Readonly<Partial<Record<DamageSource, string>>> = { dragonBreath: "Дыхание дракона!", tectonicRift: "Разлом!" };
+/** Тексты тостов убийства ультой: своё объявление серии в этот момент их гасит — одна строка (02-feel-lmb, раздел 3). */
+export const ULT_KILL_TOASTS: readonly string[] = Object.values(ULT_KILL_TOAST).filter((t): t is string => t !== undefined);
 /** Чужую сферу слышно рядом и тихо: она лечит другого, не меня. */
 const ORB_OTHER_GAIN = 0.5;
 /** Чужое взятие руны слышно издалека (пол громкости после расстояния): на арене новый носитель ярости. */
@@ -148,14 +158,17 @@ const CAST_SOUND: Readonly<Record<AbilityId, SoundId>> = {
   dragonBreath: "breathInhale", tectonicRift: "riftRumble", hurricane: "tornadoCast", tsunami: "springSpread",
 };
 /**
- * Отдача камеры у кастующего на нажатии, градусы: ЛКМ (кулаки, камень, серп, хлыст) 0,2° (у камня ещё 0,6° на броске,
- * A1), ладони в землю — вниз (GROUND_SLAM, A2: столб, стена, Разлом), замах землетрясения — 0 (удар вниз придёт
- * с ударом), вдох Дыхания — 0,4° вверх (выдох толкнёт сильнее), остальное 1°.
+ * Отдача камеры у кастующего на нажатии, градусы: ЛКМ — по таблице RECOIL (фаза 9, Р6: кулак 0,6° вверх и вбок по руке
+ * удара; камень на нажатии не толкает — 0,9° на броске; серп и хлыст здесь — запасной вариант, их перехватывают файлы
+ * стихий), ладони в землю — вниз (GROUND_SLAM, A2: столб, стена, Разлом), замах землетрясения — 0 (удар вниз придёт
+ * с ударом), вдох Дыхания — 0,4° вверх (выдох толкнёт сильнее), остальное 1°. null — толчка нет.
  */
-const castKick = (a: AbilityId): Effect =>
+const castKick = (a: AbilityId): Effect | null =>
   a === "stonePillar" || a === "stoneWall" || a === "tectonicRift"
     ? GROUND_SLAM
-    : { kind: "kick", pitchDeg: isPrimary(a) ? 0.2 : a === "earthquake" ? 0 : a === "dragonBreath" ? 0.4 : 1, yawDeg: 0, rollDeg: 0 };
+    : isPrimary(a)
+      ? a === "fireFists" ? recoilKick(RECOIL.fist, true) : a === "airSickle" ? recoilKick(RECOIL.sickle, true) : a === "waterWhip" ? recoilKick(RECOIL.whipCast) : null
+      : { kind: "kick", pitchDeg: a === "earthquake" ? 0 : a === "dragonBreath" ? 0.4 : 1, yawDeg: 0, rollDeg: 0 };
 /** Чем попали в меня — глухой удар плюс отпечаток стихии (round1/03, п. 3); у кулака свой треск попадания (H3). */
 const HIT_SOUND: Readonly<Record<DamageSource, SoundId>> = {
   fireFists: "fistHit", fireball: "fireballBoom", jetDash: "fireWallIgnite", fireWall: "fireWallIgnite", burning: "fireWallIgnite",
@@ -183,8 +196,8 @@ const IMPACT_FX: Readonly<Partial<Record<AbilityId, { burst: BurstPreset; sound:
 const DEATH_BURST: Readonly<Record<Element, BurstPreset>> = { fire: "deathFire", earth: "deathEarth", air: "deathAir", water: "deathWater" };
 
 const sound = (id: SoundId, pos: Vec3 | null = null, gain = 1): Effect => ({ kind: "sound", id, pos, gain });
-/** Звук попадания в мире; своё — не тише OWN_HIT_FLOOR и издалека. */
-const ownSound = (id: SoundId, pos: Vec3, own: boolean): Effect => (own ? { kind: "sound", id, pos, gain: 1, floor: OWN_HIT_FLOOR } : sound(id, pos));
+/** Звук попадания в мире; своё — не тише floor (по умолчанию OWN_HIT_FLOOR) и издалека. */
+const ownSound = (id: SoundId, pos: Vec3, own: boolean, floor = OWN_HIT_FLOOR): Effect => (own ? { kind: "sound", id, pos, gain: 1, floor } : sound(id, pos));
 const burst = (preset: BurstPreset, pos: Vec3, dir: Vec3 = UP, scale = 1): Effect => ({ kind: "burst", preset, pos, dir, scale });
 const centre = (u: Unit): Vec3 => ({ x: u.move.body.pos.x, y: u.move.body.pos.y + u.move.body.height / 2, z: u.move.body.pos.z });
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -217,9 +230,9 @@ function segmentPoint(a: Vec3, b: Vec3, p: Vec3): Vec3 {
 
 /**
  * Толчок камеры, когда попали в меня: −dir в осях взгляда, предел × min(1, урон / 40), сумма модулей не больше
- * предела (предел — ступень × темп).
+ * предела (предел — ступень × темп) и не меньше minDeg (жертва ЛКМ, L10); удар сверху — голова откидывается вверх.
  */
-function hitKick(ev: Extract<MatchEvent, { type: "hit" }>, yaw: number, capDeg: number): Effect {
+function hitKick(ev: Extract<MatchEvent, { type: "hit" }>, yaw: number, capDeg: number, minDeg = 0): Effect {
   const f = forwardXZ(yaw);
   const r = rightXZ(yaw);
   const s = capDeg * Math.min(1, Math.max(0, ev.amount) / 40);
@@ -227,7 +240,9 @@ function hitKick(ev: Extract<MatchEvent, { type: "hit" }>, yaw: number, capDeg: 
   let pitch = -(ev.dir.x * f.x + ev.dir.z * f.z) * s;
   let yawDeg = -(ev.dir.x * r.x + ev.dir.z * r.z) * s;
   const sum = Math.abs(pitch) + Math.abs(yawDeg);
-  if (sum > capDeg) [pitch, yawDeg] = [(pitch * capDeg) / sum, (yawDeg * capDeg) / sum];
+  const want = clampTo(sum, minDeg, Math.max(capDeg, minDeg));
+  if (sum > 0 && want !== sum) [pitch, yawDeg] = [(pitch * want) / sum, (yawDeg * want) / sum];
+  else if (sum === 0 && minDeg > 0) pitch = minDeg;
   return { kind: "kick", pitchDeg: pitch + 0, yawDeg: yawDeg + 0, rollDeg: 0 };
 }
 
@@ -241,7 +256,7 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
   if (beat) out.push(burst("breathHit", ev.pos));
   if (ev.source === view.localId && ev.target !== view.localId) {
     if (overTime(ev)) {
-      out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne });
+      out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne, lmb: false });
       // добил горением или следом — убийство всё равно отмечается
       if (ev.killed) out.push({ kind: "hitmarker", kill: true, air: ev.airborne, tier: "large" });
       // поток попадает: лёгкое подтверждение на вспышке — малый хитмаркер, вспышка цели и тихий щелчок, без паузы
@@ -255,11 +270,15 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
       const ms = hitstopMs(tier, ev.ability);
       out.push(
         { kind: "hitmarker", kill: ev.killed, air: ev.airborne, tier },
-        { kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: false, air: ev.airborne },
+        // ЛКМ и добивающая ЛКМ копятся в одну цифру (L7): по lmb, а не по ступени хитмаркера — убийство крупной ступени
+        { kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: false, air: ev.airborne, lmb },
         { kind: "flash", target: ev.target },
         { kind: "flinch", target: ev.target, dir: ev.dir, amount: ult ? 0.8 : lmb ? 0.1 : 0.2 },
       );
-      if (confirm) out.push(sound(confirm));
+      // тик ЛКМ выше к смерти цели: HP — после удара, из состояния события
+      const target = confirm === "hitLight" ? unitById(view.state, ev.target) : undefined;
+      if (target) out.push({ kind: "sound", id: "hitLight", pos: null, gain: 1, pitch: hitTickPitch(target.hp, target.maxHp) });
+      else if (confirm) out.push(sound(confirm));
       if (ms > 0) out.push({ kind: "hitstop", ms });
     }
   }
@@ -281,7 +300,7 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
     const shake = Math.max(0, TIERS[own].trauma * k - area);
     if (shake > 0) out.push({ kind: "trauma", amount: shake, profile: elementOf(ev.ability) === "earth" ? "earth" : "fire" });
     out.push(
-      hitKick(ev, me?.move.yaw ?? 0, TIERS[own].kickDeg * k),
+      hitKick(ev, me?.move.yaw ?? 0, TIERS[own].kickDeg * k, isPrimary(ev.ability) ? LMB_VICTIM_KICK_DEG : 0),
       { kind: "indicator", from: { x: ev.pos.x - ev.dir.x, y: ev.pos.y - ev.dir.y, z: ev.pos.z - ev.dir.z }, amount: ev.amount },
       sound(HIT_SOUND[ev.ability]),
     );
@@ -391,8 +410,9 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
           preset: ev.ability === "fireball" || ev.ability === "stoneShot" || ev.ability === "dragonBreath" ? "charge" : "flash",
         },
         sound(CAST_SOUND[ev.ability]),
-        castKick(ev.ability),
       ];
+      const kick = castKick(ev.ability);
+      if (kick) out.push(kick);
       // камень вырывается из пола у ног
       if (ev.ability === "stoneShot" && caster) out.push(burst("stoneCrumble", { ...caster.move.body.pos }));
       // ладони Разлома бьют в пол: тряска по профилю Земли (удар шипов — крупная ступень на взводе)
@@ -405,9 +425,9 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       if (!mine(ev.unit)) return id ? [sound(id, ev.pos)] : [];
       if (ev.ability === "fireball")
         return [{ kind: "kick", pitchDeg: 1.5, yawDeg: 0, rollDeg: 0 }, { kind: "fov", deg: 3 }, { kind: "trauma", amount: 0.15 }, sound("fireballLaunch")];
-      // pos выпуска — глаза: крошка сыплется у рук, впереди и ниже, а не в лицо (≈ 1,9 раза в секунду); отдача 0,6° — на броске
+      // pos выпуска — глаза: крошка сыплется у рук, впереди и ниже, а не в лицо (≈ 1,9 раза в секунду); отдача 0,9° — на броске
       if (ev.ability === "stoneShot")
-        return [burst("stoneCrumble", releaseCrumblePoint(ev.pos, ev.dir)), { kind: "kick", pitchDeg: 0.6, yawDeg: 0, rollDeg: 0 }, sound("stoneThrow")];
+        return [burst("stoneCrumble", releaseCrumblePoint(ev.pos, ev.dir)), recoilKick(RECOIL.stoneThrow), sound("stoneThrow")];
       return id ? [sound(id)] : [];
     }
     case "impact": {
@@ -415,8 +435,10 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       const stone = ev.ability === "stoneShot";
       const fx = IMPACT_FX[ev.ability] ?? IMPACT_FX.fireFists!;
       const preset: BurstPreset = ev.terrain >= 0 ? "terrainChips" : fx.burst;
-      // пол громкости — только своему попаданию в цель, промах звучит по расстоянию
-      const hit = ownSound(fx.sound, ev.pos, mine(ev.owner) && ev.target !== NOBODY);
+      // своё попадание в цель — пол 0,6; свой промах ЛКМ — пол 0,35 (L8: слышно, куда лёг выстрел); шар в стену и
+      // чужое — по расстоянию
+      const onTarget = ev.target !== NOBODY;
+      const hit = ownSound(fx.sound, ev.pos, mine(ev.owner) && (onTarget || isPrimary(ev.ability)), onTarget ? OWN_HIT_FLOOR : OWN_MISS_FLOOR);
       // Земле вместо света — белая бумажная вспышка (H3)
       return stone && ev.terrain < 0 ? [burst(preset, ev.pos, ev.normal), burst("paperFlash", ev.pos), hit] : [burst(preset, ev.pos, ev.normal), hit];
     }
@@ -517,7 +539,56 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       // смерть, чужие — килфид (по состоянию гаснет и свечение носителя)
       if (ev.phase === "end") return mine(ev.unit) ? [sound("furyEnd")] : [];
       return ev.by !== NOBODY && mine(ev.by) ? [sound("furySlain"), { kind: "toast", text: FURY_SLAIN_TOAST }] : [];
+    case "loot":
+      return lootEffects(ev, me, mine(ev.unit));
+    case "streak":
+      return streakEffects(ev, mine(ev.unit));
   }
+}
+
+/**
+ * Своя подача серии и добычи — по подтверждённым событиям (вид), после звука своего kill (он звучит по предсказанию):
+ * колокол серии через 120 мс, тёплый подъём добычи через 250 мс — чтобы не заглушить kill. В PvP подтверждение и так
+ * приходит на 100–200 мс позже: вид ждёт только остаток.
+ */
+export const STREAK_BELL_S = 0.12;
+export const LOOT_RISE_S = 0.25;
+/** Через сколько после своего убийства подать событие серии или добычи; чужое и прочее — сразу. */
+export function afterKillS(ev: MatchEvent, localId: UnitId): number {
+  if (ev.type === "streak" && ev.unit === localId) return STREAK_BELL_S;
+  if (ev.type === "loot" && ev.unit === localId) return LOOT_RISE_S;
+  return 0;
+}
+/** Звук ступени своей серии: 3 — барабан, 5 — гонг, 7 и 10 — гонг с шелестом. */
+const STREAK_SOUND: Readonly<Record<number, SoundId>> = { 3: "streakDrums", 5: "streakGong", 7: "streakStorm", 10: "streakStorm" };
+
+/**
+ * Очко мага (Р4, Р5; 02-feel-lmb, раздел 3). Своё: мульти — колокол ×2 или ×3 (ступень выше прежней), ×4+ — ещё гонг
+ * 110 Гц с барабаном; ступень серии — свой удар (без мульти — с колоколом объявления); прервал чужую серию от 3 — тост
+ * и звон. Чужое: ступень серии от 5 — далёкий гонг на всю карту, без позиции (как ultWarn): на арене опасный маг.
+ * Крупную надпись своему показывает вид (streakHud), строки килфида — интерфейс матча.
+ */
+function streakEffects(ev: Extract<MatchEvent, { type: "streak" }>, mine: boolean): Effect[] {
+  if (!mine) return ev.streak >= STREAK_LOUD_FROM && streakStep(ev.streak) ? [sound("streakFar")] : [];
+  const out: Effect[] = [];
+  if (ev.multi >= 2) out.push(sound(ev.multi >= 3 ? "streakTriple" : "streakDouble"));
+  if (ev.multi >= 4) out.push(sound("streakRampage"));
+  const step = STREAK_SOUND[ev.streak];
+  if (step) {
+    if (ev.multi < 2) out.push(sound("streakBell"), sound("streakBellHigh"));
+    out.push(sound(step));
+  }
+  if (ev.broke !== NOBODY) out.push({ kind: "toast", text: BROKE_TEXT }, sound("streakBroke"));
+  return out;
+}
+
+/**
+ * «Добыча» (Р1, L14): своему — тёплый подъём и ладони вспыхивают стихией (заряд). Белый прирост полосы HP и «+30»
+ * рисует HUD, искры от жертвы к убийце (всем) — эффектник: их ведёт вид по тому же событию.
+ */
+function lootEffects(ev: Extract<MatchEvent, { type: "loot" }>, me: Unit | undefined, mine: boolean): Effect[] {
+  if (!mine) return [];
+  return [sound("lootRise"), { kind: "palm", hand: "both", element: me?.mage?.element ?? "fire", preset: "charge" }];
 }
 
 /**

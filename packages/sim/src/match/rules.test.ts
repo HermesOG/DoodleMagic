@@ -39,7 +39,7 @@ function steps(s: MatchState, n: number, c: MatchContext, input: (tick: number) 
 describe("spawn shield and deaths in the match contracts", () => {
   it("a fresh unit has no shield and no deaths", () => {
     const u = mageAt(1, "fire", 0, 0);
-    expect([freshStatuses().shieldUntil, u.status.shieldUntil, u.mage!.stats, statusFlags(u, 0).shielded]).toEqual([0, 0, { damage: 0, kills: 0, falls: 0, deaths: 0 }, false]);
+    expect([freshStatuses().shieldUntil, u.status.shieldUntil, u.mage!.stats, statusFlags(u, 0).shielded]).toEqual([0, 0, { damage: 0, kills: 0, falls: 0, deaths: 0, streak: 0, multi: 0, lastScoreTick: -1 }, false]);
   });
 
   it("a shielded mage takes no damage, no push, no status and no hit event until the shield ends", () => {
@@ -251,6 +251,27 @@ describe("deaths and scoring", () => {
     // встал в конце тика k + 180: защита на полные 120 тиков после него
     expect([u.alive, u.mage!.spawn, u.status.shieldUntil, statusFlags(u, r.g.match.tick).shielded, u.mage!.stats.deaths]).toEqual([true, SPAWNS[1], k + 301, true, 1]);
   });
+
+  it("the final minute and sudden death: back in 2 s (Р3 фазы 9); 61 s before the end and in warmup — in 3 s", () => {
+    const cases: [GameState, number][] = [];
+    // граница — включительно: ровно 60 с (3600 тиков) — уже финал, 3601 тик — ещё нет
+    for (const [left, back] of [[ticks(59), 120], [3600, 120], [3601, 180], [ticks(61), 180]] as const) {
+      const g = unshield(live("fire", "earth"));
+      g.phaseEnd = g.match.tick + left;
+      cases.push([g, back]);
+    }
+    const sd = unshield(live("fire", "earth"));
+    Object.assign(sd, { suddenDeath: true, phaseEnd: sd.match.tick + 3600 });
+    cases.push([sd, 120], [unshield(gameWith("fire", "earth")), 180]);
+    for (const [g, back] of cases) {
+      burnOut(g, 1, 2);
+      const k = g.match.tick;
+      const dead = play(g, 1).g;
+      expect(mageOf(dead, 1).respawnTick).toBe(k + back);
+      expect(play(dead, back).log.filter(({ e }) => e.type === "respawn").map(({ t }) => t)).toEqual([k + back]);
+    }
+    expect([PVP.finalS, PVP.finalRespawnS]).toEqual([60, 2]);
+  });
 });
 
 describe("phases", () => {
@@ -267,7 +288,7 @@ describe("phases", () => {
 
   it("the countdown ends in 180 ticks: scores reset, mages on different points, the arena cleared, a respawn each", () => {
     const g = gameWith("fire", "earth", "fire");
-    for (const u of g.match.units) Object.assign(u.mage!.stats, { damage: 40, kills: 2, falls: 1, deaths: 1 });
+    for (const u of g.match.units) Object.assign(u.mage!.stats, { damage: 40, kills: 2, falls: 1, deaths: 1, streak: 4, multi: 2, lastScoreTick: 50 });
     Object.assign(posOf(g, 1), { x: 10, z: -30 });
     Object.assign(mageOf(g, 2), { alive: false, respawnTick: 1e6 });
     litter(g, 1);
@@ -278,7 +299,7 @@ describe("phases", () => {
     const n = r.g.match.tick;
     expect([r.g.phase, r.g.phaseEnd, r.g.scoreLimit, r.g.suddenDeath, owners(r.g)]).toEqual(["live", n + 25200, 12, false, [[], [], []]]);
     expect(r.g.match.units.map((u) => [u.alive, u.mage!.stats, u.status.shieldUntil])).toEqual(
-      [1, 2, 3].map(() => [true, { damage: 0, kills: 0, falls: 0, deaths: 0 }, n + 120]),
+      [1, 2, 3].map(() => [true, { damage: 0, kills: 0, falls: 0, deaths: 0, streak: 0, multi: 0, lastScoreTick: -1 }, n + 120]),
     );
     expect([1, 2, 3].map((id) => mageOf(r.g, id).mage!.spawn)).toEqual([SPAWNS[0], SPAWNS[1], SPAWNS[2]]);
     expect(r.log.filter(({ e }) => e.type === "respawn").map(({ e }) => e)).toEqual(

@@ -55,6 +55,8 @@ export interface Vfx {
   readonly fx: FxLayers;
   /** Исполняет burst, palm, flash и flinch; остальное пропускает. hand — чья рука для palm с hand "auto". */
   apply(e: Effect, nowS: number, hand: "left" | "right"): void;
+  /** Искры «Добычи» (фаза 9, L14): стихия убийцы летит от тела жертвы (from) к убийце (to) — из мирового пула. */
+  lootSparks(from: Vec3, to: Vec3, element: Element, nowS: number): void;
   /**
    * Раз в кадр: положения между prev и cur, зоны и рельеф из cur, время эффектов. Живые маги, кроме localId, рисуются
    * фигурами (не больше MAX_MAGES), мёртвые — нет.
@@ -72,18 +74,26 @@ const LEAN_MAX = 20 * DEG;
 const LEAN_OMEGA = 11;
 /** Вздрагивание от удара: пик 10–15° (пружина stepSpring, толчок скорости). */
 const FLINCH_OMEGA = 13;
-/** Вспышка цели по ступени удара, с (round3/01, H2): малая 60 мс, средняя 100, крупная 130. */
-export const FLASH_S: Readonly<Record<FeelTier, number>> = { none: 0.06, small: 0.06, medium: 0.1, large: 0.13 };
+/**
+ * Вспышка цели по ступени удара, с (round3/01, H2): малая 90 мс (фаза 9, L5: 3+ кадра на 40 FPS — попадание видно
+ * и издалека), средняя 100, крупная 130.
+ */
+export const FLASH_S: Readonly<Record<FeelTier, number>> = { none: 0.09, small: 0.09, medium: 0.1, large: 0.13 };
+/**
+ * Пауза цели малой ступени, мс (фаза 9, L5): камень, серп и хлыст 50; кулак Огня 40 — короче остальных, он бьёт
+ * 4 раза в секунду (темп). Своя, не hitstop ступени: тот — пауза рук стреляющего.
+ */
+export const SMALL_FREEZE_MS = { fist: 40, other: 50 } as const;
 /** После паузы цель догоняет настоящее положение за столько секунд. */
 const CATCH_UP_S = 0.06;
 
 /**
  * Пауза рендера цели и длина вспышки по попаданию (H2). Ступень — по силе вздрагивания из карты событий (0,1 —
- * основная атака, больше — способность), у кулака Огня паузы нет (темп). Пауза — та же, что hitstop ступени.
+ * основная атака, больше — способность). Малая ступень — SMALL_FREEZE_MS, средняя и крупная — hitstop ступени.
  */
 export function hitFreeze(flinchAmount: number, shooter: Element | null): { tier: FeelTier; freezeS: number; flashS: number } {
   const tier: FeelTier = flinchAmount <= 0.15 ? "small" : flinchAmount < 0.7 ? "medium" : "large";
-  const ms = tier === "small" && shooter === "fire" ? 0 : TIERS[tier].hitstopMs;
+  const ms = tier === "small" ? (shooter === "fire" ? SMALL_FREEZE_MS.fist : SMALL_FREEZE_MS.other) : TIERS[tier].hitstopMs;
   return { tier, freezeS: ms / 1000, flashS: FLASH_S[tier] };
 }
 /** Чужих магов на экране — не больше (комната до 6 магов, свой не рисуется). */
@@ -144,9 +154,11 @@ export function burnEdge(feet: Vec3, eye: Vec3, rng: () => number): Vec3 {
 const HAND_PRIO = 0.6;
 const REST_PALM = { x: 0.26, y: -0.25, z: -0.62 } as const;
 
+type FlashLight = { light: number; halo: number; intensity: number; life: number; core: number };
 /** Свет вспышек всплесков огня: радиус на мир, ореол, яркость, жизнь. Земля не светится. */
-const BURST_LIGHT: Partial<Record<BurstPreset, { light: number; halo: number; intensity: number; life: number; core: number }>> = {
-  fistFlash: { light: 1.5, halo: 0.3, intensity: 1, life: 0.08, core: 0.6 },
+const BURST_LIGHT: Partial<Record<BurstPreset, FlashLight>> = {
+  // свет «дула» кулака (фаза 9, L6): горит у ладони, а не всплеском в мире — см. MUZZLE_LIGHT; ядро дают частицы ладони
+  fistFlash: { light: 2.5, halo: 0, intensity: 1, life: 0.07, core: 0 },
   fistImpact: { light: 2.4, halo: 0.6, intensity: 1.3, life: 0.14, core: 0.8 },
   fireballCharge: { light: 2.2, halo: 0.7, intensity: 0.9, life: 0.25, core: 0.5 },
   fireballBoom: { light: 7.5, halo: 2.8, intensity: 1.7, life: 0.45, core: 1.2 },
@@ -158,6 +170,29 @@ const BURST_LIGHT: Partial<Record<BurstPreset, { light: number; halo: number; in
   breathFlare: { light: 5, halo: 1, intensity: 1.4, life: 0.3, core: 0.8 },
   breathHit: { light: 0, halo: 0.5, intensity: 0.9, life: 0.12, core: 0.4 },
 };
+
+/**
+ * Свет «дула» своего выстрела (фаза 9, L6): выстрел видно боковым зрением — вокруг вспыхивает мир. Огонь — 2,5 м
+ * на 70 мс (оживший fistFlash), Вода — 1,2 м на 60 мс на ударе хлыста. Земля без света (стиль), Воздух не светится.
+ * Только свет на мир: ядро у ладони — частицы ладони, ореол в мире перед глазами лёг бы пятном на руку.
+ */
+export const MUZZLE_LIGHT: Readonly<Record<"fire" | "water", FlashLight>> = {
+  fire: BURST_LIGHT.fistFlash!,
+  water: { light: 1.2, halo: 0, intensity: 0.9, life: 0.06, core: 0 },
+};
+/** Свет дула — ниже всех (сферы 0,3, руки магов 0,6): на мир светит, только если источник пресета свободен. */
+export const MUZZLE_PRIO = 0.2;
+
+/**
+ * Чья ладонь вспыхивает светом дула от эффекта: вспышка ладони Огня у выстрела ЛКМ — рука этого удара (hand), своя
+ * дуга хлыста — правая (хлыст бьёт правой, см. waterVfx). Прочее — null.
+ */
+export function muzzleOf(e: Effect, localId: UnitId, hand: "left" | "right"): { element: "fire" | "water"; hand: "left" | "right" | "both" } | null {
+  // только выстрел ЛКМ (рука "auto"): вспышки обеих ладоней — рывок, стена, Дыхание — светом дула не горят
+  if (e.kind === "palm" && e.element === "fire" && e.preset === "flash" && e.hand === "auto") return { element: "fire", hand };
+  if (e.kind === "burst" && e.preset === "whipArc" && e.owner === localId) return { element: "water", hand: "right" };
+  return null;
+}
 
 /** Отклик юнита по id — общий у манекенов и магов: вспышка и вздрагивание приходят по id из эффектов. */
 interface DummyAnim {
@@ -202,6 +237,46 @@ interface Mark {
 export const MAX_MARKS = 12;
 
 /**
+ * Искры «Добычи» (фаза 9, L14): 7 частиц стихии убийцы летят от тела жертвы к убийце со скоростью 40 м/с и гаснут у
+ * него — видно, кто взял добычу. Струйкой: каждая следующая — чуть позади и в стороне. Дальше 24 м (сброс в ущелье) —
+ * летят с 24 м. Свет (alpha 0) — мягкое пятно со шлейфом по скорости; полноэкранной вспышки нет.
+ */
+export const LOOT_SPARKS = { n: 7, speedMps: 40, maxM: 24, spreadM: 0.35, gapM: 0.6 } as const;
+const SPARK_COLOR: Readonly<Record<Element, readonly [number, number, number]>> = {
+  fire: FX_COLOR.fire, earth: FX_COLOR.jade, air: FX_COLOR.air, water: FX_COLOR.water,
+};
+export function lootSparkSpecs(from: Vec3, to: Vec3, element: Element, rng: () => number): ParticleSpec[] {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const d = Math.hypot(dx, dy, dz);
+  if (!(d > 0.3) || !Number.isFinite(d)) return [];
+  const ux = dx / d;
+  const uy = dy / d;
+  const uz = dz / d;
+  const m = Math.min(d, LOOT_SPARKS.maxM);
+  const out: ParticleSpec[] = [];
+  for (let i = 0; i < LOOT_SPARKS.n; i++) {
+    const back = m + i * LOOT_SPARKS.gapM;
+    const j = (): number => (rng() - 0.5) * 2 * LOOT_SPARKS.spreadM;
+    const p = { x: to.x - ux * back + j(), y: to.y - uy * back + j(), z: to.z - uz * back + j() };
+    const len = Math.hypot(to.x - p.x, to.y - p.y, to.z - p.z);
+    const k = LOOT_SPARKS.speedMps / Math.max(1e-3, len);
+    out.push({
+      pos: p,
+      vel: { x: (to.x - p.x) * k, y: (to.y - p.y) * k, z: (to.z - p.z) * k },
+      gravity: 0,
+      life: len / LOOT_SPARKS.speedMps,
+      size0: 0.16,
+      size1: 0.06,
+      color: SPARK_COLOR[element],
+      alpha: 0,
+    });
+  }
+  return out;
+}
+
+/**
  * Пол под взрывом шара: попал в стоящего — его подошва; в летящего — пола рядом нет (null); иначе — точка взрыва
  * (пол, рельеф или стена).
  */
@@ -223,6 +298,10 @@ interface Flash {
   life: number;
   core: number;
   born: number;
+  color: readonly [number, number, number];
+  prio: number;
+  /** Свет дула: точка — эта ладонь, каждый кадр переведённая в мир по камере (вспышка идёт за рукой); null — pos. */
+  palm: "left" | "right" | "both" | null;
 }
 
 interface Track {
@@ -332,7 +411,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   };
   const palms = { right: new Vector3(REST_PALM.x, REST_PALM.y, REST_PALM.z), left: new Vector3(-REST_PALM.x, REST_PALM.y, REST_PALM.z) };
   let lastPalmHand: "left" | "right" = "right";
-  /** Стихия своего мага (из прошлого кадра) — у кулака Огня нет паузы цели. */
+  /** Стихия своего мага (из прошлого кадра) — у кулака Огня пауза цели короче (SMALL_FREEZE_MS). */
   let localElement: Element | null = null;
   /** Стихия у своих ладоней (A5): накопители частиц и камешков, замах своего мага. */
   let localWindup = false;
@@ -429,11 +508,14 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     apply(e, nowS, hand) {
       const t = rel(nowS);
       for (const el of elements) el.apply?.(e, nowS);
+      // свет дула своего выстрела (L6) — у ладони, низшим приоритетом
+      const muzzle = muzzleOf(e, frame.localId, hand);
+      if (muzzle) flashes.push({ ...MUZZLE_LIGHT[muzzle.element], pos: palmWorld(muzzle.hand), born: t, color: FX_COLOR[muzzle.element], prio: MUZZLE_PRIO, palm: muzzle.hand });
       switch (e.kind) {
         case "burst": {
           emitWorld(markSide(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), sideOf(e.owner ?? (IMPACT_BURSTS.has(e.preset) ? burstOwner(e.pos) : NOBODY), localId)), t);
           const l = BURST_LIGHT[e.preset];
-          if (l) flashes.push({ ...l, pos: { ...e.pos }, born: t, light: l.light * Math.min(1.5, Math.max(0.7, e.scale)) });
+          if (l) flashes.push({ ...l, pos: { ...e.pos }, born: t, light: l.light * Math.min(1.5, Math.max(0.7, e.scale)), color: FX_COLOR.fire, prio: 5, palm: null });
           if (e.preset === "fireballBoom") {
             const y = scorchFloor(e.pos, lastUnits);
             if (y !== null) addMark({ kind: "scorch", center: { x: e.pos.x, y, z: e.pos.z }, radius: 1.2 * Math.min(1.5, Math.max(0.5, e.scale)), born: t, seed: Math.random() * 17 });
@@ -484,6 +566,10 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         default:
           break;
       }
+    },
+
+    lootSparks(from, to, element, nowS) {
+      emitWorld(lootSparkSpecs(from, to, element, Math.random), rel(nowS));
     },
 
     sync(v) {
@@ -843,7 +929,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       terrain.update(boxes);
       veins.update(faces);
 
-      // вспышки света всплесков
+      // вспышки света всплесков; свет дула — у ладони этого кадра (камера и ладони уже обновлены выше)
       for (let i = flashes.length - 1; i >= 0; i--) {
         const f = flashes[i]!;
         const age = nowT - f.born;
@@ -852,7 +938,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           continue;
         }
         const k = 1 - age / f.life;
-        glowList.push({ pos: f.pos, color: FX_COLOR.fire, halo: f.halo * (0.6 + 0.4 * k), light: f.light, intensity: f.intensity * k * k, core: f.core * k, prio: 5 });
+        const pos = f.palm ? palmWorld(f.palm) : f.pos;
+        glowList.push({ pos, color: f.color, halo: f.halo * (0.6 + 0.4 * k), light: f.light, intensity: f.intensity * k * k, core: f.core * k, prio: f.prio });
       }
       // вне пирамиды видимости — не рисуем и не тратим на них бюджет; из видимых самые важные светят на мир
       // (пресет: 2/4/8), остальные — только ореол

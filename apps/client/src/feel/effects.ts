@@ -18,6 +18,16 @@ export const BURST_PRESETS = [
   ...AIR_BURST_PRESETS, ...WATER_BURST_PRESETS,
 ] as const;
 export type BurstPreset = (typeof BURST_PRESETS)[number];
+/**
+ * Серии, добыча и дуга матча (фаза 9, задача 5) — «нейтральный язык», без подписи стихии; рецепты — streakRecipes.ts.
+ * Колокол объявления, ×2 и ×3 поверх него, ×4+ — гонг с барабаном; серия 3 — два удара барабана (и матч-пойнт), 5 — гонг,
+ * 7 и 10 — гонг с шелестом; чужая серия от 5 — далёкий гонг; прервал серию — звон; добыча — тёплый подъём;
+ * «Последняя минута!» — гонг 220 Гц; последние 10 с — деревянный щелчок, последние 3 с — выше.
+ */
+export const STREAK_SOUND_IDS = [
+  "streakBell", "streakBellHigh", "streakDouble", "streakTriple", "streakRampage", "streakDrums", "streakGong", "streakStorm", "streakFar", "streakBroke",
+  "lootRise", "lastMinute", "clockTick", "clockTickLast",
+] as const;
 export const SOUND_IDS = [
   "fireFist", "fireballCharge", "fireballBoom", "dash", "fireWallTelegraph", "fireWallIgnite", "stoneCast", "stoneImpact", "pillarTelegraph", "pillarStrike",
   "wallRise", "quakeWindup", "quakeStrike", "terrainHit", "terrainBreak", "hitLight", "hitHeavy", "kill", "fall", "fizzle", "overheat", "courage",
@@ -28,7 +38,9 @@ export const SOUND_IDS = [
   "breathInhale", "breathRoar", "riftRumble", "riftStrike",
   // объекты на карте (фаза 6): сфера жизни, руна ярости и сама ярость — «нейтральный язык», колокола без подписи стихии
   "orbTake", "runeWarn", "runeSpawn", "runeTake", "furyEnd", "furySlain",
-  ...AIR_SOUND_IDS, ...WATER_SOUND_IDS,
+  // свист чужого снаряда мимо уха (фаза 9, L12) — по стихии стрелка; Воздух и Вода тоже здесь, рядом с Огнём и Землёй
+  "whizzFire", "whizzStone", "whizzSickle", "whizzWater",
+  ...AIR_SOUND_IDS, ...WATER_SOUND_IDS, ...STREAK_SOUND_IDS,
 ] as const;
 export type SoundId = (typeof SOUND_IDS)[number];
 /**
@@ -44,17 +56,20 @@ export type Effect =
   | { kind: "burst"; preset: BurstPreset; pos: Vec3; dir: Vec3; scale: number; owner?: UnitId }
   | { kind: "palm"; hand: Hand; element: Element; preset: "flash" | "charge" | "fizzle" }
   | { kind: "gesture"; ability: AbilityId }
-  // pos null — у слушателя; floor — громкость не ниже этой после расстояния (своё попадание слышно и с 20 м)
-  | { kind: "sound"; id: SoundId; pos: Vec3 | null; gain: number; floor?: number }
+  // pos null — у слушателя; floor — громкость не ниже этой после расстояния (своё попадание слышно и с 20 м);
+  // pitch — множитель частот всех слоёв (тик попадания выше к смерти цели, фаза 9, L2)
+  | { kind: "sound"; id: SoundId; pos: Vec3 | null; gain: number; floor?: number; pitch?: number }
   // profile — шум тряски: Огонь (по умолчанию) или Земля; floor — не прибавка, а пол: trauma не ниже amount
   | { kind: "trauma"; amount: number; profile?: "fire" | "earth"; floor?: true }
-  // dropM — камера вниз в мире на столько метров (удары ладонями в землю)
-  | { kind: "kick"; pitchDeg: number; yawDeg: number; rollDeg: number; dropM?: number }
+  // dropM — камера вниз в мире на столько метров (удары ладонями в землю); recoil — отдача ЛКМ на своей быстрой
+  // пружине (фаза 9, Р6); hand "auto" — yawDeg задан для правой руки, у левой (рука удара кулаком) — зеркально
+  | { kind: "kick"; pitchDeg: number; yawDeg: number; rollDeg: number; dropM?: number; recoil?: true; hand?: "auto" }
   // FOV-удар — импульс с пиком deg через ≈ 33 мс (round3/01, M3); holdS больше не читается — для старых таблиц
   | { kind: "fov"; deg: number; holdS?: number }
   | { kind: "hitstop"; ms: number } // визуальный: замирают руки, пока идёт жест (GDD 2.2)
   | { kind: "hitmarker"; kill: boolean; air: boolean; tier?: FeelTier }
-  | { kind: "number"; target: UnitId; amount: number; pos: Vec3; dot: boolean; air: boolean }
+  // lmb — попадание ЛКМ (и добивающее): такие цифры копятся в одну (L7); урон по времени — всегда false
+  | { kind: "number"; target: UnitId; amount: number; pos: Vec3; dot: boolean; air: boolean; lmb: boolean }
   | { kind: "flash"; target: UnitId }
   | { kind: "flinch"; target: UnitId; dir: Vec3; amount: number }
   | { kind: "indicator"; from: Vec3; amount: number } // попали в меня: откуда

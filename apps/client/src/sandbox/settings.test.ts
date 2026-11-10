@@ -3,7 +3,17 @@ import { DEFAULT_SETTINGS, parseSettings } from "./settings";
 
 describe("parseSettings", () => {
   it("reads valid settings", () => {
-    expect(parseSettings('{"sensitivity":1.5,"quality":"low","rawMouse":true}')).toEqual({ sensitivity: 1.5, quality: "low", rawMouse: true });
+    expect(parseSettings('{"sensitivity":1.5,"quality":"low","rawMouse":true}')).toEqual({ ...DEFAULT_SETTINGS, sensitivity: 1.5, quality: "low", rawMouse: true });
+    expect(parseSettings('{"sfxVolume":0.3,"musicOn":false,"musicVolume":0.8}')).toEqual({ ...DEFAULT_SETTINGS, sfxVolume: 0.3, musicOn: false, musicVolume: 0.8 });
+  });
+
+  // Р8: громкость звука 0,7, музыка включена, громкость музыки 0,5; доли прижаты к [0; 1]
+  it("defaults sound and music volume, clamps them to 0…1 and keeps music on unless switched off", () => {
+    expect([DEFAULT_SETTINGS.sfxVolume, DEFAULT_SETTINGS.musicOn, DEFAULT_SETTINGS.musicVolume]).toEqual([0.7, true, 0.5]);
+    const s = parseSettings('{"sfxVolume":3,"musicVolume":-1,"musicOn":"no"}');
+    expect([s.sfxVolume, s.musicVolume, s.musicOn]).toEqual([1, 0, true]);
+    const junk = parseSettings('{"sfxVolume":"x","musicVolume":null}');
+    expect([junk.sfxVolume, junk.musicVolume]).toEqual([0.7, 0.5]);
   });
 
   it("falls back on garbage", () => {

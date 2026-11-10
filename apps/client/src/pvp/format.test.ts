@@ -4,7 +4,8 @@ import {
   type DamageSource, type Element, type GameState, type MatchEvent, type UnitId,
 } from "@doodlemagic/sim";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedElement, feedLine, formatClock, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+  ARC, BOT_TIPS, ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, deathTip, feedElement, feedLine, formatClock, matchPointText,
+  resultsHint, resultsTitle, respawnLine, createArc, matchPointIds, scoreRows, stepArc, streakFeedLines, topLine, topParts,
   withKnownNames,
 } from "./format";
 
@@ -22,7 +23,7 @@ interface Spec { id: UnitId; el?: Element; kills?: number; falls?: number; death
 function game(phase: GameState["phase"], specs: Spec[], patch: Partial<GameState> = {}): GameState {
   const units = specs.map((s) => {
     const u = createMageUnit(s.id, s.el ?? "fire", { pos, yaw: 0 });
-    u.mage!.stats = { damage: 0, kills: s.kills ?? 0, falls: s.falls ?? 0, deaths: s.deaths ?? 0 };
+    u.mage!.stats = { ...u.mage!.stats, kills: s.kills ?? 0, falls: s.falls ?? 0, deaths: s.deaths ?? 0 };
     if (s.hp !== undefined) u.hp = s.hp;
     if (s.alive === false) u.alive = false;
     return u;
@@ -270,5 +271,139 @@ describe("results and board texts", () => {
       { code: "Digit3", element: "air", label: "3 — Воздух" },
       { code: "Digit4", element: "water", label: "4 — Вода" },
     ]);
+  });
+});
+
+describe("bots in the match texts (phase 8)", () => {
+  const BOT = -2;
+
+  it("a bot's ping reads «бот» in the table", () => {
+    const g = game("live", [{ id: 1, kills: 2 }, { id: 2, el: "air" }]);
+    const rows = scoreRows(g, new Map([[1, "Искра 42"], [2, "Перо · бот"]]), new Map([[1, 0], [2, BOT]]), 1);
+    expect(rows.map((r) => [r.name, r.ping])).toEqual([["Искра 42", "0"], ["Перо · бот", "бот"]]);
+  });
+
+  it("the board title without a room is the bot fight", () => {
+    expect(boardTitle("", 0)).toBe("Бой с ботами");
+  });
+
+  it("warmup line of the bot fight: «Играть» starts it", () => {
+    expect(topLine(game("warmup", [{ id: 1 }, { id: 2 }]), 1, NAMES, true, 1000, true)).toBe("Разминка · магов: 2 · «Играть» — в бой");
+  });
+
+  it("death screen: a tip against the bot's element; none for a human or a slip", () => {
+    const g = game("live", [{ id: 1, el: "water" }, { id: 2, alive: false, hp: 0 }, { id: 3, el: "earth" }]);
+    const pings = new Map([[1, BOT], [2, 0], [3, 40]]);
+    expect(deathTip({ type: "death", target: 2, killer: 1, ability: "fireball", pos }, g, pings)).toBe(BOT_TIPS.water);
+    expect(deathTip({ type: "fall", target: 2, credit: 1, pos }, g, pings)).toBe(BOT_TIPS.water);
+    expect(deathTip({ type: "death", target: 2, killer: 3, ability: "stoneShot", pos }, g, pings)).toBe("");
+    expect(deathTip({ type: "fall", target: 2, credit: NOBODY, pos }, g, pings)).toBe("");
+    expect(deathTip(null, g, pings)).toBe("");
+    for (const t of Object.values(BOT_TIPS)) expect(t.length).toBeLessThan(80);
+  });
+});
+
+describe("streaks in the kill feed and on the death screen (phase 9, Р5)", () => {
+  const streak = (unit: UnitId, multi: number, n: number, broke: UnitId = NOBODY, brokeStreak = 0): MatchEvent => ({ type: "streak", unit, multi, streak: n, broke, brokeStreak });
+
+  it("tells others «Имя · двойное» with a ×N stamp, «Имя — Неудержимый» from 5 and who broke whose streak", () => {
+    expect(streakFeedLines(streak(1, 2, 2), NAMES, 2)).toEqual([{ text: "Искра 42 · двойное", mine: false, stamp: "×2" }]);
+    expect(streakFeedLines(streak(1, 4, 5), NAMES, 2)).toEqual([
+      { text: "Искра 42 · разгром", mine: false, stamp: "×4" },
+      { text: "Искра 42 — Неудержимый", mine: false, stamp: "" },
+    ]);
+    // серия 3 — без строки (её видно печатью над именем); 7 и 10 — строкой
+    expect(streakFeedLines(streak(1, 1, 3), NAMES, 2)).toEqual([]);
+    expect(streakFeedLines(streak(1, 1, 7), NAMES, 2).map((l) => l.text)).toEqual(["Искра 42 — Стихийное бедствие"]);
+    // прервал серию: без родовых окончаний; прервали мою — моя строка
+    expect(streakFeedLines(streak(3, 1, 1, 1, 5), NAMES, 2)).toEqual([{ text: "Огонёк прерывает серию: Искра 42 · 5", mine: false, stamp: "" }]);
+    expect(streakFeedLines(streak(3, 1, 1, 2, 4), NAMES, 2)[0]?.mine).toBe(true);
+  });
+
+  it("gives no feed line for my own streak, for a mage who left or for other events", () => {
+    expect(streakFeedLines(streak(2, 3, 5), NAMES, 2)).toEqual([]);
+    expect(streakFeedLines(streak(9, 3, 5), NAMES, 2)).toEqual([]);
+    expect(streakFeedLines({ type: "loot", unit: 1, victim: 2, amount: 30, pos }, NAMES, 2)).toEqual([]);
+  });
+
+  it("adds the killer's streak from 3 to the death screen: «его серия: N»", () => {
+    const g = game("live", [{ id: 1, hp: 64 }, { id: 2, alive: false }]);
+    g.match.units[0]!.mage!.stats.streak = 5;
+    expect(deathLine({ type: "death", target: 2, killer: 1, ability: "fireball", pos }, g, NAMES)).toBe("Тебя победил Искра 42 · Огненный шар · у него 64 HP · его серия: 5");
+    expect(deathLine({ type: "fall", target: 2, credit: 1, pos }, g, NAMES)).toBe("Тебя сбросил Искра 42 · его серия: 5");
+    // только в бою: решающее очко уже в итогах — без приписки
+    expect(deathLine({ type: "fall", target: 2, credit: 1, pos }, { ...g, phase: "results" }, NAMES)).toBe("Тебя сбросил Искра 42");
+    g.match.units[0]!.mage!.stats.streak = 2;
+    expect(deathLine({ type: "fall", target: 2, credit: 1, pos }, g, NAMES)).toBe("Тебя сбросил Искра 42");
+  });
+});
+
+describe("match arc (phase 9, T7)", () => {
+  /** Бой до тика END; scores — очки по id. */
+  const END = 30000;
+  const fight = (scores: Partial<Record<UnitId, number>> = {}, patch: Partial<GameState> = {}): GameState =>
+    game("live", [1, 2, 3].map((id) => ({ id, kills: scores[id] ?? 0 })), { phaseEnd: END, scoreLimit: 10, ...patch });
+  /** Часы «сейчас» за left секунд до конца. */
+  const nowAt = (left: number): number => END - Math.round(left * 60);
+  /** Шаги дуги по секундам до конца одного боя (ответ шага — один объект на всё время: копируем). */
+  const m = createArc();
+  const run = (lefts: number[]) => {
+    const g = fight();
+    return lefts.map((l) => ({ ...stepArc(m, g, nowAt(l)) }));
+  };
+
+  it("announces «Последняя минута!» once per fight at 6:00 and reddens the clock till the end and in sudden death", () => {
+    const steps = run([61, 60.5, 60, 59, 30, 12]);
+    // память и ответ меняются на месте — без мусора в кадре
+    expect(stepArc(m, fight(), nowAt(11))).toBe(m.step);
+    expect(steps.map((s) => s.lastMinute)).toEqual([false, false, true, false, false, false]);
+    expect(steps.map((s) => s.final)).toEqual([false, false, true, true, true, true]);
+    expect(ARC.finalS).toBe(60);
+    // внезапная смерть: часы красные, второй раз не объявляем; новый бой — снова
+    const sd = stepArc(m, fight({}, { suddenDeath: true, phaseEnd: END + 3600 }), nowAt(50) + 3600);
+    expect([sd.final, sd.lastMinute]).toEqual([true, false]);
+    expect(stepArc(m, fight({}, { phaseEnd: END + 30000 }), nowAt(59) + 30000).lastMinute).toBe(true);
+    // разминка и итоги — ничего
+    for (const phase of ["warmup", "results"] as const) {
+      const st = stepArc(createArc(), game(phase, [{ id: 1 }], { phaseEnd: 1000 + 30 * 60 }), 1000);
+      expect([st.final, st.lastMinute, st.click, st.matchPoint]).toEqual([false, false, null, false]);
+    }
+  });
+
+  it("clicks once a second in the last 10 s, higher in the last 3 s, never twice in one second", () => {
+    m.sec = Number.NaN;
+    const steps = run([11, 10.5, 10, 9.9, 9.5, 4, 3, 2.9, 2, 1, 0.5, 0]);
+    // часы «0:11» молчат, «0:10» — первый щелчок; «0:03» и дальше — высокий; на 0:00 — тишина
+    expect(steps.map((s) => s.click)).toEqual([null, null, "tick", null, null, "tick", "last", null, "last", "last", null, null]);
+  });
+
+  it("shows the match point while it is true and drums when a new mage reaches it", () => {
+    const arc = createArc();
+    const at = (g: GameState) => {
+      const st = stepArc(arc, g, nowAt(200));
+      return [[...st.ids], st.matchPoint];
+    };
+    expect(at(fight({ 1: 8 }))).toEqual([[], false]);
+    const one = fight({ 1: 9 });
+    expect(at(one)).toEqual([[1], true]);
+    // та же игра (снапшот) — не пересчитываем; новая с тем же матч-пойнтом — без барабана
+    expect(at(one)).toEqual([[1], false]);
+    expect(at(fight({ 1: 9 }))).toEqual([[1], false]);
+    expect(at(fight({ 3: 9, 1: 9 }))).toEqual([[1, 3], true]);
+    // на месте: тот же массив
+    const out: number[] = [7];
+    expect(matchPointIds(fight({ 2: 9 }), out)).toBe(out);
+    expect(out).toEqual([2]);
+    expect(matchPointText([1, 3], 3, NAMES)).toBe("Одно очко до победы · Матч-пойнт: Искра 42");
+    expect(matchPointText([1], 3, NAMES)).toBe("Матч-пойнт: Искра 42");
+    expect(matchPointText([], 3, NAMES)).toBeNull();
+  });
+
+  it("splits the top line into the clock and the rest without changing the joined line", () => {
+    const g = fight({ 2: 3 });
+    g.match.tick = nowAt(125);
+    expect(topParts(g, 2, NAMES, false)).toEqual({ clock: "2:05", rest: "Ты 3 · Лидер — ты · до 10" });
+    expect(topLine(g, 2, NAMES, false)).toBe("2:05 · Ты 3 · Лидер — ты · до 10");
+    expect(topParts(game("warmup", [{ id: 1 }]), 1, NAMES, true).clock).toBe("");
   });
 });

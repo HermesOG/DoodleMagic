@@ -55,6 +55,12 @@ export interface Hud {
   onRawMouse(cb: (raw: boolean) => void): void;
   /** Ползунок «Движение камеры» 0…1 (GDD 5: доступность). */
   onCameraMotion(cb: (x: number) => void): void;
+  /** Ползунок «Громкость звука» 0…1. */
+  onSfxVolume(cb: (x: number) => void): void;
+  /** Галочка «Музыка в бою». */
+  onMusicOn(cb: (on: boolean) => void): void;
+  /** Ползунок «Громкость музыки» 0…1. */
+  onMusicVolume(cb: (x: number) => void): void;
   /** Заголовок и вводная строка меню (по умолчанию — полигон). */
   setMenuText(title: string, lead: string): void;
   /** Кнопка режима в меню под «Играть» («Начать матч», «Скопировать ссылку»…), по порядку добавления. */
@@ -102,6 +108,13 @@ export function createHud(root: HTMLElement, settings: Settings, start: { elemen
           <input class="sb-motion" type="range" min="0" max="1" step="0.1" />
         </label>
         <label class="sb-check"><input class="sb-raw" type="checkbox" /> Сырой ввод мыши (без ускорения ОС)</label>
+        <label>Громкость звука <span class="sb-sfx-out"></span>
+          <input class="sb-sfx" type="range" min="0" max="1" step="0.05" />
+        </label>
+        <label class="sb-check"><input class="sb-music-on" type="checkbox" /> Музыка в бою</label>
+        <label>Громкость музыки <span class="sb-music-out"></span>
+          <input class="sb-music" type="range" min="0" max="1" step="0.05" />
+        </label>
         <p class="sb-muted sb-small">Ё (~) — отладка: FPS и пресет. <a href="/nettest">Тест связи</a>
           <a class="sb-host-link" href="/nettest?host=1">Тест связи — создать комнату</a></p>
       </section>
@@ -118,6 +131,11 @@ export function createHud(root: HTMLElement, settings: Settings, start: { elemen
   const motion = el<HTMLInputElement>(root, ".sb-motion");
   const motionOut = el(root, ".sb-motion-out");
   const raw = el<HTMLInputElement>(root, ".sb-raw");
+  const sfx = el<HTMLInputElement>(root, ".sb-sfx");
+  const sfxOut = el(root, ".sb-sfx-out");
+  const musicOn = el<HTMLInputElement>(root, ".sb-music-on");
+  const music = el<HTMLInputElement>(root, ".sb-music");
+  const musicOut = el(root, ".sb-music-out");
   const lockHint = el(root, ".sb-lock-hint");
   const elementName = el(root, ".sb-element-name");
   const controls = el(root, ".sb-controls");
@@ -134,6 +152,20 @@ export function createHud(root: HTMLElement, settings: Settings, start: { elemen
   sensOut.textContent = `×${settings.sensitivity.toFixed(1)}`;
   motion.value = String(start.cameraMotion);
   motionOut.textContent = percent(start.cameraMotion);
+  sfx.value = String(settings.sfxVolume);
+  sfxOut.textContent = percent(settings.sfxVolume);
+  musicOn.checked = settings.musicOn;
+  music.value = String(settings.musicVolume);
+  music.disabled = !settings.musicOn;
+  musicOut.textContent = percent(settings.musicVolume);
+  /** Ползунок 0…1: значение прижато к краям, подпись в процентах. */
+  const onUnit = (input: HTMLInputElement, out: HTMLElement, cb: (x: number) => void): void => {
+    input.addEventListener("input", () => {
+      const x = Math.min(1, Math.max(0, Number(input.value) || 0));
+      out.textContent = percent(x);
+      cb(x);
+    });
+  };
 
   let locked = false;
   let selecting = false;
@@ -228,6 +260,18 @@ export function createHud(root: HTMLElement, settings: Settings, start: { elemen
         motionOut.textContent = percent(x);
         cb(x);
       });
+    },
+    onSfxVolume(cb) {
+      onUnit(sfx, sfxOut, cb);
+    },
+    onMusicOn(cb) {
+      musicOn.addEventListener("change", () => {
+        music.disabled = !musicOn.checked;
+        cb(musicOn.checked);
+      });
+    },
+    onMusicVolume(cb) {
+      onUnit(music, musicOut, cb);
     },
     setMenuText(t, l) {
       title.textContent = t;

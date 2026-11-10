@@ -1,7 +1,7 @@
 import { DEFAULT_MOVE } from "../player";
 import { groundBelow } from "../raycast";
 import { TICK_HZ, type Vec3 } from "../types";
-import { CC_LIMITS, DUMMY, EARTH, ELEMENT_OF, KNOCKBACK, MAGE_REGEN, PICKUPS, STATUS, STEAM, WATER, isUlt, ticks } from "./defs";
+import { CC_LIMITS, DUMMY, EARTH, ELEMENT_OF, KNOCKBACK, MAGE_REGEN, MATCH, PICKUPS, STATUS, STEAM, STREAK, WATER, isUlt, ticks } from "./defs";
 import { furyOnDeath, hasFury } from "./pickups";
 import { unitById } from "./state";
 import { spawnSteam } from "./steam";
@@ -146,7 +146,7 @@ function steam(s: MatchState, t: TickCtx, u: Unit, owner: UnitId, ability: Abili
  * якорем; ×0,5 у мага Земли, в иммунитете вбок ×1, вверх ×0,5; потолок 12 / 6 м, у ульт ×1,5 — 18 / 9 м; ярость его не
  * меняет) и удар о стену в канале → HP и засчитывание → событие hit → заряд ульты → подброс, обездвиживание,
  * замедление → «Мокрый», Горение и пар (Р9) → буксир → «Круговорот» → смерть (цели +1 deaths, заряд за убийство
- * и помощь, ярость снята и +10 убийце носителя).
+ * и помощь, ярость снята и +10 убийце носителя) → «Кураж» → добыча и серия (scorePoint, Р1 и Р4 фазы 9).
  */
 export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
   if (h.source === h.target) return 0;
@@ -259,12 +259,14 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
     endTow(t, u);
     u.slam = null;
     u.respawnTick = respawnAt(u, t);
+    const victimStreak = endStreak(u);
     if (u.mage) u.mage.stats.deaths += 1;
     const p = u.move.body.pos;
     t.ev.push({ type: "death", target: u.id, killer: h.source, ability: h.ability, pos: { x: p.x, y: p.y, z: p.z } });
     if (src?.mage) {
       src.mage.stats.kills += 1;
       courage(t, src);
+      scorePoint(t, src, u.id, victimStreak);
     }
     ultOnKill(s, t, u, h.source);
     furyOnDeath(s, t, u, h.source);
@@ -362,6 +364,44 @@ export function courage(t: TickCtx, killer: Unit): void {
   m.overheatUntil = 0;
   m.ready.e = Math.min(m.ready.e, t.now);
   t.ev.push({ type: "courage", unit: killer.id });
+}
+
+const MULTI_WINDOW_TICKS = ticks(STREAK.multiWindowS); // 240
+/** С какой серии жертвы её обрыв попадает в событие streak (Р5 фазы 9: «Серия прервана!» от 3). */
+const BROKE_FROM = 3;
+
+/** Смерть мага обрывает его серию (Р4 фазы 9): streak и multi — 0, lastScoreTick — −1. Возвращает прежнюю серию; не маг — 0. */
+export function endStreak(u: Unit): number {
+  const st = u.mage?.stats;
+  if (!st) return 0;
+  const was = st.streak;
+  Object.assign(st, { streak: 0, multi: 0, lastScoreTick: -1 });
+  return was;
+}
+
+/**
+ * Очко мага killer — убийство или засчитанный сброс victim (Р1, Р4 фазы 9); зовётся после «Куража». «Добыча»: живому
+ * +MATCH.lootHp до максимума, событие loot — если прибавилось (погибший раньше в этом тике не лечится). Серия: мульти
+ * растёт, если прошлое очко не дальше STREAK.multiWindowS, иначе 1; событие streak. victimStreak — серия жертвы до
+ * смерти (endStreak).
+ */
+export function scorePoint(t: TickCtx, killer: Unit, victim: UnitId, victimStreak: number): void {
+  const m = killer.mage;
+  if (!m) return;
+  const now = t.now;
+  if (killer.alive) {
+    const add = Math.min(MATCH.lootHp, killer.maxHp - killer.hp);
+    if (add > 0) {
+      killer.hp += add;
+      t.ev.push({ type: "loot", unit: killer.id, victim, amount: add, pos: bodyCenter(killer) });
+    }
+  }
+  const st = m.stats;
+  st.multi = st.lastScoreTick >= 0 && now - st.lastScoreTick <= MULTI_WINDOW_TICKS ? st.multi + 1 : 1;
+  st.streak += 1;
+  st.lastScoreTick = now;
+  const broke = victimStreak >= BROKE_FROM;
+  t.ev.push({ type: "streak", unit: killer.id, multi: st.multi, streak: st.streak, broke: broke ? victim : NOBODY, brokeStreak: broke ? victimStreak : 0 });
 }
 
 /** Для живых: импульсы горения, конец «В воздухе» и замедления, реген (маг — до ⅔, манекен — до полного). */

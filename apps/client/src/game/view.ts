@@ -20,11 +20,16 @@ import {
 import "../render/canvas.css";
 import "../sandbox/sandbox.css";
 import { createAudio, unlockOnGesture } from "../audio/synth";
+import { createMusic } from "../audio/music";
+import {
+  createMusicDirector, createSeedKeeper, emptySituation, musicCue, readSituation, streakCue, type DirectorInput, type MusicCue,
+} from "../audio/musicDirector";
 import { createEyeSmooth, createMoveTracker, stepEyeSmooth, trackMovement } from "../feel/body";
 import { addFeel, addLanding, createCameraFeel, stepCameraFeel, type CameraOffset } from "../feel/camera";
 import type { Effect } from "../feel/effects";
 import { elementFrameEffects } from "../feel/elementFx";
-import { effectsFor } from "../feel/eventMap";
+import { ULT_KILL_TOASTS, afterKillS, effectsFor } from "../feel/eventMap";
+import { createWhizzFrame } from "../feel/whizz";
 import { createVfx } from "../fx/vfx";
 import { createGestures, isFistGesture, startGesture, stepGestures } from "../hands/gestures";
 import { createMittens } from "../hands/mittens";
@@ -32,6 +37,7 @@ import { createHandRig, updateHandRig } from "../hands/motion";
 import { createCombatHud, type CombatHud } from "../hud/combatHud";
 import { showElementSelect } from "../hud/elementSelect";
 import { loadPrefs, savePrefs } from "../hud/prefs";
+import { announcement, createStreakHud, type StreakHud } from "../hud/streakHud";
 import { buildArenaMeshes } from "../render/arenaMeshes";
 import { FPS_METER_MAX_FRAME_MS, createFpsMeter } from "../render/fpsMeter";
 import { createAutoQuality, createQualityWatchdog, type AutoQuality, type PresetId, type QualityWatchdog } from "../render/quality";
@@ -44,6 +50,7 @@ import { createInput, type InputDevice } from "../sandbox/input";
 import { createGuard, sinkOf } from "../sandbox/route";
 import { loadSettings, saveSettings } from "../sandbox/settings";
 import type { Driver, Frame } from "./driver";
+import type { GameState } from "@doodlemagic/sim";
 
 export interface GameViewOptions {
   root: HTMLElement;
@@ -58,11 +65,15 @@ export interface GameViewOptions {
   onFrame?: (f: Frame, nowS: number) => void;
   /** Имена магов (сеть): над полосой HP чужого мага. */
   names?: () => ReadonlyMap<UnitId, string>;
+  /** Узел над карточками экрана «Выбери стихию» (панель режима на «/», фаза 8). */
+  selectTop?: () => HTMLElement | null;
 }
 export interface GameView {
   readonly hud: Hud;
   readonly input: InputDevice;
   readonly combat: CombatHud;
+  /** Строка серий над прицелом (фаза 9): интерфейс матча кладёт туда «Последняя минута!». */
+  readonly streak: StreakHud;
   route(e: Effect): void;
   /**
    * Выбор стихии, как с экрана выбора (экран смерти PvP): запоминается в настройках вида, уходит драйверу; вернул он
@@ -79,6 +90,8 @@ const STILL: CameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, fovDeg: 0, 
 /** Пол ближе этого под падающим магом — не ущелье (ров на −1 м): камера идёт за ним, как обычно. */
 const FALL_PROBE_M = 2;
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+/** Середина тела юнита — откуда и куда летят искры добычи. */
+const bodyCentre = (b: { pos: Vec3; height: number }): Vec3 => ({ x: b.pos.x, y: b.pos.y + b.height / 2, z: b.pos.z });
 
 /** Сделать видимыми все скрытые объекты под корнями (пустые пулы эффектов) — на время прогрева. Возвращает откат. */
 function revealForWarmUp(roots: readonly Object3D[]): () => void {
@@ -142,9 +155,40 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   scene.add(buildArenaMeshes(arena.render), vfx.worldGroup);
   const mittens = createMittens();
   const combat = createCombatHud(root);
+  const streak = createStreakHud(root);
   // звук: контекст создаёт первый жест (клик «Играть», выбор стихии, любая клавиша); без Web Audio — тишина, не сбой
   const audio = createAudio();
   unlockOnGesture(audio);
+  // боевая музыка (фаза 9): своя шина в лимитер, директор решает по своим событиям и подтверждённому состоянию игры
+  audio.setVolume(settings.sfxVolume);
+  const music = createMusic({ bus: () => audio.musicBus() });
+  music.setEnabled(settings.musicOn);
+  music.setVolume(settings.musicVolume);
+  const director = createMusicDirector();
+  /** В PvP драйвер знает подтверждённую игру и код комнаты; на полигоне их нет — фаза training. */
+  const pvpSource = driver as Partial<{ roomCode: string; confirmedGame(): GameState }>;
+  const seedOf = createSeedKeeper();
+  // вход директора и события кадра — одни на все кадры: кадр музыки ничего не создаёт
+  const cues: MusicCue[] = [];
+  const musicIn: DirectorInput = { ...emptySituation(), nowS: 0, cues };
+  const addCue = (c: MusicCue | null): void => {
+    if (c) cues.push(c);
+  };
+  const feedMusic = (frame: Frame, nowS: number): void => {
+    const localId = driver.localId;
+    cues.length = 0;
+    for (let k = 0; k < frame.ticks.length; k++) {
+      const t = frame.ticks[k]!;
+      for (let i = 0; i < t.events.length; i++) addCue(musicCue(t.events[i]!, localId, t.state));
+    }
+    for (let i = 0; i < frame.late.length; i++) addCue(musicCue(frame.late[i]!, localId, frame.cur));
+    // серии — только подтверждённые
+    for (let i = 0; i < frame.confirmed.length; i++) addCue(streakCue(frame.confirmed[i]!, localId));
+    const game = pvpSource.confirmedGame?.() ?? null;
+    music.setSeed(seedOf(pvpSource.roomCode ?? null, game));
+    musicIn.nowS = nowS;
+    music.set(director.step(readSituation(game, frame.cur, localId, musicIn)));
+  };
   if (import.meta.env.DEV) {
     // dmAudio.play("fireballBoom", 5) в консоли — только в dev-сборке
     void import("../audio/audition").then((m) => m.installAudioConsole(audio)).catch(() => undefined);
@@ -164,6 +208,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   const moves = createMoveTracker();
   let gestures = createGestures();
   let fistHand: "left" | "right" = "right";
+  /** Свист чужого снаряда мимо уха (L12): своя память снарядов на этот вид. */
+  const whizz = createWhizzFrame();
   let hitstopUntil = 0;
   let handRig = createHandRig();
   let auto: AutoQuality | null = settings.quality === "auto" ? createAutoQuality("high") : null;
@@ -205,8 +251,9 @@ export function mountGameView(o: GameViewOptions): GameView | null {
           if (isFistGesture(e.ability)) fistHand = gestures.nextFist;
           gestures = startGesture(gestures, e.ability);
         } else if (sink === "vfx") vfx.apply(e, nowS, fistHand);
-        else if (e.kind === "sound") audio.play(e.id, e.pos, e.gain, e.floor);
-        else if (sink === "camera") feel = addFeel(feel, e);
+        else if (e.kind === "sound") audio.play(e.id, e.pos, e.gain, e.floor, e.pitch);
+        // отдача кулака и серпа вбок — по руке этого удара (как palm "auto")
+        else if (sink === "camera") feel = addFeel(feel, e, fistHand);
         // пауза рук — только если жест ещё идёт: у снаряда жест кончился раньше, чем он долетел (round3/01, H2)
         else if (e.kind === "hitstop") {
           if (gestures.active.length > 0) hitstopUntil = Math.max(hitstopUntil, nowS + e.ms / 1000);
@@ -248,7 +295,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     selecting = true;
     hud.setSelecting(true);
     const initial = unitById(cur, driver.localId)?.mage?.element ?? prefs.element;
-    void showElementSelect(root, initial).then(({ element, byClick }) => {
+    void showElementSelect(root, initial, undefined, o.selectTop?.() ?? null).then(({ element, byClick }) => {
       selecting = false;
       hud.setSelecting(false);
       guard.run("select", () => chooseElement(element), undefined);
@@ -260,6 +307,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   const halt = (): void => {
     stopped = true;
     cancelAnimationFrame(raf);
+    music.dispose();
     if (document.pointerLockElement) document.exitPointerLock();
   };
 
@@ -284,6 +332,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   input.onLockChange((locked) => {
     hud.setLocked(locked);
     combat.setVisible(locked);
+    streak.setVisible(locked);
   });
   input.onLockError(() => hud.showLockRefused());
   input.onPress(KEYS.debug, () => hud.toggleDebug());
@@ -314,6 +363,21 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   hud.onCameraMotion((x) => {
     prefs.cameraMotion = x;
     savePrefs(prefs);
+  });
+  hud.onSfxVolume((x) => {
+    settings.sfxVolume = x;
+    saveSettings(settings);
+    audio.setVolume(x);
+  });
+  hud.onMusicOn((on) => {
+    settings.musicOn = on;
+    saveSettings(settings);
+    music.setEnabled(on);
+  });
+  hud.onMusicVolume((x) => {
+    settings.musicVolume = x;
+    saveSettings(settings);
+    music.setVolume(x);
   });
 
   const cam = renderer.camera;
@@ -358,6 +422,58 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     return p;
   };
 
+  /**
+   * Серии и добыча (фаза 9, Р5) — только по подтверждённым событиям: в PvP — не в разминке и отсчёте (бой, внезапная
+   * смерть и решающее очко, после которого уже итоги), на полигоне — всегда. Своё — не раньше 120 мс (колокол) и 250 мс (добыча) после звука своего убийства, который звучит по
+   * предсказанию: killAt — когда он прозвучал; в PvP подтверждение обычно приходит позже, и ждать уже нечего.
+   */
+  let killAt = -Infinity;
+  const later: { at: number; ev: MatchEvent; state: MatchState }[] = [];
+  const present = (ev: MatchEvent, state: MatchState, nowS: number): void => {
+    const localId = driver.localId;
+    for (const e of guard.run("effects", () => effectsFor(ev, { localId, state }), NO_EFFECTS)) route(e, nowS);
+    if (ev.type === "streak" && ev.unit === localId) {
+      const a = announcement(ev.multi, ev.streak);
+      // новое объявление сменяет прежнее; тост убийства ультой в этот момент гаснет — одна строка
+      if (a)
+        guard.run("hud", () => {
+          streak.announce(a, nowS);
+          combat.quietToasts(ULT_KILL_TOASTS);
+        }, undefined);
+    }
+    if (ev.type !== "loot") return;
+    if (ev.unit === localId) guard.run("hud", () => combat.loot(ev.amount, nowS), undefined);
+    // искры стихии убийцы от тела жертвы к убийце — всем (L14); убийца — там, где он сейчас в кадре
+    const victim = unitById(state, ev.victim);
+    const killer = unitById(cur, ev.unit) ?? unitById(state, ev.unit);
+    const element = killer?.mage?.element;
+    if (victim && element)
+      guard.run("vfx", () => vfx.lootSparks(bodyCentre(victim.move.body), killer ? bodyCentre(killer.move.body) : ev.pos, element, nowS), undefined);
+  };
+  /** Подтверждённые события кадра: серии и добыча — в подачу (сразу или в очередь), остальное здесь не нужно. */
+  const presentConfirmed = (frame: Frame, nowS: number): void => {
+    const game = pvpSource.confirmedGame?.() ?? null;
+    // фаза — уже после тика: решающее очко переводит игру в итоги, его серия и добыча всё равно подаются
+    if (!game || (game.phase !== "warmup" && game.phase !== "countdown")) {
+      const state = game?.match ?? frame.cur;
+      for (const ev of frame.confirmed) {
+        if (ev.type !== "streak" && ev.type !== "loot") continue;
+        const wait = afterKillS(ev, driver.localId);
+        const at = wait > 0 ? Math.max(nowS, killAt + wait) : nowS;
+        if (at <= nowS) present(ev, state, nowS);
+        else later.push({ at, ev, state });
+      }
+    }
+    for (let k = 0; k < later.length; ) {
+      const l = later[k]!;
+      if (l.at > nowS) k++;
+      else {
+        later.splice(k, 1);
+        present(l.ev, l.state, nowS);
+      }
+    }
+  };
+
   let last = 0;
   /** Время текущего кадра для звуков движения: обработчик создаётся один раз, а не каждый кадр. */
   let frameNowS = 0;
@@ -390,6 +506,9 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     let respawned = false;
     /** Событие — в эффекты; state — состояние после шага, в котором оно родилось (для поздних — текущее). */
     const onEvent = (ev: MatchEvent, state: MatchState): void => {
+      // серии и добыча — по подтверждённым (presentConfirmed), а не по предсказанию: после отката не мелькнёт ложное
+      if (ev.type === "streak" || ev.type === "loot") return;
+      if ((ev.type === "death" && ev.killer === localId) || (ev.type === "fall" && ev.credit === localId)) killAt = nowS;
       if (ev.type === "respawn" && ev.target === localId) {
         // зажатый с прыжка пробел sim переносит сам; взгляд — на точку появления, prev = cur уже сделал драйвер
         look = { yaw: ev.yaw, pitch: 0 };
@@ -411,8 +530,11 @@ export function mountGameView(o: GameViewOptions): GameView | null {
       guard.run("effects", trackTick, undefined);
     }
     for (const ev of frame.late) onEvent(ev, cur);
+    presentConfirmed(frame, nowS);
     // непрерывное у стихий (зёрна парения, гул Смерча, журчание Родника) — раз в кадр
     for (const e of guard.run("effects", () => elementFrameEffects({ prev, cur, alpha, localId, nowS, dtS }), NO_EFFECTS)) route(e, nowS);
+    // свист чужого снаряда мимо уха — раз в кадр, по отрезку снаряда между кадрами (L12)
+    for (const e of guard.run("effects", () => whizz({ prev, cur, alpha, localId, nowS, dtS }), NO_EFFECTS)) route(e, nowS);
     // руки после возрождения — в покое, а не с отставанием и креном от падения
     if (respawned) handRig = createHandRig();
     // приземление садит камеру: −0,006 м на 1 м/с, не глубже 8 см (M1)
@@ -461,13 +583,20 @@ export function mountGameView(o: GameViewOptions): GameView | null {
       () => {
         // полоса HP манекена прячется и за рельефом Земли, и за стеной огня (она закрывает обзор), а не только за аркой
         const sight = buildTickWorld(ctx.world, cur).world;
-        combat.update({ cur, prev, alpha, localId, camera: cam, nowS, visible: (q) => lineOfSight(sight, cam.position, q), names: o.names?.() });
+        const game = pvpSource.confirmedGame?.();
+        combat.update({
+          cur, prev, alpha, localId, camera: cam, nowS, visible: (q) => lineOfSight(sight, cam.position, q), names: o.names?.(),
+          // печати серий над именами — в бою PvP и на полигоне, не в разминке (Р5)
+          streaks: !game || game.phase === "live",
+        });
+        streak.update(nowS);
       },
       undefined,
     );
     const onFrame = o.onFrame;
     if (onFrame) guard.run("mode", () => onFrame(frame, nowS), undefined);
     guard.run("audio", () => audio.setListener(cam.position, look.yaw), undefined);
+    guard.run("music", () => feedMusic(frame, nowS), undefined);
 
     renderer.render(scene, mittens.scene, vfx.fx);
 
@@ -537,6 +666,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     hud,
     input,
     combat,
+    streak,
     route: (e) => route(e, performance.now() / 1000),
     chooseElement: (e) => guard.run("select", () => chooseElement(e), undefined),
     stop: halt,

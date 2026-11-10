@@ -10,12 +10,13 @@ export interface ProjectileDef { speed: number; radiusM: number; gravity: number
 export const FIRE = {
   hp: 150, runSpeed: 6.5,
   fireFists: {
-    slot: "primary", name: "Огненные кулаки", damage: 12, ratePerS: 5,
-    projectile: { speed: 40, radiusM: 0.2, gravity: 0, rangeM: 24 }, // дальность — Р7
+    // фаза 9, Р2: 15 урона × 4/с (было 12 × 5), снаряд 50 м/с (было 40)
+    slot: "primary", name: "Огненные кулаки", damage: 15, ratePerS: 4,
+    projectile: { speed: 50, radiusM: 0.2, gravity: 0, rangeM: 24 }, // дальность — Р7
     knockback: { distM: 0.3, upM: 0 }, // «сок» ЛКМ ≤ 0,3 м, × min(1, интервал / tempoRefS) (round2/03, п. 7)
     tempoRefS: 0.5,
   },
-  heat: { perShot: 8, max: 100, coolPerS: 35, coolDelayS: 0.3, overheatS: 1.5, overheatRateMul: 0.5 },
+  heat: { perShot: 10, max: 100, coolPerS: 35, coolDelayS: 0.3, overheatS: 1.5, overheatRateMul: 0.5 }, // жар за выстрел 10 (было 8) — фаза 9, Р2
   fireball: {
     slot: "q", name: "Огненный шар", cooldownS: 8, windupS: 0.25, damageCenter: 50, damageEdge: 20, radiusM: 3,
     projectile: { speed: 22, radiusM: 0.45, gravity: 0, rangeM: 44 }, // дальность — Р7
@@ -33,8 +34,9 @@ export const FIRE = {
 export const EARTH = {
   hp: 170, runSpeed: 6,
   stoneShot: {
-    slot: "primary", name: "Каменный снаряд", damage: 30, ratePerS: 1.9, windupS: 0.2,
-    projectile: { speed: 40, radiusM: 0.25, gravity: 6, rangeM: 50 }, // гравитация и дальность — Р7
+    // фаза 9, Р2: замах 0,12 с (было 0,2), снаряд 46 м/с (было 40)
+    slot: "primary", name: "Каменный снаряд", damage: 30, ratePerS: 1.9, windupS: 0.12,
+    projectile: { speed: 46, radiusM: 0.25, gravity: 6, rangeM: 50 }, // гравитация и дальность — Р7
     knockback: { distM: 0.3, upM: 0 },
   },
   stonePillar: {
@@ -139,7 +141,10 @@ export const RAMPART = { distM: 8, durationS: 1, probeDownM: 1, liftM: 0.25 } as
 export const MAGE_REGEN = { delayS: 4, perS: 20, capFrac: 2 / 3 } as const;
 /** Манекен полигона (Р12). */
 export const DUMMY = { hp: 170, runSpeed: 2, regenDelayS: 3, regenPerS: 85, respawnS: 3 } as const;
-export const MATCH = { fallCreditS: 5, mageRespawnS: 1 } as const;
+/** lootHp — «добыча» (фаза 9, Р1): убийство или засчитанный сброс лечит живого убийцу до максимума. */
+export const MATCH = { fallCreditS: 5, mageRespawnS: 1, lootHp: 30 } as const;
+/** Серии (фаза 9, Р4): очко не позже multiWindowS от прошлого своего — «мульти» растёт, иначе снова 1. */
+export const STREAK = { multiWindowS: 4 } as const;
 /**
  * Объекты на карте (GDD 3; Р1–Р5 фазы 6). reachM — от точки объекта до бокса тела. Сфера: +heal HP, вернётся через
  * respawnS. Руна: первая через firstS, дальше на отметках каждые everyS, объявление за warnS; ярость furyS — урон

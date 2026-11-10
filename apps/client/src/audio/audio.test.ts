@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SOUND_IDS } from "../feel/effects";
 import { createRateLimiter, spatial } from "./pan";
-import { RECIPES, SOUND_ELEMENT, bandOf, recipeLength } from "./recipes";
+import { RECIPES, REVERB_SEND, SOUND_ELEMENT, bandOf, recipeLength } from "./recipes";
 import { clickTimes, driveCurve } from "./synth";
 import { createVoiceLimiter } from "./voices";
 
@@ -66,11 +66,14 @@ describe("recipes table", () => {
     expect(crackle("pillarStrike")).toMatchObject({ kind: "tone", wave: "sine", freq: 70, freqEnd: 30 });
     expect(crackle("quakeStrike")).toMatchObject({ kind: "tone", wave: "sine", freq: 70, freqEnd: 30 });
     expect(crackle("pillarTelegraph")).toMatchObject({ freq: 40, freqEnd: 40 });
-    // подтверждение по ступеням (round3/01, H3): малая — 1,8 кГц и щелчок 3,6 кГц за 30 мс; средняя — плюс «тело» и надрыв
+    // подтверждение по ступеням (round3/01, H3): малая — «тик» 65 мс (фаза 9, L2): щелчок 4,5 кГц на 8 мс, треугольник
+    // 1,6 → 1,5 кГц и блеск 3,2 кГц на 20 мс; средняя — прежние 1,8 и 3,6 кГц плюс «тело» и надрыв
     expect(RECIPES.hitLight.layers).toEqual([
-      expect.objectContaining({ kind: "tone", freq: 1800, freqEnd: 1800, dur: 0.03 }),
-      expect.objectContaining({ kind: "tone", freq: 3600, freqEnd: 3600 }),
+      expect.objectContaining({ kind: "noise", filter: "bandpass", freq: 4500, dur: 0.008, gain: 0.4 }),
+      expect.objectContaining({ kind: "tone", wave: "triangle", freq: 1600, freqEnd: 1500, dur: 0.065, gain: 0.45 }),
+      expect.objectContaining({ kind: "tone", freq: 3200, freqEnd: 3200, dur: 0.02, gain: 0.2 }),
     ]);
+    expect(RECIPES.hitLight.reverb).toBeUndefined();
     expect(RECIPES.hitHeavy.layers.slice(2)).toEqual([
       expect.objectContaining({ kind: "tone", freq: 160, freqEnd: 80, dur: 0.09 }),
       expect.objectContaining({ kind: "noise", filter: "bandpass", freq: 1500, dur: 0.06 }),
@@ -80,6 +83,38 @@ describe("recipes table", () => {
     expect(RECIPES.fall.layers[0]).toMatchObject({ freq: 1200, freqEnd: 300 });
     const ignite = RECIPES.fireWallIgnite.layers.find((l) => l.filter === "lowpass");
     expect(ignite).toMatchObject({ kind: "noise", freq: 200, freqEnd: 2000 });
+  });
+
+  it("LMB shots have a click, a body and a quiet tail, a small reverb send, and stay short (phase 9, L1)", () => {
+    // щелчок шума 5–7 кГц на 4 мс у Огня, Воздуха и Воды; у Земли — каменный 1,2 кГц на 15 мс в броске
+    for (const id of ["fireFist", "sickleThrow", "whipSwish"] as const) {
+      expect(RECIPES[id].layers, id).toContainEqual(expect.objectContaining({ kind: "noise", filter: "bandpass", freq: 6000, dur: 0.004, gain: 0.5 }));
+      const tail = RECIPES[id].layers.find((l) => l.gain === 0.15);
+      expect(tail?.kind === "noise" && tail.dur >= 0.15 && tail.dur <= 0.25, id).toBe(true);
+    }
+    expect(RECIPES.stoneThrow.layers[0]).toMatchObject({ kind: "noise", freq: 1200, dur: 0.015, gain: 0.4 });
+    expect(RECIPES.stoneThrow.layers.some((l) => l.gain === 0.15 && l.dur >= 0.15 && l.dur <= 0.25)).toBe(true);
+    // тело Огня — «пух» шумом lowpass 300 → 1200 Гц, тело Воздуха — bandpass 1200 → 400 Гц
+    expect(RECIPES.fireFist.layers).toContainEqual(expect.objectContaining({ kind: "noise", filter: "lowpass", freq: 300, freqEnd: 1200, dur: 0.08, gain: 0.6 }));
+    expect(RECIPES.sickleThrow.layers).toContainEqual(expect.objectContaining({ kind: "noise", filter: "bandpass", freq: 1200, freqEnd: 400, dur: 0.09, gain: 0.45 }));
+    expect(RECIPES.whipSwish.layers.find((l) => l.signature)).toMatchObject({ gain: 0.5, attack: 0.015 });
+    // камень: нажатие — 100 мс под замах 0,12 с; попадание — хруст 1,8 → 1,0 кГц на 0,6 (L11)
+    expect(recipeLength(RECIPES.stoneCast)).toBeLessThanOrEqual(0.1);
+    expect(RECIPES.stoneImpact.layers).toContainEqual(expect.objectContaining({ kind: "noise", filter: "bandpass", freq: 1800, freqEnd: 1000, dur: 0.03, gain: 0.6 }));
+    for (const id of ["fireFist", "fistHit", "stoneThrow", "stoneImpact", "sickleThrow", "sickleHit", "whipSwish", "whipCrack", "whipHit"] as const) {
+      expect(RECIPES[id].reverb, id).toBe(REVERB_SEND.lmb);
+      expect(recipeLength(RECIPES[id]), id).toBeLessThanOrEqual(0.8);
+    }
+    expect(REVERB_SEND.lmb).toBe(0.06);
+  });
+
+  it("whizz-by sounds sign in the shooter's band and are short (phase 9, L12)", () => {
+    expect([SOUND_ELEMENT.whizzFire, SOUND_ELEMENT.whizzStone, SOUND_ELEMENT.whizzSickle, SOUND_ELEMENT.whizzWater]).toEqual(["fire", "earth", "air", "water"]);
+    expect(RECIPES.whizzFire.layers).toContainEqual(expect.objectContaining({ freq: 3000, freqEnd: 1200, dur: 0.18 }));
+    expect(RECIPES.whizzStone.layers).toContainEqual(expect.objectContaining({ filter: "lowpass", freq: 500, freqEnd: 180, dur: 0.2 }));
+    expect(RECIPES.whizzSickle.layers[0]).toMatchObject({ freq: 3500, freqEnd: 1500, dur: 0.15 });
+    expect(RECIPES.whizzWater.layers[0]).toMatchObject({ freq: 1200, freqEnd: 500 });
+    for (const id of ["whizzFire", "whizzStone", "whizzSickle", "whizzWater"] as const) expect(recipeLength(RECIPES[id]), id).toBeLessThanOrEqual(0.8);
   });
 
   it("bandOf reads the signature layer, else the loudest one; recipeLength is the last layer's end", () => {

@@ -22,7 +22,7 @@ export function createMageUnit(id: UnitId, element: Element, spawn: Spawn): Unit
   u.mage = {
     element, ready: { primary: 0, q: 0, e: 0, c: 0, x: 0 }, held: { primary: false, q: false, e: false, c: false, x: false },
     pending: { primary: NEVER, q: NEVER, e: NEVER, c: NEVER, x: NEVER }, windup: null,
-    heat: 0, overheatUntil: 0, lastShotTick: NEVER, dash: null, spawn: { pos: { ...spawn.pos }, yaw: spawn.yaw }, stats: { damage: 0, kills: 0, falls: 0, deaths: 0 },
+    heat: 0, overheatUntil: 0, lastShotTick: NEVER, dash: null, spawn: { pos: { ...spawn.pos }, yaw: spawn.yaw }, stats: { damage: 0, kills: 0, falls: 0, deaths: 0, streak: 0, multi: 0, lastScoreTick: -1 },
     charges: { ...SLOT_CHARGES[element] }, chargeAt: { primary: NEVER, q: NEVER, e: NEVER, c: NEVER, x: NEVER },
     flight: { doubleJumped: false, glideTicks: 0, gliding: false }, ward: null, ult: { charge: 0, cast: null },
   };
