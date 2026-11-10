@@ -1,5 +1,5 @@
-import { sanitizeInput } from "../player";
-import { groundBelow } from "../raycast";
+import { forwardXZ, sanitizeInput } from "../player";
+import { groundBelow, raycast } from "../raycast";
 import type { MoveParams, Vec3 } from "../types";
 import { add, clamp, scale } from "../vec";
 import { aimGround } from "./aim";
@@ -9,15 +9,17 @@ import type { ElementSim, ProjectileHit, ZoneStep } from "./hooks";
 import { castAim, castSlots, emitCast, horizontalDir, type Kit, type TryCast } from "./kit";
 import { spawnProjectile, sweepSegment } from "./projectiles";
 import { unitById } from "./state";
+import { spawnSteam } from "./steam";
 import { damageTerrain } from "./terrain";
-import { NEVER, NOBODY, type Buttons, type MageState, type MatchInput, type MatchState, type RejectReason, type Slot, type TickCtx, type Unit } from "./types";
+import { NEVER, NOBODY, type Buttons, type MageState, type MatchInput, type MatchState, type RejectReason, type Slot, type TickCtx, type Unit, type Zone } from "./types";
 import { startUlt } from "./ult";
 import { endZone, spawnZone, zoneTouches } from "./zones";
 
 /**
  * Вода «Перехватчик» (round3/03-water.md, концепция A; Р4, Р5, Р7, Р8, Р14, Р21, Р22 фазы 4): ЛКМ «Водяной хлыст» —
  * луч с замахом, Q «Хват» — жгут и буксир к Воде, E «Отражение» — диск на 1 с, который впитывает снаряды спереди
- * и отвечает своим снарядом, C «Родник» — лужа, которая лечит Воду и мочит и вяжет врагов.
+ * и отвечает своим снарядом, C «Родник» — лужа, которая лечит Воду и мочит и вяжет врагов, X «Цунами» — ульта,
+ * волна-зона (Р9 фазы 5).
  * «Круговорот», «Мокрый», пар, впитывание и якорь живут в combat.ts и projectiles.ts (задача 1).
  * Перезарядки ставятся на принятом нажатии (Р14); отклонённое замахом нажатие ждёт в буфере castSlots до 0,3 с.
  */
@@ -26,6 +28,7 @@ const WW = WATER.waterWhip;
 const WG = WATER.waterGrab;
 const WD = WATER.waterWard;
 const SP = WATER.spring;
+const TS = WATER.tsunami;
 
 const WHIP_CD = slotCooldownTicks("water", "primary"); // 24
 const WHIP_WINDUP_TICKS = ticks(WW.windupS); // 7
@@ -46,8 +49,17 @@ const TOW_STEP_M = WG.towSpeed / ticks(1);
 const TOW_MIN_M = 0.05;
 /** Опору под точкой буксира ищем от подошвы цели чуть выше неё. */
 const TOW_PROBE_UP_M = 0.1;
+/** Ход волны за тик, м: 15 м/с → 0,25 м. */
+const WAVE_STEP_M = TS.speed / ticks(1);
+/** Волна катится 30 м: 120 тиков после взвода. */
+const WAVE_ROLL_TICKS = ticks(TS.travelM / TS.speed);
+/** Полуширина волны поперёк хода, м. */
+const WAVE_HALF_M = TS.widthM / 2;
+/** Огненные зоны, которые волна гасит паром. */
+const quenched = (q: Zone): boolean => q.kind === "fireWall" || q.kind === "fireTrail" || q.kind === "fireTornado";
 
 const copy = (v: Vec3): Vec3 => ({ x: v.x, y: v.y, z: v.z });
+const bodyCenter = (u: Unit): Vec3 => ({ x: u.move.body.pos.x, y: u.move.body.pos.y + u.move.body.height / 2, z: u.move.body.pos.z });
 
 /** Диск Отражения стоит на этом тике. */
 const wardUp = (m: MageState, now: number): boolean => m.ward !== null && now < m.ward.endTick;
@@ -156,11 +168,35 @@ function dropWard(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
   u.status.anchoredUntil = Math.min(u.status.anchoredUntil, t.now);
 }
 
+/**
+ * X «Цунами» (Р9 фазы 5): ход d — взгляд по XZ, поперёк n = (−d.z, d.x), старт O — подошва Воды на 2 м позади.
+ * Каст принят (startUlt) — зона tsunami: отрезок 14 м поперёк хода через O, полутолщина 1 м; поднимается до взвода
+ * на releaseTick каста (0,8 с), затем катится 120 тиков (stepTsunami). ult.cast.zone — её id.
+ */
+function tsunami(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
+  const f = forwardXZ(sanitizeInput(inp, u.move).yaw);
+  const d = { x: f.x + 0, z: f.z + 0 };
+  const n = { x: -d.z + 0, z: d.x + 0 };
+  const p = u.move.body.pos;
+  const o = { x: p.x - d.x * TS.backM, y: p.y, z: p.z - d.z * TS.backM };
+  const r = startUlt(t, u, inp, "tsunami");
+  if (r !== null) return r;
+  const cast = u.mage!.ult.cast!;
+  cast.zone = spawnZone(s, t, {
+    owner: u.id, kind: "tsunami", ability: "tsunami",
+    shape: {
+      type: "segment",
+      a: { x: o.x - n.x * WAVE_HALF_M, y: o.y, z: o.z - n.z * WAVE_HALF_M },
+      b: { x: o.x + n.x * WAVE_HALF_M, y: o.y, z: o.z + n.z * WAVE_HALF_M },
+      halfW: TS.depthM / 2,
+    },
+    bornTick: t.now, armTick: cast.releaseTick, endTick: cast.releaseTick + WAVE_ROLL_TICKS,
+  });
+  return null;
+}
+
 /** Слоты Воды для castSlots: он же держит буфер нажатий и пишет отказы. */
-const WATER_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
-  primary: whip, q: grab, e: ward, c: spring,
-  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "tsunami"), // заглушка: действие — задача 3
-});
+const WATER_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: whip, q: grab, e: ward, c: spring, x: tsunami });
 /**
  * Q, E и C — раньше удержанной ЛКМ, как у Земли: замах хлыста, начатый первым, отложил бы Хват и Отражение («в беде
  * жми E»), нажатые ровно на тике, когда хлыст снова готов. X — последней, как в SLOTS.
@@ -276,6 +312,79 @@ const stepSpring: ZoneStep = (s, t, z) => {
   }
 };
 
+/** Расстояние по XZ от точки до отрезка ab. */
+function distXZToSegment(p: Vec3, a: Vec3, b: Vec3): number {
+  const abx = b.x - a.x;
+  const abz = b.z - a.z;
+  const l2 = abx * abx + abz * abz;
+  const k = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.z - a.z) * abz) / l2)) : 0;
+  const dx = p.x - (a.x + abx * k);
+  const dz = p.z - (a.z + abz * k);
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+/** Свободен ли луч "shot" от a до b: камень и рельеф закрывают, Стена огня и пар — нет. */
+function clearShot(t: TickCtx, a: Vec3, b: Vec3): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dz = b.z - a.z;
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  return len < 1e-9 || raycast(t.world, a, { x: dx / len, y: dy / len, z: dz / len }, len, "shot") === null;
+}
+
+/** Точка огненной зоны у земли: центр диска, середина отрезка, середина низа бокса. */
+function groundPoint(z: Zone): Vec3 {
+  const sh = z.shape;
+  if (sh.type === "disc") return copy(sh.center);
+  if (sh.type === "segment") return { x: (sh.a.x + sh.b.x) / 2, y: (sh.a.y + sh.b.y) / 2, z: (sh.a.z + sh.b.z) / 2 };
+  return { x: (sh.box.min.x + sh.box.max.x) / 2, y: sh.box.min.y, z: (sh.box.min.z + sh.box.max.z) / 2 };
+}
+
+/**
+ * Шаг волны «Цунами» после взвода (Р9 фазы 5). Ход отдельно не хранится — всё из зоны: n = (b − a) по XZ, ход
+ * d = (n.z, −n.x), точка старта O — середина ab на начало тика минус d · 0,25 · (now − armTick), O.y = a.y.
+ * - Отрезок сдвигается на 0,25 м по ходу (15 м/с; 30 м за 120 тиков).
+ * - Юнит — живой не-хозяин, ещё не битый этой волной (rehit до endTick): подошва от O.y − 1 до O.y + 2,5 м, по XZ
+ *   до отрезка не дальше полутолщины волны и полутела, свободный луч "shot" от линии старта (O + n·s, s — боковая
+ *   координата юнита в пределах ±7 м, на высоте O.y + 1,25) до центра тела — укрытие между стартом и целью закрывает.
+ *   Удар: 80 урона, толчок {10, 1} по ходу. «Мокрый», гашение Горения паром и «Круговорот» — в applyHit по стихии.
+ * - Стена огня, след рывка и огненный смерч, чья точка у земли попала в полосу волны (по XZ до отрезка не дальше
+ *   полутолщины, по высоте — как подошва), уходят (zone/end); на их месте — облако пара хозяйки волны.
+ */
+const stepTsunami: ZoneStep = (s, t, z) => {
+  if (z.shape.type !== "segment") return;
+  const sh = z.shape;
+  const n = horizontalDir({ x: sh.b.x - sh.a.x, z: sh.b.z - sh.a.z });
+  const d = { x: n.z, z: -n.x + 0 };
+  const back = WAVE_STEP_M * (t.now - z.armTick);
+  const o = { x: (sh.a.x + sh.b.x) / 2 - d.x * back, y: sh.a.y, z: (sh.a.z + sh.b.z) / 2 - d.z * back };
+  sh.a = { x: sh.a.x + d.x * WAVE_STEP_M, y: sh.a.y, z: sh.a.z + d.z * WAVE_STEP_M };
+  sh.b = { x: sh.b.x + d.x * WAVE_STEP_M, y: sh.b.y, z: sh.b.z + d.z * WAVE_STEP_M };
+  const lo = o.y - TS.belowM;
+  const hi = o.y + TS.heightM;
+  for (const v of s.units) {
+    if (!v.alive || v.id === z.owner || z.rehit.some((r) => r.unit === v.id)) continue;
+    const vb = v.move.body;
+    if (vb.pos.y < lo || vb.pos.y > hi || distXZToSegment(vb.pos, sh.a, sh.b) > sh.halfW + vb.halfW) continue;
+    const c = bodyCenter(v);
+    const side = clamp((vb.pos.x - o.x) * n.x + (vb.pos.z - o.z) * n.z, -WAVE_HALF_M, WAVE_HALF_M);
+    const from = { x: o.x + n.x * side, y: o.y + TS.heightM / 2, z: o.z + n.z * side };
+    if (!clearShot(t, from, c)) continue;
+    z.rehit.push({ unit: v.id, tick: z.endTick });
+    applyHit(s, t, {
+      source: z.owner, target: v.id, ability: "tsunami", damage: TS.damage, pos: c, dir: { x: d.x, z: d.z },
+      knock: { distM: TS.knockback.distM, upM: TS.knockback.upM },
+    });
+  }
+  for (const q of [...s.zones]) {
+    if (!quenched(q) || !s.zones.includes(q)) continue;
+    const p = groundPoint(q);
+    if (p.y < lo || p.y > hi || distXZToSegment(p, sh.a, sh.b) > sh.halfW) continue;
+    endZone(s, t, q);
+    spawnSteam(s, t, p, z.owner, "tsunami");
+  }
+};
+
 /** Бег под диском ×0,7 (Р8). */
 function params(u: Unit, t: TickCtx, _inp: unknown, p: MoveParams): MoveParams {
   return wardUp(u.mage!, t.now) ? { ...p, runSpeed: p.runSpeed * WD.runMul } : p;
@@ -285,6 +394,6 @@ function params(u: Unit, t: TickCtx, _inp: unknown, p: MoveParams): MoveParams {
 export const WATER_SIM: ElementSim = Object.freeze({
   kit: WATER_KIT,
   move: Object.freeze({ params }),
-  zones: Object.freeze({ spring: stepSpring }),
+  zones: Object.freeze({ spring: stepSpring, tsunami: stepTsunami }),
   projectileHit: Object.freeze({ waterGrab: grabHit }),
 });

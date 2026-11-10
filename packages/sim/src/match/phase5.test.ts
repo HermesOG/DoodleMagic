@@ -248,7 +248,7 @@ describe("X: the ult cast (Р3)", () => {
     const r1 = steps(s, 1, () => ({ 1: inp({ x: true }) }));
     s = r1.s;
     expect(r1.log.filter((l) => l.e.type === "cast")).toMatchObject([{ t: T, e: { type: "cast", unit: 1, ability: ult, slot: "x" } }]);
-    // zone — зона ульты, если стихия её ставит на касте (Разлом), иначе NOBODY
+    // zone — зона ульты (Разлом, Цунами), если она есть; у прочих NOBODY
     const zone = s.zones.find((z) => z.owner === 1)?.id ?? NOBODY;
     expect(u(s, 1).mage!.ult).toEqual({ charge: 0, cast: { ability: ult, startTick: T, releaseTick: T + tm.windupTicks, endTick: end, zone } });
     const r = steps(s, end - T + 2, () => ({ 1: inp({ x: true }) }));

@@ -9,6 +9,7 @@ import { AIR, RAMPART, SAND_TORNADO, slotCooldownTicks, ticks } from "./defs";
 import type { ElementSim, MoveHooks, ZoneStep } from "./hooks";
 import { castAim, castSlots, emitCast, refillCharges, spendCharge, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
+import { damageTerrain } from "./terrain";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit, Zone } from "./types";
 import { startUlt } from "./ult";
 import { adoptZone, endZone, spawnZone } from "./zones";
@@ -16,14 +17,16 @@ import { adoptZone, endZone, spawnZone } from "./zones";
 /**
  * Воздух «Свобода» (round3/02-air.md; Р2, Р10–Р13 фазы 4). «Лёгкость» — хуки движения: второй прыжок и парение.
  * Кит: ЛКМ «Воздушный серп», Q «Порыв» с замахом (конус по взгляду, удар о стену, сдув чужих снарядов), E «Взмах»
- * на двух зарядах (dash.ts, без следа), C «Смерч» — зона с тягой, импульсами и ядром. Реакция «Огненный смерч» —
- * в шаге вихря. Функции меняют переданное состояние на месте (stepMatch отдаёт им свою копию) и пишут события в t.ev.
+ * на двух зарядах (dash.ts, без следа), C «Смерч» — зона с тягой, импульсами и ядром, X «Ураган» — ульта (Р8 фазы 5).
+ * Реакция «Огненный смерч» — в шаге вихря. Функции меняют переданное состояние на месте (stepMatch отдаёт им свою
+ * копию) и пишут события в t.ev.
  */
 
 const SK = AIR.airSickle;
 const GU = AIR.gust;
 const SW = AIR.swoop;
 const TO = AIR.tornado;
+const HU = AIR.hurricane;
 const LI = AIR.passive;
 const G = DEFAULT_MOVE.gravity;
 
@@ -41,6 +44,8 @@ const GLIDE_TICKS = ticks(LI.glideS); // 180
 const DOUBLE_JUMP_SPEED = Math.sqrt(2 * G * LI.doubleJumpM);
 /** Ядро поднимает хозяина на 2 м: √(2·20·2) ≈ 8,94 м/с. */
 const OWNER_LIFT_SPEED = Math.sqrt(2 * G * TO.ownerLiftM);
+/** «Ураган» поднимает Воздух на 3 м: √(2·20·3) ≈ 10,95 м/с. */
+const HURRICANE_LIFT_SPEED = Math.sqrt(2 * G * HU.selfLiftM);
 const GUST_COS = Math.cos((GU.halfAngleDeg * Math.PI) / 180);
 /** Взрыв шара поджигает вихрь по высоте — во весь его рост: от 0,5 м ниже основания до 4 м выше (Р10). */
 const FIRE_REACH_DY_M = TO.belowM + TO.aboveM;
@@ -272,10 +277,81 @@ function tornado(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRea
   return null;
 }
 
-/** Слоты Воздуха для castSlots: он же держит буфер нажатий и пишет отказы. */
+/** Точка зоны для «Урагана»: центр диска, середина отрезка, центр бокса. */
+function zonePoint(z: Zone): Vec3 {
+  const sh = z.shape;
+  if (sh.type === "disc") return copy(sh.center);
+  if (sh.type === "segment") return { x: (sh.a.x + sh.b.x) / 2, y: (sh.a.y + sh.b.y) / 2, z: (sh.a.z + sh.b.z) / 2 };
+  const b = sh.box;
+  return { x: (b.min.x + b.max.x) / 2, y: (b.min.y + b.max.y) / 2, z: (b.min.z + b.max.z) / 2 };
+}
+
+/**
+ * Выпуск «Урагана» (Р8 фазы 5) на releaseTick каста; центр C — центр тела Воздуха на этом тике. Без луча: ветер
+ * огибает укрытия.
+ * 1. Цели — живые не-хозяева, центр тела по XZ не дальше 10 м от C и по высоте не дальше 4 м: 60 урона, толчок от C
+ *    по XZ (ровно в центре — по взгляду) 16 м у центра → ×0,5 на краю, 2 м вверх и «В воздухе» (launch; ульта — порог
+ *    ×1,5, Р4). Земля, иммунитет и якорь — по общим правилам applyHit.
+ * 2. Чужие снаряды в сфере 10 м от C сдуваются без взрыва — событие blown, как у Порыва.
+ * 3. Чужие зоны, у которых точка (центр диска, середина отрезка, центр бокса) по XZ не дальше 10 м от C и по высоте
+ *    не дальше 4 м, уходят (zone/end).
+ * 4. Чужой рельеф, бокс которого по XZ ближе 10 м к C, ломается (урон 1000).
+ * 5. Воздух взлетает на 3 м и получает свежие 3 с парения: второй прыжок считается потраченным, и зажатый прыжок
+ *    при падении сразу парит. Окно «койота» закрыто: прыжок на этом тике не заменит взлёт обычным прыжком.
+ */
+function releaseHurricane(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
+  const c = bodyCenter(u);
+  const fw = forwardXZ(sanitizeInput(inp, u.move).yaw);
+  for (const v of s.units) {
+    if (!v.alive || v.id === u.id) continue;
+    const vc = bodyCenter(v);
+    const dx = vc.x - c.x;
+    const dz = vc.z - c.z;
+    const d = Math.sqrt(dx * dx + dz * dz);
+    if (d > HU.radiusM || Math.abs(vc.y - c.y) > HU.halfHeightM) continue;
+    const dir = d < 1e-9 ? { x: fw.x + 0, z: fw.z + 0 } : { x: dx / d + 0, z: dz / d + 0 };
+    const distM = HU.knockback.distM * (1 - ((1 - HU.edgeKnockMul) * d) / HU.radiusM);
+    applyHit(s, t, {
+      source: u.id, target: v.id, ability: "hurricane", damage: HU.damage, pos: vc, dir,
+      knock: { distM, upM: HU.knockback.upM }, launch: true,
+    });
+  }
+  s.projectiles = s.projectiles.filter((p) => {
+    const dx = p.pos.x - c.x;
+    const dy = p.pos.y - c.y;
+    const dz = p.pos.z - c.z;
+    if (p.owner === u.id || dx * dx + dy * dy + dz * dz > HU.radiusM * HU.radiusM) return true;
+    t.ev.push({ type: "blown", unit: u.id, projectile: p.id, kind: p.ability, owner: p.owner, pos: copy(p.pos) });
+    return false;
+  });
+  for (const q of [...s.zones]) {
+    if (q.owner === u.id) continue;
+    const p = zonePoint(q);
+    const dx = p.x - c.x;
+    const dz = p.z - c.z;
+    if (Math.sqrt(dx * dx + dz * dz) > HU.radiusM || Math.abs(p.y - c.y) > HU.halfHeightM) continue;
+    endZone(s, t, q);
+  }
+  for (const tr of [...s.terrain]) {
+    if (tr.owner === u.id) continue;
+    const p = closestOnBox(c, tr.box);
+    const dx = p.x - c.x;
+    const dz = p.z - c.z;
+    if (Math.sqrt(dx * dx + dz * dz) >= HU.radiusM) continue;
+    damageTerrain(s, t, tr.id, HU.terrainDamage, p);
+  }
+  const mv = u.move;
+  setGlide(t, u, false);
+  mv.body.vel.y = Math.max(mv.body.vel.y, HURRICANE_LIFT_SPEED);
+  mv.onGround = false;
+  mv.coyote = 0;
+  u.mage!.flight = { doubleJumped: true, glideTicks: 0, gliding: false };
+}
+
+/** Слоты Воздуха для castSlots: он же держит буфер нажатий и пишет отказы. X — замах «Урагана» (ult.ts), удар — в tick. */
 const AIR_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
   primary: sickle, q: gust, e: swoop, c: tornado,
-  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "hurricane"), // заглушка: действие — задача 3
+  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "hurricane"),
 });
 
 export const AIR_KIT: Kit = Object.freeze({
@@ -294,6 +370,8 @@ export const AIR_KIT: Kit = Object.freeze({
       releaseGust(s, t, u, inp);
     }
     if (m.dash) stepDash(s, t, u, inp, SWOOP);
+    const uc = m.ult.cast;
+    if (uc && uc.ability === "hurricane" && t.now === uc.releaseTick) releaseHurricane(s, t, u, inp);
   },
 });
 
