@@ -1,5 +1,6 @@
-import { Matrix4, Mesh, Vector3, type BufferGeometry, type Material } from "three";
+import { Matrix4, Mesh, Vector3, type BufferGeometry, type Material, type ShaderMaterial } from "three";
 import { describe, expect, it } from "vitest";
+import { INK } from "../render/palette";
 import { HANDS_FOV } from "../render/styleRenderer";
 import { createMittens } from "./mittens";
 
@@ -35,11 +36,20 @@ describe("createMittens", () => {
     }
   });
 
-  it("shares one material between all eight parts", () => {
+  // варежка, палец и манжета — светлая тушь рук; рукав — тушь стихии (её цвет держит стилевой проход)
+  it("inks the sleeves with the element sleeve ink and keeps the mittens light, two shared materials on eight parts", () => {
     const { m } = atRest();
     const all = meshes(m.scene);
     expect(all).toHaveLength(8);
-    expect(new Set(all.map((x) => x.material)).size).toBe(1);
+    const inkOf = (x: Mesh) => (x.material as ShaderMaterial).uniforms.uInk!.value as number;
+    const sleeves = all.filter((x) => x.name.startsWith("sleeve-"));
+    expect(sleeves.map((x) => x.name).sort()).toEqual(["sleeve-left", "sleeve-right"]);
+    expect(sleeves.every((x) => inkOf(x) === INK.sleeve)).toBe(true);
+    expect(all.filter((x) => !sleeves.includes(x)).every((x) => inkOf(x) === INK.hands)).toBe(true);
+    expect(new Set(all.map((x) => x.material)).size).toBe(2);
+    // солнце рук — одно на оба материала: свет на рукаве и на варежке совпадает
+    const [a, b] = [...new Set(all.map((x) => x.material as ShaderMaterial))];
+    expect(a!.uniforms.uSunDir).toBe(b!.uniforms.uSunDir);
   });
 
   it("frees its geometries and material on dispose", () => {
