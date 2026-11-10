@@ -2,8 +2,10 @@ import type { Element } from "@doodlemagic/sim";
 import type { SoundId } from "../feel/effects";
 import { AIR_SOUND_IDS } from "../feel/airIds";
 import { WATER_SOUND_IDS } from "../feel/waterIds";
+import { STREAK_SOUND_IDS } from "../feel/effects";
 import { AIR_RECIPES } from "./airRecipes";
 import { SHOT_CLICK, SIG, noise, tone, REVERB_SEND, type Recipe } from "./layers";
+import { STREAK_RECIPES } from "./streakRecipes";
 import { WATER_RECIPES } from "./waterRecipes";
 
 export { REVERB_SEND } from "./layers";
@@ -391,19 +393,21 @@ export const RECIPES: Record<SoundId, Recipe> = {
     vary: 0.06,
     layers: [noise("bandpass", 1200, 500, 0.16, 0.6, { q: 1.5, attack: 0.012, clicks: 3, ...SIG })],
   },
-  // ── Воздух и Вода — своими таблицами (airRecipes.ts, waterRecipes.ts) ──
+  // ── Воздух и Вода — своими таблицами (airRecipes.ts, waterRecipes.ts); серии и дуга матча — streakRecipes.ts ──
   ...AIR_RECIPES,
   ...WATER_RECIPES,
+  ...STREAK_RECIPES,
 };
 
-/** Всем id списка — одна стихия. */
-const signedBy = <K extends string>(ids: readonly K[], el: Element): Record<K, Element> =>
-  Object.fromEntries(ids.map((id) => [id, el])) as Record<K, Element>;
+/** Всем id списка — одна стихия (или null — общий звук без подписи). */
+const signedBy = <K extends string, E extends Element | null>(ids: readonly K[], el: E): Record<K, E> =>
+  Object.fromEntries(ids.map((id) => [id, el])) as Record<K, E>;
 
 /** Чья это подпись: стихия или общий звук (null). Рельеф — камень Земли, чем бы по нему ни попали. */
 export const SOUND_ELEMENT: Record<SoundId, Element | null> = {
   ...signedBy(AIR_SOUND_IDS, "air"),
   ...signedBy(WATER_SOUND_IDS, "water"),
+  ...signedBy(STREAK_SOUND_IDS, null),
   fireFist: "fire",
   fireballCharge: "fire",
   fireballBoom: "fire",

@@ -270,6 +270,23 @@
 .ch-hp-fill {
   background: linear-gradient(180deg, #d4473e 0%, var(--ch-red) 55%, #a92a23 100%);
 }
+/* своя «Добыча» (фаза 9, L14): бумажно-белый прирост поверх заливки — от прежнего края к новому (transform из кадра) */
+.ch-hp-gain {
+  background: linear-gradient(180deg, #fffdf6 0%, #f6f3ea 60%, #e9e2cf 100%);
+  opacity: 0;
+}
+.ch-hp-plus {
+  position: absolute;
+  left: 268px;
+  top: 28px;
+  color: var(--ch-ink);
+  font: 800 18px/1 var(--ch-ui);
+  font-variant-numeric: tabular-nums;
+  text-shadow: var(--ch-halo);
+  opacity: 0;
+  transform-origin: 0 50%;
+  will-change: transform, opacity;
+}
 .ch-hp-notch {
   position: absolute;
   top: 1px;
@@ -498,6 +515,22 @@
   background: var(--ch-paper);
 }
 /* имя чужого мага над его полосой: тушь с ореолом бумаги, как подписи ячеек; ник — до 16 знаков */
+/* имя и печать серии в одну строку над полосой */
+.ch-dbar-who {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* серия от 3: маленькая красная печать с числом — видно, за кем охотиться */
+.ch-dbar-mark {
+  padding: 1px 4px 0;
+  border-radius: 2px 4px 3px 2px / 3px 2px 4px 2px;
+  background: var(--ch-red);
+  box-shadow: 0 0 0 1.5px rgba(246, 243, 234, 0.85);
+  color: var(--ch-paper);
+  font: 800 11px/1.15 var(--ch-ui);
+  transform: rotate(-5deg);
+}
 .ch-dbar-name {
   padding: 0 3px;
   font: 700 13px/1.15 var(--ch-ui);

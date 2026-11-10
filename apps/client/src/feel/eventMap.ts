@@ -24,6 +24,7 @@ import {
   type ZoneShape,
 } from "@doodlemagic/sim";
 import { isFistGesture } from "../hands/gestures";
+import { BROKE_TEXT, STREAK_LOUD_FROM, streakStep } from "../hud/streakHud";
 import { RECOIL, SHAKE, recoilKick } from "./camera";
 import type { BurstPreset, Effect, FeelTier, SoundId } from "./effects";
 import { elementEffects, type FrameView } from "./elementFx";
@@ -135,6 +136,8 @@ export const RIFT_NEAR_TRAUMA = 0.3;
 export const RIFT_BURSTS = 5;
 /** Тост убийцы ультой (round3/01, 2.1: крупная ступень — тост). */
 const ULT_KILL_TOAST: Readonly<Partial<Record<DamageSource, string>>> = { dragonBreath: "Дыхание дракона!", tectonicRift: "Разлом!" };
+/** Тексты тостов убийства ультой: своё объявление серии в этот момент их гасит — одна строка (02-feel-lmb, раздел 3). */
+export const ULT_KILL_TOASTS: readonly string[] = Object.values(ULT_KILL_TOAST).filter((t): t is string => t !== undefined);
 /** Чужую сферу слышно рядом и тихо: она лечит другого, не меня. */
 const ORB_OTHER_GAIN = 0.5;
 /** Чужое взятие руны слышно издалека (пол громкости после расстояния): на арене новый носитель ярости. */
@@ -253,7 +256,7 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
   if (beat) out.push(burst("breathHit", ev.pos));
   if (ev.source === view.localId && ev.target !== view.localId) {
     if (overTime(ev)) {
-      out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne });
+      out.push({ kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: true, air: ev.airborne, lmb: false });
       // добил горением или следом — убийство всё равно отмечается
       if (ev.killed) out.push({ kind: "hitmarker", kill: true, air: ev.airborne, tier: "large" });
       // поток попадает: лёгкое подтверждение на вспышке — малый хитмаркер, вспышка цели и тихий щелчок, без паузы
@@ -267,7 +270,8 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
       const ms = hitstopMs(tier, ev.ability);
       out.push(
         { kind: "hitmarker", kill: ev.killed, air: ev.airborne, tier },
-        { kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: false, air: ev.airborne },
+        // ЛКМ и добивающая ЛКМ копятся в одну цифру (L7): по lmb, а не по ступени хитмаркера — убийство крупной ступени
+        { kind: "number", target: ev.target, amount: ev.amount, pos: ev.pos, dot: false, air: ev.airborne, lmb },
         { kind: "flash", target: ev.target },
         { kind: "flinch", target: ev.target, dir: ev.dir, amount: ult ? 0.8 : lmb ? 0.1 : 0.2 },
       );
@@ -536,9 +540,55 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       if (ev.phase === "end") return mine(ev.unit) ? [sound("furyEnd")] : [];
       return ev.by !== NOBODY && mine(ev.by) ? [sound("furySlain"), { kind: "toast", text: FURY_SLAIN_TOAST }] : [];
     case "loot":
+      return lootEffects(ev, me, mine(ev.unit));
     case "streak":
-      return []; // добыча и серии (фаза 9): звук и подача — задача 5
+      return streakEffects(ev, mine(ev.unit));
   }
+}
+
+/**
+ * Своя подача серии и добычи — по подтверждённым событиям (вид), после звука своего kill (он звучит по предсказанию):
+ * колокол серии через 120 мс, тёплый подъём добычи через 250 мс — чтобы не заглушить kill. В PvP подтверждение и так
+ * приходит на 100–200 мс позже: вид ждёт только остаток.
+ */
+export const STREAK_BELL_S = 0.12;
+export const LOOT_RISE_S = 0.25;
+/** Через сколько после своего убийства подать событие серии или добычи; чужое и прочее — сразу. */
+export function afterKillS(ev: MatchEvent, localId: UnitId): number {
+  if (ev.type === "streak" && ev.unit === localId) return STREAK_BELL_S;
+  if (ev.type === "loot" && ev.unit === localId) return LOOT_RISE_S;
+  return 0;
+}
+/** Звук ступени своей серии: 3 — барабан, 5 — гонг, 7 и 10 — гонг с шелестом. */
+const STREAK_SOUND: Readonly<Record<number, SoundId>> = { 3: "streakDrums", 5: "streakGong", 7: "streakStorm", 10: "streakStorm" };
+
+/**
+ * Очко мага (Р4, Р5; 02-feel-lmb, раздел 3). Своё: мульти — колокол ×2 или ×3 (ступень выше прежней), ×4+ — ещё гонг
+ * 110 Гц с барабаном; ступень серии — свой удар (без мульти — с колоколом объявления); прервал чужую серию от 3 — тост
+ * и звон. Чужое: ступень серии от 5 — далёкий гонг на всю карту, без позиции (как ultWarn): на арене опасный маг.
+ * Крупную надпись своему показывает вид (streakHud), строки килфида — интерфейс матча.
+ */
+function streakEffects(ev: Extract<MatchEvent, { type: "streak" }>, mine: boolean): Effect[] {
+  if (!mine) return ev.streak >= STREAK_LOUD_FROM && streakStep(ev.streak) ? [sound("streakFar")] : [];
+  const out: Effect[] = [];
+  if (ev.multi >= 2) out.push(sound(ev.multi >= 3 ? "streakTriple" : "streakDouble"));
+  if (ev.multi >= 4) out.push(sound("streakRampage"));
+  const step = STREAK_SOUND[ev.streak];
+  if (step) {
+    if (ev.multi < 2) out.push(sound("streakBell"));
+    out.push(sound(step));
+  }
+  if (ev.broke !== NOBODY) out.push({ kind: "toast", text: BROKE_TEXT }, sound("streakBroke"));
+  return out;
+}
+
+/**
+ * «Добыча» (Р1, L14): своему — тёплый подъём и ладони вспыхивают стихией (заряд). Белый прирост полосы HP и «+30»
+ * рисует HUD, искры от жертвы к убийце (всем) — эффектник: их ведёт вид по тому же событию.
+ */
+function lootEffects(ev: Extract<MatchEvent, { type: "loot" }>, me: Unit | undefined, mine: boolean): Effect[] {
+  if (!mine) return [];
+  return [sound("lootRise"), { kind: "palm", hand: "both", element: me?.mage?.element ?? "fire", preset: "charge" }];
 }
 
 /**
