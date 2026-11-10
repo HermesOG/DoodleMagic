@@ -19,8 +19,9 @@ import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
 import { KIT_WIDGETS, type KitWidget } from "./kitWidgets";
 import {
-  NUMBER_LIFE_S, cooldownFraction, formatDamage, furyLeftS, heatFraction, hpBar, mergeNumbers, numberAnim, runeCue, runeText, ultFraction, ultPercent,
-  type FloatingNumber,
+  NUMBER_LIFE_S, NUMBER_PX, biteShake, biteTrail, cooldownFraction, formatDamage, freshBite, furyLeftS, heatFraction, hpBar, mergeNumbers, numberAnim,
+  numberPx, runeCue, runeText, stepBite, ultFraction, ultPercent,
+  type FloatingNumber, type HpBite,
 } from "./format";
 
 /** Что HUD видит в кадре: два последних состояния и доля между ними, камера мира, часы и проверка видимости точки. */
@@ -151,6 +152,8 @@ interface DummyBar {
   /** Полоса шириной BAR_PX.max; ширину по расстоянию даёт scaleX (без пересчёта раскладки в кадре). */
   track: HTMLDivElement;
   fill: HTMLDivElement;
+  /** След урона цвета бумаги под заливкой (L4): один на полосу, сходит по biteTrail. */
+  trail: HTMLDivElement;
   icons: Record<keyof typeof ICON, HTMLElement>;
 }
 interface Timed {
@@ -229,7 +232,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       // сверху вниз: значки статусов, имя, полоса — имя не прыгает, когда появляются значки
       const r = div(
         "ch-dbar ch-at",
-        `<div class="ch-dbar-st">${icon("burn")}${icon("root")}${icon("slow")}${icon("air")}</div><div class="ch-dbar-name" hidden></div><div class="ch-dbar-track"><div class="ch-dbar-fill"></div></div>`,
+        `<div class="ch-dbar-st">${icon("burn")}${icon("root")}${icon("slow")}${icon("air")}</div><div class="ch-dbar-name" hidden></div><div class="ch-dbar-track"><div class="ch-dbar-trail"></div><div class="ch-dbar-fill"></div></div>`,
       );
       // ширина задаётся один раз; ближе или дальше полосу делает scaleX дорожки
       r.style.width = `${BAR_PX.max}px`;
@@ -239,6 +242,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
         name: pick<HTMLDivElement>(r, ".ch-dbar-name"),
         track: pick<HTMLDivElement>(r, ".ch-dbar-track"),
         fill: pick<HTMLDivElement>(r, ".ch-dbar-fill"),
+        trail: pick<HTMLDivElement>(r, ".ch-dbar-trail"),
         icons: { burn: pick(r, ".ch-st.burn"), root: pick(r, ".ch-st.root"), slow: pick(r, ".ch-st.slow"), air: pick(r, ".ch-st.air") },
       };
       bars.set(id, b);
@@ -246,6 +250,8 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     return b;
   };
 
+  /** Укусы полос HP по юнитам (L4) — и пока полоса не видна: укус, случившийся за кадром, к появлению уже сошёл. */
+  const bites = new Map<UnitId, HpBite>();
   let numbers: FloatingNumber[] = [];
   let hitAt = -Infinity;
   let hitKill = false;
@@ -383,10 +389,16 @@ export function createCombatHud(root: HTMLElement): CombatHud {
 
   const updateBars = (view: HudView): void => {
     const seen = new Set<UnitId>();
+    const present = new Set<UnitId>();
     const tanHalf = Math.tan(((view.camera.fov / 2) * Math.PI) / 180);
     for (const u of view.cur.units) {
       // манекены и живые чужие маги; над собой полосы нет
       if (!u.alive || (u.kind === "mage" && u.id === view.localId)) continue;
+      present.add(u.id);
+      const frac = hpBar(u).frac;
+      const was = bites.get(u.id);
+      const bite = was ? stepBite(was, frac, view.nowS) : freshBite(frac);
+      if (bite !== was) bites.set(u.id, bite);
       const mage = u.kind === "mage";
       const p = lerpPos(view.prev, u, view.alpha);
       const head = { x: p.x, y: p.y + HEAD_M, z: p.z };
@@ -397,9 +409,12 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       const b = barFor(u.id);
       setHidden(b.root, false);
       const px = Math.min(BAR_PX.max, Math.max(BAR_PX.min, (BAR_WORLD_M * H) / (2 * screen.depth * tanHalf)));
-      setStyle(b.track, "transform", `scaleX(${(px / BAR_PX.max).toFixed(3)})`);
+      // укус (L4): вздрагивает только полоса — имя и значки над ней стоят
+      const shake = biteShake(view.nowS - bite.at);
+      setStyle(b.track, "transform", `${shake ? `translateX(${shake.toFixed(1)}px) ` : ""}scaleX(${(px / BAR_PX.max).toFixed(3)})`);
       setStyle(b.root, "transform", `translate(${screen.x.toFixed(1)}px, ${screen.y.toFixed(1)}px) translate(-50%, -100%)`);
-      setStyle(b.fill, "transform", `scaleX(${hpBar(u).frac.toFixed(4)})`);
+      setStyle(b.fill, "transform", `scaleX(${frac.toFixed(4)})`);
+      setStyle(b.trail, "transform", `scaleX(${biteTrail(bite, view.nowS).toFixed(4)})`);
       const name = mage ? (view.names?.get(u.id) ?? "") : "";
       setText(b.name, name);
       setHidden(b.name, name === "");
@@ -410,6 +425,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       setHidden(b.icons.air, !f.airborne);
     }
     for (const [id, b] of bars) if (!seen.has(id)) setHidden(b.root, true);
+    for (const id of bites.keys()) if (!present.has(id)) bites.delete(id);
   };
 
   const updateNumbers = (view: HudView): void => {
@@ -431,7 +447,9 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       setText(el, formatDamage(n.amount, n.air));
       el.classList.toggle("is-dot", n.dot);
       setStyle(el, "opacity", pop.alpha.toFixed(3));
-      setStyle(el, "transform", `translate(${screen.x.toFixed(1)}px, ${screen.y.toFixed(1)}px) translate(-50%, -50%) scale(${pop.scale.toFixed(3)})`);
+      // кегль прямого удара растёт с уроном (L7) — масштабом, без пересчёта раскладки; урон по времени — как был
+      const size = n.dot ? 1 : numberPx(n.amount) / NUMBER_PX;
+      setStyle(el, "transform", `translate(${screen.x.toFixed(1)}px, ${screen.y.toFixed(1)}px) translate(-50%, -50%) scale(${(pop.scale * size).toFixed(3)})`);
     }
   };
 
@@ -500,7 +518,8 @@ export function createCombatHud(root: HTMLElement): CombatHud {
           hit.classList.toggle("is-air", e.air);
           break;
         case "number":
-          numbers = mergeNumbers(numbers, e, nowS);
+          // попадание ЛКМ (L7): карта событий шлёт цифру сразу за её хитмаркером; малая ступень — ЛКМ без убийства
+          numbers = mergeNumbers(numbers, { ...e, lmb: !e.dot && hitAt === nowS && hitTier === "small" && !hitKill }, nowS);
           break;
         case "indicator": {
           const k = oldest(arcs);
@@ -552,6 +571,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
       widget = null;
       hud.remove();
       bars.clear();
+      bites.clear();
       numbers = [];
     },
   };

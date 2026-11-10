@@ -485,12 +485,17 @@
   transform-origin: 50% 50%;
   will-change: transform;
 }
-.ch-dbar-fill {
+.ch-dbar-fill,
+.ch-dbar-trail {
   position: absolute;
   inset: 0;
   background: var(--ch-red);
   transform-origin: 0 50%;
   will-change: transform;
+}
+/* «откушенный кусок» (фаза 9, L4): след урона цвета бумаги под заливкой держится 0,3 с и сходит за 0,25 с (кадр, biteTrail) */
+.ch-dbar-trail {
+  background: var(--ch-paper);
 }
 /* имя чужого мага над его полосой: тушь с ореолом бумаги, как подписи ячеек; ник — до 16 знаков */
 .ch-dbar-name {
