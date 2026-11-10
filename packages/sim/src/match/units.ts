@@ -1,7 +1,7 @@
 import { bodyBox, moveBody } from "../body";
 import { DEFAULT_MOVE, NO_INPUT, stepPlayer } from "../player";
-import { groundBelow } from "../raycast";
-import { TICK_DT, type MoveParams, type PlayerInput, type Spawn } from "../types";
+import { groundBelow, lineOfSight } from "../raycast";
+import { EYE_HEIGHT, TICK_DT, type MoveParams, type PlayerInput, type Spawn } from "../types";
 import { volumeAt, type World } from "../world";
 import { applyHit, courage, endTow, respawnAt } from "./combat";
 import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ULT_MOVE, ticks } from "./defs";
@@ -176,26 +176,38 @@ export function moveUnits(s: MatchState, t: TickCtx, inputs: Readonly<Partial<Re
 }
 
 /**
- * Точка появления мага id в PvP: дальняя от живых врагов. Для каждой точки — наименьшее расстояние по XZ до живых
- * магов, кроме самого id (их нет — Infinity); берётся наибольшее, при равенстве — меньший номер. Возвращает саму точку
- * из списка, не копию. Пустой список — ошибка. Квадраты расстояний вместо корней: порядок тот же, а счёт точен.
+ * Штраф точке появления, которую видит живой враг (Р14 фазы 7): для выбора она на столько метров ближе к нему. Спаун
+ * «Седловины» с яруса виден с 10–30 м; 20 м — так, что видимая точка уступает невидимой, если та не ближе к врагу
+ * больше чем на 20 м.
  */
-export function pickSpawn(s: Readonly<MatchState>, id: UnitId, spawns: readonly Spawn[]): Spawn {
+export const SPAWN_SEEN_PENALTY_M = 20;
+
+/**
+ * Точка появления мага id в PvP: дальняя от живых врагов и не на виду у них. Для каждой точки — наименьшая по живым
+ * магам, кроме самого id, «дальность» до врага: расстояние по XZ, а если враг видит точку — минус
+ * SPAWN_SEEN_PENALTY_M (луч "sight" по world от его глаз до глаз мага на точке, EYE_HEIGHT над подошвой). Врагов нет —
+ * Infinity. Берётся наибольшая, при равенстве — меньший номер. Без world (вызовы без мира) — только расстояние, как до
+ * фазы 7. Возвращает саму точку из списка, не копию. Пустой список — ошибка. Чистая функция состояния и мира: без
+ * случайности, корень и луч — детерминированные операции IEEE, поэтому хост и игрок выбирают одно и то же.
+ */
+export function pickSpawn(s: Readonly<MatchState>, id: UnitId, spawns: readonly Spawn[], world?: World): Spawn {
   if (spawns.length === 0) throw new Error("pickSpawn: нет точек появления");
   let best = 0;
-  let bestD2 = -1;
+  let bestScore = -Infinity;
   for (let k = 0; k < spawns.length; k++) {
     const p = spawns[k]!.pos;
-    let d2 = Infinity;
+    const at = { x: p.x, y: p.y + EYE_HEIGHT, z: p.z };
+    let score = Infinity;
     for (const u of s.units) {
       if (u.kind !== "mage" || !u.alive || u.id === id) continue;
-      const dx = u.move.body.pos.x - p.x;
-      const dz = u.move.body.pos.z - p.z;
-      d2 = Math.min(d2, dx * dx + dz * dz);
+      const e = u.move.body.pos;
+      let d = Math.sqrt((e.x - p.x) * (e.x - p.x) + (e.z - p.z) * (e.z - p.z));
+      if (world && lineOfSight(world, { x: e.x, y: e.y + EYE_HEIGHT, z: e.z }, at)) d -= SPAWN_SEEN_PENALTY_M;
+      score = Math.min(score, d);
     }
-    if (d2 > bestD2) {
+    if (score > bestScore) {
       best = k;
-      bestD2 = d2;
+      bestScore = score;
     }
   }
   return spawns[best]!;
@@ -207,7 +219,7 @@ export function pickSpawn(s: Readonly<MatchState>, id: UnitId, spawns: readonly 
  */
 function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
   if (!u.mage) return createDummyUnit(u.id, u.dummy!.spot);
-  const at = t.spawns === null ? u.mage.spawn : pickSpawn(s, u.id, t.spawns);
+  const at = t.spawns === null ? u.mage.spawn : pickSpawn(s, u.id, t.spawns, t.world);
   const fresh = createMageUnit(u.id, u.mage.element, at);
   fresh.mage!.stats = { ...u.mage.stats };
   fresh.mage!.ready = { ...u.mage.ready };

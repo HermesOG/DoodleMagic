@@ -235,17 +235,25 @@ describe("sky and gorge", () => {
 });
 
 describe("sun and wash bands", () => {
+  // солнце с запада в плоскости z = 0 (Р15 фазы 7): на стенах три тона — к солнцу свет, вдоль солнца полутон, от солнца тень
   const FACES: { name: string; n: [number, number, number]; band: 0 | 1 | 2 }[] = [
     { name: "top", n: [0, 1, 0], band: 0 },
-    { name: "+x side", n: [1, 0, 0], band: 1 },
+    { name: "-x side", n: [-1, 0, 0], band: 0 },
     { name: "+z side", n: [0, 0, 1], band: 1 },
-    { name: "-x side", n: [-1, 0, 0], band: 2 },
-    { name: "-z side", n: [0, 0, -1], band: 2 },
+    { name: "-z side", n: [0, 0, -1], band: 1 },
+    { name: "+x side", n: [1, 0, 0], band: 2 },
     { name: "bottom", n: [0, -1, 0], band: 2 },
   ];
 
-  it("lights the box top, puts two sides in half tone and two in shadow", () => {
+  it("lights the box top and the sunward side, puts the ±z sides in half tone and the far side in shadow", () => {
     for (const f of FACES) expect(toneBand(halfLambert(f.n, SUN_DIR)), f.name).toBe(f.band);
+  });
+
+  it("keeps the sun in the plane z = 0, so the mirrored halves A and B are lit alike", () => {
+    expect(SUN_DIR[2]).toBe(0);
+    expect(Math.hypot(...SUN_DIR)).toBeCloseTo(1, 12);
+    expect(SUN_DIR[0]).toBeLessThan(0);
+    expect(halfLambert([0, 0, 1], SUN_DIR)).toBe(halfLambert([0, 0, -1], SUN_DIR));
   });
 
   it("keeps every face tone clear of the band thresholds, including their softness and noise", () => {

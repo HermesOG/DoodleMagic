@@ -1,4 +1,4 @@
-import { buildGallery } from "@doodlemagic/arena";
+import { buildSedlovina } from "@doodlemagic/arena";
 import { pvpContext, unitById, type ArenaData, type Element, type MatchContext } from "@doodlemagic/sim";
 import type { Frame } from "../game/driver";
 import { mountGameView, type GameView } from "../game/view";
@@ -21,11 +21,11 @@ const HOST_LEFT_GAME_TEXT = "Хост вышел из игры";
 
 /**
  * Бой с друзьями: /play — хост (комната открывается сразу, вход — по «Войти» в лобби), /r/КОД — игрок (канал к хосту
- * сразу, вход — по «Войти»). Арена — «Галерея над ущельем» с точками появления (pvpContext). После входа — общий
+ * сразу, вход — по «Войти»). Арена — «Седловина», полный вариант, с точками появления (pvpContext). После входа — общий
  * игровой вид с драйвером хоста или игрока и интерфейс матча (matchHud).
  */
 export function mountPvp(root: HTMLElement, code: string | null): void {
-  const arena = buildGallery("full");
+  const arena = buildSedlovina("full");
   const ctx = pvpContext(arena);
   const lag = lagFromQuery(location.search);
   // из bfcache страница вернулась с мёртвой связью: заново

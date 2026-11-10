@@ -3,10 +3,11 @@ import { aabb } from "../aabb";
 import { createWorld, withDynamic } from "../world";
 import { applyHit, stepStatuses, type HitSpec } from "./combat";
 import { FIRE } from "./defs";
-import { testContext } from "./fixtures";
-import { NO_MATCH_INPUT, createDummyUnit, createMageUnit, createMatchState, rightXZ } from "./state";
+import { TEST_FLOOR, TEST_KILL, deepFreeze, testContext } from "./fixtures";
+import { NO_MATCH_INPUT, clonePlain, createDummyUnit, createMageUnit, createMatchState, rightXZ } from "./state";
+import type { Spawn } from "../types";
 import type { MatchContext, MatchEvent, MatchInput, MatchState, TickCtx, Unit, UnitId } from "./types";
-import { moveUnits, stepLife } from "./units";
+import { SPAWN_SEEN_PENALTY_M, moveUnits, pickSpawn, stepLife } from "./units";
 
 const ctx = testContext();
 const tickOf = (s: MatchState): TickCtx => ({ world: ctx.world, terrainIds: [], killBelowY: ctx.killBelowY, now: s.tick, ev: [], spawns: null, mageRespawnTicks: 60, spawnShieldTicks: 0, ultChargeMul: 1 });
@@ -160,5 +161,60 @@ describe("mage input", () => {
     step(s, 30);
     const m = s.units[0]!.move;
     expect([m.yaw, m.pitch, speed(s.units[0]!), m.body.pos.y]).toEqual([1.2, 0.3, 0, 0]);
+  });
+});
+
+describe("pickSpawn: penalty for a point a living enemy sees (R14)", () => {
+  // враг в начале координат; стена 10 × 3 м в 9…10 м к −z закрывает от него всё, что за ней
+  const wall = { box: aabb(-5, 0, -10, 5, 3, -9) };
+  const world = createWorld([TEST_FLOOR, wall], [TEST_KILL]);
+  const at = (x: number, z: number): Spawn => ({ pos: { x, y: 0, z }, yaw: 0 });
+  const enemy = () => createMatchState([createMageUnit(2, "fire", { pos: { x: 0, y: 0, z: 0 }, yaw: 0 })]);
+
+  it("prefers a hidden point unless the seen one is more than the penalty further away", () => {
+    expect(SPAWN_SEEN_PENALTY_M).toBe(20);
+    const hidden = at(0, -25);
+    // на виду 30 м (−20 → 10) против спрятанной 25 м — спрятанная; без мира — как раньше, просто дальняя
+    expect(pickSpawn(enemy(), 1, [at(0, 30), hidden], world)).toBe(hidden);
+    expect(pickSpawn(enemy(), 1, [at(0, 30), hidden])).toEqual(at(0, 30));
+    // на виду 39 м (19) против спрятанной 18 м — на виду: это штраф, а не запрет
+    expect(pickSpawn(enemy(), 1, [at(0, 39), at(0, -18)], world)).toEqual(at(0, 39));
+    // спрятанная в 10,5 м: 10,5 > 30 − 20; в 10 м — ровно 10 = 10: ничья, меньший номер
+    expect(pickSpawn(enemy(), 1, [at(0, 30), at(0, -10.5)], world)).toEqual(at(0, -10.5));
+    expect(pickSpawn(enemy(), 1, [at(0, 30), at(0, -10)], world)).toEqual(at(0, 30));
+  });
+
+  it("scores each point by its worst enemy: hidden from one but seen by another counts as seen by that one", () => {
+    const s = createMatchState([createMageUnit(2, "fire", { pos: { x: 0, y: 0, z: 0 }, yaw: 0 }), createMageUnit(3, "earth", { pos: { x: 0, y: 0, z: -35 }, yaw: 0 })]);
+    // (0; −25): от мага 2 закрыта стеной (25), маг 3 видит её с 10 м (10 − 20 = −10); (0; 30): 30 − 20 = 10 — она
+    expect(pickSpawn(s, 1, [at(0, -25), at(0, 30)], world)).toEqual(at(0, 30));
+  });
+
+  it("ignores the mage itself, the dead and dummies, and leaves its arguments untouched", () => {
+    const dead = createMageUnit(3, "earth", { pos: { x: 0, y: 0, z: 30 }, yaw: 0 });
+    dead.alive = false;
+    const s = deepFreeze(createMatchState([createMageUnit(1, "fire", { pos: { x: 0, y: 0, z: 30 }, yaw: 0 }), dead, createDummyUnit(4, { pos: { x: 0, y: 0, z: 30 }, yaw: 0 })]));
+    const spawns = deepFreeze([at(0, 30), at(0, -25)]);
+    // живых врагов нет: первая точка, хоть её и «видят» сам маг, мёртвый и манекен
+    expect(pickSpawn(s, 1, spawns, world)).toBe(spawns[0]);
+  });
+
+  it("is the same choice for the same state and world (host and client agree)", () => {
+    const spawns = [at(-30, -30), at(10, 30), at(-30, 30), at(10, -30), at(0, -25)];
+    const s = createMatchState([createMageUnit(2, "fire", { pos: { x: 3, y: 0, z: 4 }, yaw: 0 }), createMageUnit(3, "air", { pos: { x: -12, y: 0, z: 7 }, yaw: 0 })]);
+    const first = spawns.indexOf(pickSpawn(s, 1, spawns, world));
+    for (let k = 0; k < 5; k++) expect(spawns.indexOf(pickSpawn(clonePlain(s), 1, spawns, createWorld([TEST_FLOOR, wall], [TEST_KILL])))).toBe(first);
+  });
+
+  it("is used by the respawn in stepLife with the tick's world", () => {
+    const s = createMatchState([createMageUnit(1, "fire", { pos: { x: 0, y: 0, z: 0 }, yaw: 0 }), createMageUnit(2, "fire", { pos: { x: 0, y: 0, z: 0 }, yaw: 0 })]);
+    const me = s.units[0]!;
+    me.alive = false;
+    me.respawnTick = 0;
+    const spawns = [at(0, 30), at(0, -25)];
+    const t: TickCtx = { world, terrainIds: [], killBelowY: -30, now: 0, ev: [], spawns, mageRespawnTicks: 180, spawnShieldTicks: 0, ultChargeMul: 1 };
+    stepLife(s, t);
+    expect(s.units[0]!.mage!.spawn).toEqual(spawns[1]);
+    expect(t.ev).toContainEqual({ type: "respawn", target: 1, pos: { x: 0, y: 0, z: -25 }, yaw: 0 });
   });
 });

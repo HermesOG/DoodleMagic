@@ -29,8 +29,11 @@ export function inverseDepth(near: number, far: number, band: number, out: Vecto
   return out.set(1 / near, (1 / near - 1 / far) / band);
 }
 
-/** Дымка по дальности: от near до far метров доля растёт до max (даль холодеет, но не пропадает). */
-export const FOG = { near: 22, far: 90, max: 0.7 } as const;
+/**
+ * Дымка по дальности: от near до far метров доля растёт до max (даль холодеет, но не пропадает). 25…95 — под открытую
+ * «Седловину» (Р15 фазы 7): на 40 м враг светлеет примерно на 8 %, на 50 м — на 20 %.
+ */
+export const FOG = { near: 25, far: 95, max: 0.7 } as const;
 
 /**
  * Облака ущелья: всё ниже края `edge` (м) растворяется в облаках на глубине `fade` под ним; край течёт шумом
