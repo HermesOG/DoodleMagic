@@ -98,7 +98,7 @@ export function addMage(g: Readonly<GameState>, element: Element, ctx: MatchCont
   const game = copyGame(g);
   const s = game.match;
   const id = game.nextMageId++;
-  s.units.push(freshMage(id, element, pickSpawn(s, id, ctx.spawns), s.tick + ticks(ctx.spawnShieldS ?? 0)));
+  s.units.push(freshMage(id, element, pickSpawn(s, id, ctx.spawns, ctx.world), s.tick + ticks(ctx.spawnShieldS ?? 0)));
   const limit = scoreLimitFor(mageCount(s));
   if (game.phase === "warmup") game.scoreLimit = limit;
   else if (game.phase !== "results") game.scoreLimit = Math.max(game.scoreLimit, limit);
@@ -134,7 +134,7 @@ export function setElement(g: Readonly<GameState>, id: UnitId, element: Element,
     return game;
   }
   if (game.phase === "live") return game;
-  const at = ctx.spawns ? pickSpawn(s, id, ctx.spawns) : old.mage.spawn;
+  const at = ctx.spawns ? pickSpawn(s, id, ctx.spawns, ctx.world) : old.mage.spawn;
   const fresh = freshMage(id, element, at, s.tick + ticks(ctx.spawnShieldS ?? 0));
   fresh.mage!.stats = { ...old.mage.stats };
   s.units[k] = fresh;
@@ -166,7 +166,7 @@ function startLive(game: GameState, ctx: MatchContext, ev: MatchEvent[]): void {
   const placed: Unit[] = [];
   s.units = s.units.map((u) => {
     if (!u.mage) return u;
-    const at = ctx.spawns ? pickSpawn({ ...s, units: placed }, u.id, ctx.spawns) : u.mage.spawn;
+    const at = ctx.spawns ? pickSpawn({ ...s, units: placed }, u.id, ctx.spawns, ctx.world) : u.mage.spawn;
     const fresh = freshMage(u.id, u.mage.element, at, shieldUntil);
     placed.push(fresh);
     ev.push({ type: "respawn", target: u.id, pos: { x: at.pos.x, y: at.pos.y, z: at.pos.z }, yaw: at.yaw });

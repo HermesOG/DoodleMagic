@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { TRAINING, buildGallery } from "@doodlemagic/arena";
+import { TRAINING, buildSedlovina } from "@doodlemagic/arena";
 import { NO_MATCH_INPUT, TICK_DT, clonePlain, createMatch, matchContext, unitById, type MatchInput, type MatchState } from "@doodlemagic/sim";
 import type { Frame } from "../game/driver";
 import { createSoloDriver } from "./soloDriver";
 
 const LOCAL = 1;
-const ctx = matchContext(buildGallery("full"));
+const ctx = matchContext(buildSedlovina("full"));
 const training = (): MatchState => createMatch({ mages: [{ element: "fire", spawn: TRAINING.spawn }], dummies: [...TRAINING.dummies] });
 const idle = (): MatchInput => ({ ...NO_MATCH_INPUT, yaw: TRAINING.spawn.yaw });
 /** Полигон, но маг над зоной смерти ущелья, выше её верха (−3 м): падает сам. */

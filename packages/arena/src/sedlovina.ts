@@ -246,7 +246,7 @@ function garden(b: ArenaBuilder): void {
     b.box(V.east.x0, FOUNDATION_Y, BACK_Z, 32, 0, V.east.z0, { material: "floor" });
     b.box(V.east.x0, CLIFF_Y, V.east.z0 - 1, 32, FOUNDATION_Y, V.east.z0);
     // контрфорс сада: за ним спаун A6
-    b.box(22, 0, BACK_Z, 24, FENCE_H, -17.5);
+    b.box(22, 0, BACK_Z, 23.7, FENCE_H, -17.5);
     // помост +2,8 у края мира; лестница с юга, поток с севера
     b.box(25, 0, -16, 32, TIER, -10, { tag: "tier" });
     b.stairs({ x0: 27.7, z0: -20, x1: 31.7, z1: -16, y0: 0, y1: TIER, dir: "+z", steps: STAIR_STEPS });
@@ -259,7 +259,7 @@ function garden(b: ArenaBuilder): void {
     b.box(px, TIER, -16, 32, TIER + PARAPET_H, -10, { tag: "parapet" });
     b.box(px, 0, -10, 32, PARAPET_H, V.east.z0, { tag: "parapet" });
     // фонарь у головы садового моста
-    b.box(27, 0, -7, 28, COVER_H, V.east.z0, { tag: "lantern" });
+    b.box(26.7, 0, -7, 27.7, COVER_H, V.east.z0, { tag: "lantern" });
     grass(b, 22, -10, 25, -6);
     b.spawn(26, 0, -21.2, Math.PI);
     b.pickup("orb", 29, TIER + 0.5, -13);
