@@ -467,15 +467,16 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
         }
         f.emit(specs);
       }
-      // свет огня 7,5 м у основания потока и ореол дальше по оси; своему ореолы меньше — прицел виден
+      // свет огня 7,5 м у основания потока и ореол дальше по оси; у своего ореолов нет — они легли бы на прицел (V4),
+      // остаётся свет на мир
       const flicker = 0.85 + 0.15 * Math.sin(f.nowS * 23 + it.id) * Math.sin(f.nowS * 9.3 + it.id * 2);
       const near = Math.min(3, len);
       const far = len * 0.65;
       f.glow(
-        { pos: { x: apex.x + axis.x * near, y: apex.y + axis.y * near, z: apex.z + axis.z * near }, color: FX_COLOR.fire, halo: own ? 0.5 : 1.4, light: BREATH_LIGHT_M, intensity: (own ? 0.55 : 0.95) * fade * flicker, core: own ? 0 : 0.3 },
+        { pos: { x: apex.x + axis.x * near, y: apex.y + axis.y * near, z: apex.z + axis.z * near }, color: FX_COLOR.fire, halo: own ? 0 : 1.4, light: BREATH_LIGHT_M, intensity: (own ? 0.55 : 0.95) * fade * flicker, core: own ? 0 : 0.3 },
         3,
       );
-      f.glow({ pos: { x: apex.x + axis.x * far, y: apex.y + axis.y * far, z: apex.z + axis.z * far }, color: FX_COLOR.fire, halo: own ? 1.2 : 2.2, light: 0, intensity: 0.6 * fade * flicker, core: 0 }, 2);
+      if (!own) f.glow({ pos: { x: apex.x + axis.x * far, y: apex.y + axis.y * far, z: apex.z + axis.z * far }, color: FX_COLOR.fire, halo: 2.2, light: 0, intensity: 0.6 * fade * flicker, core: 0 }, 2);
     }
     for (const id of flowAcc.keys()) if (!liveUnits.has(id)) flowAcc.delete(id);
     for (const a of coneAttrs) {

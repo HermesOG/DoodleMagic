@@ -232,8 +232,10 @@ interface Track {
   seen: boolean;
   owner: UnitId;
 }
-/** Всплеск ближе этого к последней точке снаряда — его удар: кайма по хозяину снаряда (V3). */
+/** Всплеск удара ближе этого к последней точке снаряда — его удар: кайма по хозяину снаряда (V3). */
 const BURST_OWNER_M = 2;
+/** Всплески удара снаряда: хозяин — по снаряду; у прочих хозяин неизвестен (каймы нет), если его не дал эффект. */
+const IMPACT_BURSTS: ReadonlySet<BurstPreset> = new Set<BurstPreset>(["fistImpact", "fireballBoom", "stoneImpact", "grabSplash", "answerSplash"]);
 
 interface Seen<T> {
   item: T;
@@ -429,7 +431,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       for (const el of elements) el.apply?.(e, nowS);
       switch (e.kind) {
         case "burst": {
-          emitWorld(markSide(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), sideOf(e.owner ?? burstOwner(e.pos), localId)), t);
+          emitWorld(markSide(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), sideOf(e.owner ?? (IMPACT_BURSTS.has(e.preset) ? burstOwner(e.pos) : NOBODY), localId)), t);
           const l = BURST_LIGHT[e.preset];
           if (l) flashes.push({ ...l, pos: { ...e.pos }, born: t, light: l.light * Math.min(1.5, Math.max(0.7, e.scale)) });
           if (e.preset === "fireballBoom") {
