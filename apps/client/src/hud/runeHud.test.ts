@@ -93,6 +93,8 @@ describe("kill feed: the rune and its holder", () => {
     expect(feedLine(fury(2, "slain", 1), NAMES, 3)).toEqual({ text: "Искра 42 · +10 к ульте за носителя руны", mine: false });
     expect(feedLine(fury(2, "slain", 1), NAMES, 1)?.mine).toBe(true);
     expect(feedLine(fury(2, "slain", 1), NAMES, 2)?.mine).toBe(true);
+    // сбивший вышел: заряд никому, строки нет
+    expect(feedLine(fury(2, "slain", 9), NAMES, 1)).toBeNull();
   });
 
   it("stays quiet about warnings, spawns, orbs, the end of a fury and a holder who fell alone", () => {

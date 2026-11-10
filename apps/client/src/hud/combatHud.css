@@ -155,7 +155,8 @@
 .ch-toasts {
   position: absolute;
   left: 50%;
-  top: 14vh;
+  /* не выше низа строки руны (84 px + плашка): на окнах ниже ~840 px 14vh легли бы на неё */
+  top: max(14vh, 126px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -295,11 +296,9 @@
   text-shadow: 0 0 2px var(--ch-ink), 0 0 2px var(--ch-ink), 0 0 5px rgba(29, 27, 22, 0.75);
   white-space: nowrap;
 }
-.ch-hp.is-fury::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(240, 194, 79, 0.85) 0%, rgba(240, 194, 79, 0.3) 45%, transparent 75%);
+/* ярость — золотой отлив только на заливке: пустая часть мазка остаётся пустой, уровень HP читается */
+.ch-hp.is-fury .ch-hp-fill {
+  background: linear-gradient(180deg, #f0c24f 0%, #d4473e 45%, var(--ch-red) 70%, #a92a23 100%);
 }
 
 /* ---------------------------------------------------------------- ячейки ЛКМ Q E C X и жар */

@@ -88,7 +88,8 @@ export function feedLine(ev: MatchEvent, names: ReadonlyMap<UnitId, string>, loc
     return { text: `${nameOf(names, ev.unit)} · руна ярости`, mine: ev.unit === localId };
   }
   if (ev.type === "fury") {
-    if (ev.phase !== "slain" || ev.by === NOBODY) return null;
+    // сбивший вышел — заряд никому не начислен: строки нет (как имя убийцы в строке смерти)
+    if (ev.phase !== "slain" || ev.by === NOBODY || !names.has(ev.by)) return null;
     return { text: `${nameOf(names, ev.by)} · +${PICKUPS.rune.killUlt} к ульте за носителя руны`, mine: ev.by === localId || ev.unit === localId };
   }
   if (ev.type === "death") {

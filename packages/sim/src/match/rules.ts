@@ -1,5 +1,5 @@
 import type { ArenaData, Spawn } from "../types";
-import { ticks } from "./defs";
+import { PICKUPS, ticks } from "./defs";
 import { matchContext, stepMatch } from "./match";
 import { initPickups } from "./pickups";
 import { clonePlain, createMageUnit, createMatchState } from "./state";
@@ -37,6 +37,7 @@ export interface GameStep { game: GameState; events: MatchEvent[] }
 const COUNTDOWN_TICKS = ticks(PVP.countdownS); // 180
 const MATCH_TICKS = ticks(PVP.matchS); // 25200
 const SUDDEN_DEATH_TICKS = ticks(PVP.suddenDeathS); // 3600
+const RUNE_FIRST_TICKS = ticks(PICKUPS.rune.firstS); // 2700
 
 /** Очки: убийства и засчитанные сбросы. Не маг — 0. */
 export const scoreOf = (u: Unit): number => (u.mage ? u.mage.stats.kills + u.mage.stats.falls : 0);
@@ -137,11 +138,16 @@ export function setElement(g: Readonly<GameState>, id: UnitId, element: Element,
   return game;
 }
 
-/** «Начать матч» и «Ещё раз» (Н8): из разминки или итогов — отсчёт 3 с. В других фазах — копия без изменений. */
+/**
+ * «Начать матч» и «Ещё раз» (Н8): из разминки или итогов — отсчёт 3 с. В других фазах — копия без изменений.
+ * Руна разминки переводится на часы боя (старт + 45 с, как заведёт startLive): за «3-2-1» не звучит и не появляется.
+ */
 export function startCountdown(g: Readonly<GameState>): GameState {
   const game = copyGame(g);
   if (game.phase !== "warmup" && game.phase !== "results") return game;
-  return { ...game, phase: "countdown", phaseEnd: game.match.tick + COUNTDOWN_TICKS, results: [], suddenDeath: false };
+  const phaseEnd = game.match.tick + COUNTDOWN_TICKS;
+  for (const p of game.match.pickups) if (p.kind === "rune") p.readyAt = phaseEnd + RUNE_FIRST_TICKS;
+  return { ...game, phase: "countdown", phaseEnd, results: [], suddenDeath: false };
 }
 
 /**

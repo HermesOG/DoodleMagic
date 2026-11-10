@@ -287,7 +287,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
     reverb: REVERB_SEND.large,
     layers: [
       tone("sine", 196, 197, 0.8, 0.5, { attack: 0.006 }),
-      tone("sine", 541, 541, 0.5, 0.2, { attack: 0.004 }),
+      tone("sine", 541, 541, 0.5, 0.3, { attack: 0.004 }), // громче: на динамиках ноутбука низ гонга срезан
       tone("sine", 1067, 1067, 0.3, 0.08, { attack: 0.003 }),
       tone("sine", 1607, 1612, 0.74, 0.07, { delay: 0.06, attack: 0.2 }),
     ],
@@ -309,7 +309,7 @@ export const RECIPES: Record<SoundId, Recipe> = {
     layers: [
       tone("sine", 146.8, 146.8, 0.6, 0.45, { attack: 0.006 }),
       tone("sine", 220, 220, 0.55, 0.3, { attack: 0.005 }),
-      tone("sine", 370, 370, 0.5, 0.2, { attack: 0.004 }),
+      tone("sine", 370, 370, 0.5, 0.3, { attack: 0.004 }), // громче: на динамиках ноутбука ре3 и ля3 срезаны
       tone("sine", 1174.7, 1174.7, 0.25, 0.08, { attack: 0.002 }),
     ],
   },

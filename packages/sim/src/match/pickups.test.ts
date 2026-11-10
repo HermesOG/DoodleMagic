@@ -432,6 +432,17 @@ describe("pickups in PvP", () => {
     expect(g.match.pickups[RUNE]!.readyAt).toBe(start + 2700);
   });
 
+  it("a warmup rune due during the countdown stays silent: no warn or spawn over «3-2-1», it moves to start + 2700", () => {
+    let g = play(join(createGame(), "fire"), 1).g;
+    g = { ...g, match: { ...g.match, tick: 2650 } }; // руна разминки — на 2700, объявление уже было
+    g = startCountdown(g);
+    const start = g.phaseEnd;
+    expect(g.match.pickups[RUNE]!.readyAt).toBe(start + 2700);
+    const r = play(g, start - g.match.tick + 1);
+    expect(r.ev.filter((e) => e.type === "pickup")).toEqual([]);
+    expect(r.g.match.pickups[RUNE]!.readyAt).toBe(start + 2700);
+  });
+
   it("setElement of a living mage in warmup — a fresh mage without fury", () => {
     const g = play(join(createGame(), "fire"), 1).g;
     g.match.units[0]!.status.furyUntil = 900;

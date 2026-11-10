@@ -209,7 +209,7 @@ export type MatchEvent =
   | { type: "absorb"; unit: UnitId; projectile: number; kind: ProjectileKind; owner: UnitId; amount: number; total: number; pos: Vec3 }
   | { type: "ward"; unit: UnitId; phase: "up" | "down"; absorbed: number }
   | { type: "tow"; target: UnitId; source: UnitId; phase: "start" | "end"; pos: Vec3; to: Vec3 }
-  /** Лечение: amount — фактически прибавленное. */
+  /** Лечение: amount — фактически прибавленное; source NOBODY — сфера жизни на карте (фаза 6). */
   | { type: "heal"; target: UnitId; source: UnitId; amount: number; pos: Vec3 }
   /** Реакция стихий: облако пара, огненный смерч, «Огненный вал», «Топь» или «Выкипание»; zone — её зона. */
   | { type: "reaction"; kind: ReactionKind; owner: UnitId; zone: number; pos: Vec3 }
