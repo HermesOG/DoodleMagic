@@ -7,7 +7,7 @@ import type { PresetId } from "../render/quality";
 import { HANDS_FOV, WORLD_FOV, type FxLayers, type StyleRenderer } from "../render/styleRenderer";
 import { createDebris } from "./debris";
 import { createDecalMeshes, markDecal, sootDecal, zoneDecal, type DecalSpec, type RootRing } from "./decals";
-import { createDummyMeshes, type DummyView } from "./dummyMeshes";
+import { createDummyMeshes, dummyElement, type DummyView } from "./dummyMeshes";
 import { ELEMENT_VFX, type ElementVfxFrame } from "./elementVfx";
 import { createFireWallMeshes, fireWallSheet, type FireWallSheet } from "./fireWalls";
 import type { TimeUniform } from "./fxShader";
@@ -602,6 +602,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             flash: v.nowS < a.flashUntil,
             leanX,
             leanZ,
+            // глаза и шляпа — по стихии мага (задача 4)
+            element,
           };
           mageViews.push(pose);
           liveMages.push({ id: u.id, pose, u });
@@ -633,6 +635,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
               squash: Math.max(0.72, Math.min(1.15, 1 + a.squash.x)),
               flash: v.nowS < a.flashUntil,
               bob: 0.035 * Math.sin(v.nowS * 2.3 + u.id * 1.7),
+              // манекен — маг своей стихии (по номеру, только вид)
+              element: dummyElement(u.id),
             },
             distM: Math.hypot(pos.x - eye.x, pos.y + 0.9 - eye.y, pos.z - eye.z),
           });
