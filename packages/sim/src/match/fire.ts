@@ -1,18 +1,21 @@
 import { sanitizeInput } from "../player";
+import { raycast } from "../raycast";
 import { TICK_DT, type Vec3 } from "../types";
 import { aimGround } from "./aim";
+import { applyHit } from "./combat";
 import { dashStarted, endDash, startDash, stepDash, type DashSpec } from "./dash";
 import { FIRE, slotCooldownTicks, ticks } from "./defs";
 import type { ElementSim } from "./hooks";
-import { castAim, castSlots, emitCast, snappedWallBox, type Kit, type TryCast } from "./kit";
-import { spawnProjectile } from "./projectiles";
+import { castAim, castSlots, emitCast, horizontalDir, snappedWallBox, type Kit, type TryCast } from "./kit";
+import { spawnProjectile, wardFaces } from "./projectiles";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
 import { startUlt } from "./ult";
 import { spawnZone } from "./zones";
 
 /**
  * Кит Огня «Напор» (GDD 4.3; решения Р5, Р14, Р15): ЛКМ «Огненные кулаки» с жаром и мягким перегревом,
- * Q «Огненный шар» с замахом, E «Реактивный рывок» со следом (и в воздухе), C «Стена огня». «Кураж» — в combat.ts.
+ * Q «Огненный шар» с замахом, E «Реактивный рывок» со следом (и в воздухе), C «Стена огня», X «Дыхание дракона»
+ * (Р6 фазы 5: каст и заряд — ult.ts, поток — здесь, в tick). «Кураж» — в combat.ts.
  * Каждый принятый каст — событие cast на тике, когда он принят: на нажатии или позже, когда нажатие выходит из буфера
  * (castSlots, до 0,3 с); перезарядка ставится там же (Р14).
  */
@@ -33,6 +36,9 @@ const TRAIL_TICKS = ticks(JD.trailS); // 120
 const WALL_CD = slotCooldownTicks("fire", "c"); // 720
 const WALL_TELEGRAPH_TICKS = ticks(FW.telegraphS); // 24
 const WALL_LIFE_TICKS = ticks(FW.lifeS); // 300
+const DB = FIRE.dragonBreath;
+/** Конус Дыхания: косинус полуугла 15° («конус 30°» — полный раствор). */
+const BREATH_COS = Math.cos((DB.halfAngleDeg * Math.PI) / 180);
 /** Реактивный рывок (A6 фазы 4): 8 м за 0,2 с, ≈ 62 → 18 м/с по тикам, на выходе 9 м/с, след 2 с. */
 export const FIRE_DASH: Readonly<DashSpec> = Object.freeze({
   ability: "jetDash", distM: JD.distM, durationS: JD.durationS, profile: JD.profile, exitSpeed: JD.exitSpeed,
@@ -40,6 +46,7 @@ export const FIRE_DASH: Readonly<DashSpec> = Object.freeze({
 });
 
 const copy = (v: Vec3): Vec3 => ({ x: v.x, y: v.y, z: v.z });
+const bodyCenter = (u: Unit): Vec3 => ({ x: u.move.body.pos.x, y: u.move.body.pos.y + u.move.body.height / 2, z: u.move.body.pos.z });
 
 function release(t: TickCtx, u: Unit, ability: "fireFists" | "fireball", projectile: number, aim: { eye: Vec3; dir: Vec3 }): void {
   t.ev.push({ type: "release", unit: u.id, ability, projectile, pos: copy(aim.eye), dir: copy(aim.dir) });
@@ -123,11 +130,46 @@ function fireWall(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectRe
   return null;
 }
 
+/**
+ * X: «Дыхание дракона» (Р6 фазы 5) — вдох 0,6 с, затем поток 3 с (tick → breathPulse). Заряд, «занят», вдох и конец
+ * каста — ult.ts. Перегрев не мешает; жар за каст не растёт: ЛКМ занята, пока идёт ульта.
+ */
+const dragonBreath = (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null => startUlt(t, u, inp, "dragonBreath");
+
+/** Свободен ли луч "shot" от a до b: камень и рельеф закрывают, Стена огня и пар — нет. */
+function clearShot(t: TickCtx, a: Vec3, b: Vec3): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dz = b.z - a.z;
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  return len < 1e-9 || raycast(t.world, a, { x: dx / len, y: dy / len, z: dz / len }, len, "shot") === null;
+}
+
+/**
+ * Импульс потока по прицелу этого тика (Р6 фазы 5): конус из глаз по взгляду (3D). Цель — живой не-хозяин, центр
+ * тела не дальше 12 м от глаз и не дальше 15° от оси, луч "shot" от глаз до центра свободен. Диск Отражения,
+ * который встречает поток (wardFaces по горизонтали луча), его не пускает: ни урона, ни впитанного. Остальным —
+ * 7,5 урона по времени и Горение, без толчка; Мокрую цель applyHit сушит (пар — раз в 3 с на цель).
+ */
+function breathPulse(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): void {
+  const { eye, dir } = castAim(u, inp);
+  for (const v of s.units) {
+    if (!v.alive || v.id === u.id) continue;
+    const c = bodyCenter(v);
+    const dx = c.x - eye.x;
+    const dy = c.y - eye.y;
+    const dz = c.z - eye.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (d > DB.rangeM || dx * dir.x + dy * dir.y + dz * dir.z < BREATH_COS * d) continue;
+    if (!clearShot(t, eye, c)) continue;
+    const flow = horizontalDir({ x: dx, z: dz });
+    if (wardFaces(v, flow, t.now)) continue;
+    applyHit(s, t, { source: u.id, target: v.id, ability: "dragonBreath", damage: DB.pulseDamage, pos: c, dir: flow, burn: true, dot: true });
+  }
+}
+
 /** Слоты Огня для castSlots: он же держит буфер нажатий и пишет отказы. */
-const FIRE_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
-  primary: fists, q: fireball, e: jetDash, c: fireWall,
-  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "dragonBreath"), // заглушка: действие — задача 2
-});
+const FIRE_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: fists, q: fireball, e: jetDash, c: fireWall, x: dragonBreath });
 
 export const FIRE_KIT: Kit = Object.freeze({
   input(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput, pressed: Buttons): void {
@@ -153,8 +195,12 @@ export const FIRE_KIT: Kit = Object.freeze({
     if (now < m.overheatUntil) m.heat = (H.max * (m.overheatUntil - now)) / OVERHEAT_TICKS;
     else if (now - m.lastShotTick > COOL_DELAY_TICKS) m.heat = Math.max(0, m.heat - H.coolPerS * TICK_DT);
     if (m.dash) stepDash(s, t, u, inp, FIRE_DASH);
+    // Поток Дыхания: импульс раз в 10 тиков с конца вдоха (releaseTick ≤ now < endTick) — 18 импульсов, 135 урона.
+    // На endTick каста уже нет: stepUlts снял его до tick. Мёртвый маг tick не получает — поток обрывается.
+    const c = m.ult.cast;
+    if (c && c.ability === "dragonBreath" && now >= c.releaseTick && now < c.endTick && (now - c.releaseTick) % DB.pulseTicks === 0) breathPulse(s, t, u, inp);
   },
 });
 
-/** Огонь «Напор» в реестре стихий: кит (зоны ульты добавит задача 2). */
+/** Огонь «Напор» в реестре стихий: кит; своих зон у ульты нет (поток бьёт из tick). */
 export const FIRE_SIM: ElementSim = Object.freeze({ kit: FIRE_KIT });

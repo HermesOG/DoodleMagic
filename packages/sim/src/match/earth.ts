@@ -1,21 +1,23 @@
 import { aabb } from "../aabb";
 import { forwardXZ, sanitizeInput } from "../player";
 import { groundBelow } from "../raycast";
+import type { Vec3 } from "../types";
 import { aimGround } from "./aim";
+import { applyHit } from "./combat";
 import { EARTH, slotCooldownTicks, ticks } from "./defs";
-import type { ElementSim } from "./hooks";
-import { castAim, castSlots, emitCast, snappedWallBox, type Kit, type TryCast } from "./kit";
+import type { ElementSim, ZoneStep } from "./hooks";
+import { castAim, castSlots, emitCast, horizontalDir, snappedWallBox, type Kit, type TryCast } from "./kit";
 import { spawnProjectile } from "./projectiles";
 import { spawnTerrain, type TerrainSpec } from "./terrain";
 import type { Buttons, MatchInput, MatchState, RejectReason, Slot, TickCtx, Unit } from "./types";
 import { startUlt } from "./ult";
-import { spawnZone } from "./zones";
+import { spawnZone, zoneTouches } from "./zones";
 
 /**
  * Кит Земли «Стойкость» (GDD 4.4). Перезарядки идут с принятого нажатия (Р14); замах камня не даёт стрелять ЛКМ, Q и C,
  * E работает всегда. «Корни»: Q и C — только стоя на полу (отбрасывание ×0,5 считает бой).
  * Нажатие, отклонённое перезарядкой или замахом, ждёт в буфере castSlots до 0,3 с: Q в замахе камня выходит сразу
- * после выпуска камня.
+ * после выпуска камня. X «Тектонический разлом» (Р7 фазы 5) — тоже только с пола; трещина и шипы — зона rift.
  */
 
 const SS = EARTH.stoneShot;
@@ -26,6 +28,12 @@ const Q = EARTH.earthquake;
 const STONE_WINDUP_TICKS = ticks(SS.windupS); // 12
 const PILLAR_TELEGRAPH_TICKS = ticks(P.telegraphS); // 36
 const QUAKE_TELEGRAPH_TICKS = ticks(Q.telegraphS); // 24
+const TR = EARTH.tectonicRift;
+const RIFT_TELEGRAPH_TICKS = ticks(TR.telegraphS); // 48
+const SPIKES_TICKS = ticks(TR.spikesS); // 360
+const SPIKES_REHIT_TICKS = ticks(TR.spikesRehitS); // 60
+/** Цель ровно на линии разлома (по XZ ближе этого) толкает вправо от взгляда. */
+const ON_LINE_M = 1e-6;
 /** Опору под стеной ищем от точки на 0,6 м выше ступней мага и не глубже 3 м; нет опоры — основание на ступнях. */
 const WALL_GROUND_PROBE_UP_M = 0.6;
 const WALL_GROUND_DROP_M = 3;
@@ -112,11 +120,32 @@ function earthquake(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): Reject
   return null;
 }
 
+/**
+ * X: «Тектонический разлом» (Р7 фазы 5). Только с пола (на полу или в окне «койота»); опору проверяем до startUlt —
+ * в воздухе отказ «нет опоры», заряд цел. Линия 25 м по взгляду (не по осям) от 1,5 м перед ступнями, шириной 3 м,
+ * на высоте ступней; видна сразу (zone/telegraph), трещина бежит 0,8 с, затем удар и 6 с шипов (stepRift).
+ */
+function tectonicRift(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): RejectReason | null {
+  const mv = u.move;
+  if (!mv.onGround && !(mv.coyote > 0)) return "notGrounded";
+  const no = startUlt(t, u, inp, "tectonicRift");
+  if (no) return no;
+  const d = forwardXZ(sanitizeInput(inp, mv).yaw);
+  const p = mv.body.pos;
+  const far = TR.startM + TR.lengthM;
+  const a: Vec3 = { x: p.x + d.x * TR.startM + 0, y: p.y, z: p.z + d.z * TR.startM + 0 };
+  const b: Vec3 = { x: p.x + d.x * far + 0, y: p.y, z: p.z + d.z * far + 0 };
+  const now = t.now;
+  const arm = now + RIFT_TELEGRAPH_TICKS;
+  u.mage!.ult.cast!.zone = spawnZone(s, t, {
+    owner: u.id, kind: "rift", ability: "tectonicRift", shape: { type: "segment", a, b, halfW: TR.halfWidthM },
+    bornTick: now, armTick: arm, endTick: arm + SPIKES_TICKS,
+  });
+  return null;
+}
+
 /** Слоты Земли для castSlots: он же держит буфер нажатий и пишет отказы. */
-const EARTH_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({
-  primary: stoneShot, q: stonePillar, e: stoneWall, c: earthquake,
-  x: (_s: MatchState, t: TickCtx, u: Unit, inp: MatchInput) => startUlt(t, u, inp, "tectonicRift"), // заглушка: действие — задача 2
-});
+const EARTH_CASTS: Readonly<Record<Slot, TryCast>> = Object.freeze({ primary: stoneShot, q: stonePillar, e: stoneWall, c: earthquake, x: tectonicRift });
 /**
  * Q, E и C — раньше удержанной ЛКМ: у них нет замаха, а замах камня, начатый первым, отклонил бы Q и C, нажатые
  * ровно на тике, когда камень снова готов. Так оба каста выходят тем же тиком. X — последней, как в SLOTS.
@@ -138,5 +167,43 @@ export const EARTH_KIT: Kit = Object.freeze({
   },
 });
 
-/** Земля «Стойкость» в реестре стихий: кит (зоны ульты добавит задача 2). */
-export const EARTH_SIM: ElementSim = Object.freeze({ kit: EARTH_KIT });
+const bodyCenter = (u: Unit): Vec3 => ({ x: u.move.body.pos.x, y: u.move.body.pos.y + u.move.body.height / 2, z: u.move.body.pos.z });
+
+/**
+ * Шаг разлома после взвода (Р7 фазы 5). Полоса — не коллайдер; хозяина не трогает. Задевает тех, чья подошва от 1,5 м
+ * ниже до 2 м выше линии и кто касается отрезка (zoneTouches); толкает перпендикулярно линии в сторону цели (ровно на
+ * линии — вправо от взгляда).
+ * - armTick — удар по всей линии (ширина 3 м): живым не-хозяевам на полу 100, подброс 5 м («В воздухе») и 1 м вбок;
+ *   кто в воздухе — не задет. Удар — первое касание: шипы колют его цель не раньше чем через 1 с (rehit). Затем
+ *   полоса сужается до 1,5 м («шипы»).
+ * - Дальше до endTick — «стена шипов»: касание (и в воздухе) — 20 и 3 м вбок, раз в 1 с на юнита.
+ */
+const stepRift: ZoneStep = (s, t, z) => {
+  const sh = z.shape;
+  if (sh.type !== "segment") return;
+  const now = t.now;
+  const d = horizontalDir({ x: sh.b.x - sh.a.x, z: sh.b.z - sh.a.z });
+  const right = { x: -d.z + 0, z: d.x + 0 };
+  const lo = sh.a.y - TR.belowM;
+  const hi = sh.a.y + TR.aboveM;
+  const strike = now === z.armTick;
+  for (const v of s.units) {
+    if (!v.alive || v.id === z.owner || (strike && !v.move.onGround)) continue;
+    const p = v.move.body.pos;
+    if (p.y < lo || p.y > hi || !zoneTouches(sh, v)) continue;
+    const rec = z.rehit.find((r) => r.unit === v.id);
+    if (!strike && rec && rec.tick > now) continue;
+    const side = (p.x - sh.a.x) * right.x + (p.z - sh.a.z) * right.z;
+    const dir = side < -ON_LINE_M ? { x: -right.x + 0, z: -right.z + 0 } : right;
+    applyHit(s, t, {
+      source: z.owner, target: v.id, ability: "tectonicRift", damage: strike ? TR.damage : TR.spikesDamage, pos: bodyCenter(v), dir,
+      knock: strike ? { distM: TR.knockback.distM, upM: TR.knockback.upM } : { distM: TR.spikesKnock.distM, upM: TR.spikesKnock.upM }, launch: strike || undefined,
+    });
+    if (rec) rec.tick = now + SPIKES_REHIT_TICKS;
+    else z.rehit.push({ unit: v.id, tick: now + SPIKES_REHIT_TICKS });
+  }
+  if (strike) sh.halfW = TR.spikesHalfWidthM;
+};
+
+/** Земля «Стойкость» в реестре стихий: кит и шаг зоны разлома. */
+export const EARTH_SIM: ElementSim = Object.freeze({ kit: EARTH_KIT, zones: Object.freeze({ rift: stepRift }) });
