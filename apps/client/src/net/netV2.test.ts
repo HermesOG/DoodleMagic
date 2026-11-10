@@ -28,8 +28,8 @@ function snapshots(n: number, jumpFrom = Infinity): SnapshotMsg[] {
 
 describe("net v2", () => {
   it("is version 2 with its own peer ids", () => {
-    expect(NET_VERSION).toBe(3);
-    expect(gamePeerId("ABCD")).toBe("doodlemagic-g3-abcd-host");
+    expect(NET_VERSION).toBe(4);
+    expect(gamePeerId("ABCD")).toBe("doodlemagic-g4-abcd-host");
   });
 
   it("the host writes the held jump as the 6th look column; a snapshot needs all 6", () => {

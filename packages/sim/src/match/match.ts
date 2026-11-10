@@ -5,6 +5,7 @@ import { stepStatuses } from "./combat";
 import { MATCH, ticks } from "./defs";
 import { buildTickWorld } from "./dynamic";
 import { ELEMENT_SIM, SIM_HOOKS } from "./elements";
+import { initPickups, stepPickups } from "./pickups";
 import { stepProjectiles } from "./projectiles";
 import { clonePlain, createDummyUnit, createMageUnit, createMatchState, idleInput } from "./state";
 import { stepTerrain } from "./terrain";
@@ -18,9 +19,9 @@ import { stepZones } from "./zones";
  * Аргументы не меняются; одинаковые аргументы дают одинаковые до байта JSON состояния и событий.
  */
 
-/** Статика матча по арене: её мир и высота сброса (низ арены). */
+/** Статика матча по арене: её мир, высота сброса (низ арены) и копия её объектов на карте. */
 export function matchContext(arena: ArenaData): MatchContext {
-  return { world: createWorld(arena.colliders, arena.volumes), killBelowY: arena.bounds.min.y };
+  return { world: createWorld(arena.colliders, arena.volumes), killBelowY: arena.bounds.min.y, pickups: clonePlain(arena.pickups) };
 }
 
 export interface MatchSetup {
@@ -37,13 +38,16 @@ export function createMatch(setup: MatchSetup): MatchState {
 
 /**
  * Один тик. Порядок фиксирован, на нём держится детерминизм: ввод китов (все маги по id) → ульты (stepUlts) → тики
- * китов → движение юнитов → снаряды → зоны → рельеф → статусы → жизнь. Мир тика — статика с рельефом и стенами огня
- * на начало тика.
+ * китов → движение юнитов → снаряды → зоны → рельеф → объекты на карте (stepPickups) → статусы → жизнь. Мир тика —
+ * статика с рельефом и стенами огня на начало тика.
+ * Объекты заводятся лениво: число в состоянии не совпало с числом в ctx.pickups (полигон, разминка PvP) — initPickups
+ * на этом тике (руна — через 45 с от него).
  * Ввод очищается (sanitizeInput, кнопки — только ровно true); нажатие — переход false → true к прошлому тику.
  * Нет ввода от мага на этом тике — idleInput: стоит, кнопки отпущены, взгляд прежний (как в moveUnits).
  */
 export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<Record<UnitId, MatchInput>>>, ctx: MatchContext): MatchStep {
   const s = clonePlain(state as MatchState);
+  if (s.pickups.length !== (ctx.pickups?.length ?? 0)) s.pickups = initPickups(ctx.pickups ?? [], s.tick);
   const ev: MatchEvent[] = [];
   const tw = buildTickWorld(ctx.world, s);
   const t: TickCtx = {
@@ -68,6 +72,7 @@ export function stepMatch(state: Readonly<MatchState>, inputs: Readonly<Partial<
   stepProjectiles(s, t, SIM_HOOKS);
   stepZones(s, t, SIM_HOOKS);
   stepTerrain(s, t);
+  stepPickups(s, t);
   stepStatuses(s, t);
   stepLife(s, t);
   s.tick += 1;

@@ -21,7 +21,7 @@ const isNumber = (x: unknown): x is number => typeof x === "number" && Number.is
 const isRows = (x: unknown, n: number, ok: (row: unknown[]) => boolean): boolean =>
   Array.isArray(x) && x.every((row) => Array.isArray(row) && row.length === n && ok(row));
 
-/** Грубая проверка формы после decodeBinary: поля есть и нужных типов (game.match.units — массив). */
+/** Грубая проверка формы после decodeBinary: поля есть и нужных типов (game.match.units и pickups — массивы). */
 export function isSnapshot(x: unknown): x is SnapshotMsg {
   if (!isObject(x) || !Number.isSafeInteger(x.tick)) return false;
   const g = x.game;
@@ -29,7 +29,7 @@ export function isSnapshot(x: unknown): x is SnapshotMsg {
   if (!isNumber(g.phaseEnd) || typeof g.suddenDeath !== "boolean" || !isNumber(g.scoreLimit) || !isNumber(g.nextMageId) || !Array.isArray(g.results)) return false;
   const m = g.match;
   if (!isObject(m) || m.tick !== x.tick || !isNumber(m.nextId)) return false;
-  if (!Array.isArray(m.units) || !Array.isArray(m.projectiles) || !Array.isArray(m.zones) || !Array.isArray(m.terrain)) return false;
+  if (!Array.isArray(m.units) || !Array.isArray(m.projectiles) || !Array.isArray(m.zones) || !Array.isArray(m.terrain) || !Array.isArray(m.pickups)) return false;
   if (!m.units.every((u) => isObject(u) && isNumber(u.id))) return false;
   return (
     isRows(x.acks, 2, (r) => r.every(isNumber)) &&

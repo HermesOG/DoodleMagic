@@ -141,6 +141,15 @@ export const MAGE_REGEN = { delayS: 4, perS: 20, capFrac: 2 / 3 } as const;
 export const DUMMY = { hp: 170, runSpeed: 2, regenDelayS: 3, regenPerS: 85, respawnS: 3 } as const;
 export const MATCH = { fallCreditS: 5, mageRespawnS: 1 } as const;
 /**
+ * Объекты на карте (GDD 3; Р1–Р5 фазы 6). reachM — от точки объекта до бокса тела. Сфера: +heal HP, вернётся через
+ * respawnS. Руна: первая через firstS, дальше на отметках каждые everyS, объявление за warnS; ярость furyS — урон
+ * ×damageMul; за убийство носителя +killUlt к ульте.
+ */
+export const PICKUPS = {
+  orb: { heal: 35, respawnS: 15, reachM: 0.6 },
+  rune: { firstS: 45, everyS: 60, warnS: 10, furyS: 12, damageMul: 1.3, killUlt: 10, reachM: 0.8 },
+} as const;
+/**
  * Буфер нажатий (решение контролёра): нажатие Q, E, C или свежее нажатие ЛКМ, отклонённое перезарядкой или замахом,
  * которые снимутся за это время, ждёт и срабатывает на первом тике, когда каст станет возможен. Не успеют — отказ сразу.
  */

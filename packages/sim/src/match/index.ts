@@ -8,4 +8,5 @@ export * from "./terrain";
 export * from "./hooks";
 export * from "./dash";
 export * from "./ult";
+export * from "./pickups";
 export { flightTime, isAnchored, knockbackSpeed, knockbackSpeedFor, pullMul } from "./combat";

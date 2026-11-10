@@ -1,7 +1,8 @@
 import { DEFAULT_MOVE } from "../player";
 import { groundBelow } from "../raycast";
 import { TICK_HZ, type Vec3 } from "../types";
-import { CC_LIMITS, DUMMY, EARTH, ELEMENT_OF, KNOCKBACK, MAGE_REGEN, STATUS, STEAM, WATER, isUlt, ticks } from "./defs";
+import { CC_LIMITS, DUMMY, EARTH, ELEMENT_OF, KNOCKBACK, MAGE_REGEN, PICKUPS, STATUS, STEAM, WATER, isUlt, ticks } from "./defs";
+import { furyOnDeath, hasFury } from "./pickups";
 import { unitById } from "./state";
 import { spawnSteam } from "./steam";
 import { ultOnDamage, ultOnKill } from "./ult";
@@ -141,10 +142,11 @@ function steam(s: MatchState, t: TickCtx, u: Unit, owner: UnitId, ability: Abili
 /**
  * Наносит удар. Возвращает нанесённый урон: 0, если цель — сам источник, мертва, её нет или она под защитой после
  * появления (тогда ни урона, ни толчка, ни статусов, ни события hit).
- * Порядок: урон (+15 % по цели «В воздухе» от прежнего подброса) → отбрасывание (не под якорем; ×0,5 у мага Земли,
- * в иммунитете вбок ×1, вверх ×0,5; потолок 12 / 6 м, у ульт ×1,5 — 18 / 9 м) и удар о стену в канале → HP
- * и засчитывание → событие hit → заряд ульты → подброс, обездвиживание, замедление → «Мокрый», Горение и пар (Р9) →
- * буксир → «Круговорот» → смерть (цели +1 deaths, заряд за убийство и помощь).
+ * Порядок: урон (×1,3 у носителя ярости, затем +15 % по цели «В воздухе» от прежнего подброса) → отбрасывание (не под
+ * якорем; ×0,5 у мага Земли, в иммунитете вбок ×1, вверх ×0,5; потолок 12 / 6 м, у ульт ×1,5 — 18 / 9 м; ярость его не
+ * меняет) и удар о стену в канале → HP и засчитывание → событие hit → заряд ульты → подброс, обездвиживание,
+ * замедление → «Мокрый», Горение и пар (Р9) → буксир → «Круговорот» → смерть (цели +1 deaths, заряд за убийство
+ * и помощь, ярость снята и +10 убийце носителя).
  */
 export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
   if (h.source === h.target) return 0;
@@ -158,7 +160,10 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
   const el = h.ability === "burning" ? null : ELEMENT_OF[h.ability];
   const anchored = isAnchored(u, now);
   const air = st.airborne;
-  const amount = air ? h.damage * STATUS.airborne.damageMul : h.damage;
+  const src = unitById(s, h.source);
+  // ярость носителя (Р4 фазы 6) — на любой его урон, затем «В воздухе»: множители перемножаются
+  const base = src !== undefined && hasFury(src, now) ? h.damage * PICKUPS.rune.damageMul : h.damage;
+  const amount = air ? base * STATUS.airborne.damageMul : base;
 
   const knock: Knockback = { distM: 0, upM: 0 };
   if (h.knock && !anchored) {
@@ -178,7 +183,6 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
   u.hp -= amount;
   u.lastHitTick = now;
   u.lastHitBy = h.source;
-  const src = unitById(s, h.source);
   if (src?.mage) src.mage.stats.damage += amount;
   const killed = u.hp <= 0;
   t.ev.push({
@@ -263,6 +267,7 @@ export function applyHit(s: MatchState, t: TickCtx, h: HitSpec): number {
       courage(t, src);
     }
     ultOnKill(s, t, u, h.source);
+    furyOnDeath(s, t, u, h.source);
   }
   return amount;
 }

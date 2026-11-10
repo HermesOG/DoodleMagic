@@ -500,6 +500,10 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
     case "heal":
     case "reaction":
       return [];
+    // объекты на карте и ярость (фаза 6): отклик — задача 3, вид — по состоянию
+    case "pickup":
+    case "fury":
+      return [];
   }
 }
 

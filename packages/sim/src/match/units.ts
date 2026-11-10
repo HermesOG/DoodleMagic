@@ -6,13 +6,14 @@ import { volumeAt, type World } from "../world";
 import { applyHit, courage, endTow, respawnAt } from "./combat";
 import { DUMMY, ELEMENT_INFO, KNOCKBACK, MATCH, ULT_MOVE, ticks } from "./defs";
 import { NO_HOOKS, type SimHooks } from "./hooks";
+import { furyOnDeath } from "./pickups";
 import { createDummyUnit, createMageUnit, idleInput, rightXZ, unitById } from "./state";
 import { NOBODY, type Element, type MatchInput, type MatchState, type TickCtx, type Unit, type UnitId } from "./types";
 import { ultOnKill } from "./ult";
 
 /**
  * Юниты: движение по вводу и ИИ манекенов, канал отбрасывания, сброс в пропасть и возрождение.
- * Порядок в тике (его повторяет stepMatch): moveUnits → (снаряды, зоны, рельеф) → stepStatuses → stepLife.
+ * Порядок в тике (его повторяет stepMatch): moveUnits → (снаряды, зоны, рельеф, объекты на карте) → stepStatuses → stepLife.
  */
 
 /** Манекен полигона ходит 2 м/с (Р12). */
@@ -221,8 +222,9 @@ function respawned(s: MatchState, t: TickCtx, u: Unit): Unit {
 /**
  * Сброс: живой в зоне смерти или ниже killBelowY выбывает (маг +1 deaths, и когда упал сам); сброс засчитывается
  * последнему ударившему за 5 с (Р13), засчитанному магу — falls и «Кураж»; засчитанный сброс даёт заряд ульты, как
- * убийство (+6 и помощь, Р1 фазы 5). Возрождение: на respawnTick юнит
- * заменяется свежим (respawned) — по текущему состоянию: маги, вставшие раньше в этом тике, уже стоят на своих точках.
+ * убийство (+6 и помощь, Р1 фазы 5); сброс носителя ярости снимает её, засчитанному +10 (Р5 фазы 6).
+ * Возрождение: на respawnTick юнит заменяется свежим (respawned) — по текущему состоянию: маги, вставшие раньше
+ * в этом тике, уже стоят на своих точках.
  */
 export function stepLife(s: MatchState, t: TickCtx): void {
   const now = t.now;
@@ -245,6 +247,7 @@ export function stepLife(s: MatchState, t: TickCtx): void {
         courage(t, c);
       }
       if (credit !== NOBODY) ultOnKill(s, t, u, credit);
+      furyOnDeath(s, t, u, credit);
     } else if (now >= u.respawnTick) {
       const fresh = respawned(s, t, u);
       s.units[i] = fresh;

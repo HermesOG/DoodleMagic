@@ -1,6 +1,7 @@
 import type { ArenaData, Spawn } from "../types";
 import { ticks } from "./defs";
 import { matchContext, stepMatch } from "./match";
+import { initPickups } from "./pickups";
 import { clonePlain, createMageUnit, createMatchState } from "./state";
 import { NEVER, type Element, type MatchContext, type MatchEvent, type MatchInput, type MatchState, type Unit, type UnitId } from "./types";
 import { pickSpawn } from "./units";
@@ -145,8 +146,8 @@ export function startCountdown(g: Readonly<GameState>): GameState {
 
 /**
  * Старт боя: маги по возрастанию id заново — свежий маг той же стихии на pickSpawn среди уже расставленных в этом
- * старте (без точек в ctx — на своей точке), с защитой и нулевым счётом. Снаряды, зоны и рельеф убраны. На каждого
- * мага — событие respawn: вид поставит камеру и взгляд.
+ * старте (без точек в ctx — на своей точке), с защитой и нулевым счётом. Снаряды, зоны и рельеф убраны, объекты на
+ * карте заведены заново (initPickups). На каждого мага — событие respawn: вид поставит камеру и взгляд.
  */
 function startLive(game: GameState, ctx: MatchContext, ev: MatchEvent[]): void {
   const s = game.match;
@@ -164,6 +165,8 @@ function startLive(game: GameState, ctx: MatchContext, ev: MatchEvent[]): void {
   s.projectiles = [];
   s.zones = [];
   s.terrain = [];
+  // сферы снова на месте, руна — через 45 с от старта боя (Р2 фазы 6)
+  s.pickups = initPickups(ctx.pickups ?? [], now);
   game.phase = "live";
   game.phaseEnd = now + MATCH_TICKS;
   game.scoreLimit = scoreLimitFor(placed.length);

@@ -2,9 +2,10 @@ import { ELEMENTS, type Element, type MatchInput, type UnitId } from "@doodlemag
 
 /**
  * Версия сетевого протокола игры: хост и игрок разных версий вместе не играют. 2 — фаза 4: четыре стихии, прыжок
- * в looks; 3 — фаза 5: ульта на X (бит 32), заряд и каст ульты в снапшоте.
+ * в looks; 3 — фаза 5: ульта на X (бит 32), заряд и каст ульты в снапшоте; 4 — фаза 6: объекты на карте и ярость
+ * в снапшоте.
  */
-export const NET_VERSION = 3;
+export const NET_VERSION = 4;
 export const NAME_MAX = 16;
 /** Предел текстового сообщения игрока, знаков. */
 export const MAX_TEXT_CHARS = 4096;

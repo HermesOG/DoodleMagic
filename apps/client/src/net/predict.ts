@@ -119,6 +119,10 @@ export function eventKey(ev: MatchEvent): string {
       return `reaction:${ev.owner}:${ev.kind}`;
     case "ult":
       return `ult:${ev.unit}:${ev.ability}:${ev.phase}`;
+    case "pickup":
+      return `pickup:${ev.kind}:${ev.index}:${ev.phase}:${ev.unit}`;
+    case "fury":
+      return `fury:${ev.unit}:${ev.phase}:${ev.by}`;
     default:
       return String((ev as { type: unknown }).type); // чужая версия хоста: вид без подробностей
   }

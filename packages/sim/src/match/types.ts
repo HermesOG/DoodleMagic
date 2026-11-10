@@ -1,4 +1,4 @@
-import type { AABB, PlayerInput, PlayerState, Spawn, Vec3 } from "../types";
+import type { AABB, Pickup, PickupKind, PlayerInput, PlayerState, Spawn, Vec3 } from "../types";
 import type { World } from "../world";
 
 /**
@@ -55,6 +55,8 @@ export interface Statuses {
   staggerUntil: number;
   /** «Якорь» диска Отражения: толчок, подброс, буксир и тяга не действуют, пока now < anchoredUntil. */
   anchoredUntil: number;
+  /** Руна ярости (GDD 3): урон ×1,3, пока now < furyUntil; смерть снимает. */
+  furyUntil: number;
 }
 
 /** Буксир Хвата: тащит по XZ к (x, z) со скоростью speed, м/с, до endTick; без гравитации. */
@@ -160,11 +162,17 @@ export interface Terrain {
   solid: boolean; hp: number; maxHp: number;
 }
 
-/** tick — сколько тиков посчитано (следующий шаг считает тик с этим номером); units по возрастанию id. */
-export interface MatchState { tick: number; units: Unit[]; projectiles: Projectile[]; zones: Zone[]; terrain: Terrain[]; nextId: number }
+/** Объект на карте (фаза 6): лежит, пока now ≥ readyAt; взят — readyAt уходит вперёд. pos — точка арены (0,5 м над полом). */
+export interface PickupState { kind: PickupKind; pos: Vec3; readyAt: number }
+
+/**
+ * tick — сколько тиков посчитано (следующий шаг считает тик с этим номером); units по возрастанию id. pickups — объекты
+ * на карте в порядке MatchContext.pickups (stepMatch заводит их сам).
+ */
+export interface MatchState { tick: number; units: Unit[]; projectiles: Projectile[]; zones: Zone[]; terrain: Terrain[]; nextId: number; pickups: PickupState[] }
 
 export type ReactionKind = "steam" | "fireTornado" | "fireRampart" | "bog" | "boilOff" | "sandTornado";
-export type StatusKind = "burning" | "slow" | "root" | "airborne" | "wet";
+export type StatusKind = "burning" | "slow" | "root" | "airborne" | "wet" | "fury";
 export type RejectReason = "cooldown" | "busy" | "notGrounded" | "noTarget" | "rooted" | "uncharged";
 
 export type MatchEvent =
@@ -206,7 +214,11 @@ export type MatchEvent =
   /** Реакция стихий: облако пара, огненный смерч, «Огненный вал», «Топь» или «Выкипание»; zone — её зона. */
   | { type: "reaction"; kind: ReactionKind; owner: UnitId; zone: number; pos: Vec3 }
   /** Ульта: ready — заряд дошёл до 100; release — конец телеграфа; end — каст снят (кончился или маг умер). */
-  | { type: "ult"; unit: UnitId; ability: UltId; phase: "ready" | "release" | "end"; pos: Vec3; dir: Vec3 };
+  | { type: "ult"; unit: UnitId; ability: UltId; phase: "ready" | "release" | "end"; pos: Vec3; dir: Vec3 }
+  /** Объект на карте: warn — руна через 10 с; spawn — появился (unit NOBODY у обоих); take — взят магом unit. index — номер в state.pickups. */
+  | { type: "pickup"; kind: PickupKind; index: number; phase: "warn" | "spawn" | "take"; unit: UnitId; pos: Vec3 }
+  /** Ярость снята: end — время вышло; slain — носитель погиб, by — убийца или засчитанный сбросивший (+10 к ульте) или NOBODY. pos — подошва. */
+  | { type: "fury"; unit: UnitId; phase: "end" | "slain"; by: UnitId; pos: Vec3 };
 
 export interface MatchStep { state: MatchState; events: MatchEvent[] }
 
@@ -222,6 +234,8 @@ export interface MatchContext {
   readonly spawnShieldS?: number;
   /** Множитель заряда ульты (Р12): полигон 10, нет поля — 1. */
   readonly ultChargeMul?: number;
+  /** Объекты на карте: matchContext берёт их из арены. Нет поля — объектов нет. */
+  readonly pickups?: readonly Pickup[];
 }
 
 /**

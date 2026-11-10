@@ -8,7 +8,7 @@ export const NO_MATCH_INPUT: Readonly<MatchInput> = Object.freeze({ moveX: 0, mo
 export const idleInput = (u: Readonly<Unit>): MatchInput => ({ ...NO_MATCH_INPUT, yaw: u.move.yaw, pitch: u.move.pitch });
 export const freshStatuses = (): Statuses => ({
   burnPulses: 0, burnNext: 0, burnBy: NOBODY, slowUntil: 0, slowMul: 1, rootUntil: 0, airborne: false, noControlUntil: 0, immuneUntil: 0, shieldUntil: 0,
-  wetUntil: 0, steamReadyAt: 0, staggerUntil: 0, anchoredUntil: 0,
+  wetUntil: 0, steamReadyAt: 0, staggerUntil: 0, anchoredUntil: 0, furyUntil: 0,
 });
 
 function baseUnit(id: UnitId, kind: Unit["kind"], pos: Vec3, yaw: number, hp: number): Unit {
@@ -33,8 +33,8 @@ export function createDummyUnit(id: UnitId, spot: DummySpot): Unit {
   u.dummy = { spot: clonePlain(spot), dir: 0 };
   return u;
 }
-/** id снарядов, зон и рельефа — с 1000: не путаются с id юнитов в логах. */
-export const createMatchState = (units: Unit[]): MatchState => ({ tick: 0, units, projectiles: [], zones: [], terrain: [], nextId: 1000 });
+/** id снарядов, зон и рельефа — с 1000: не путаются с id юнитов в логах. Объектов на карте нет: их заводит stepMatch. */
+export const createMatchState = (units: Unit[]): MatchState => ({ tick: 0, units, projectiles: [], zones: [], terrain: [], nextId: 1000, pickups: [] });
 export const unitById = (s: Readonly<MatchState>, id: UnitId): Unit | undefined => s.units.find((u) => u.id === id);
 
 /** Глубокая копия простых данных. В отличие от JSON сохраняет −0 и Infinity. */
