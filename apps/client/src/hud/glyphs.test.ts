@@ -39,4 +39,9 @@ describe("element glyphs", () => {
     expect(new Set(shapes).size).toBe(ELEMENTS.length);
     for (const e of ELEMENTS) for (const w of attrs(glyphSvg(e), "stroke-width")) expect((Number(w) / 24) * 14).toBeGreaterThanOrEqual(1.4);
   });
+
+  it("gives no markup for an unknown element from the network", () => {
+    expect(glyphSvg('x"><img src=x onerror=alert(1)>' as never)).toBe("");
+    expect(glyphSvg("__proto__" as never)).toBe("");
+  });
 });

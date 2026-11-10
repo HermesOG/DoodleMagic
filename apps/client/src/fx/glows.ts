@@ -172,7 +172,7 @@ export function createGlowMeshes(gbuffer: FxGBuffer, max = 48): GlowMeshes {
   geometry.setAttribute("aG0", a0);
   geometry.setAttribute("aG1", a1);
   geometry.setAttribute("aG2", a2);
-    const burn = INK_STYLE.haloBurn.wash;
+  const burn = INK_STYLE.haloBurn.wash;
   const material = createFxMaterial({
     name: "fx-glows",
     vertexShader: GLOW_VERT,

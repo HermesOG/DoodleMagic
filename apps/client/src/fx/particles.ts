@@ -4,10 +4,6 @@ import { FX_ORDER, GLAZE_TINT, createFxMaterial, type FxGBuffer, type TimeUnifor
 import { RIM, type ParticleSpec } from "./particleKit";
 
 /**
- * Место под n новых частиц в кольце ёмкостью cap, начиная с head: один или два диапазона (с переносом через
- * конец). Больше cap за раз не помещается — n обрезается до cap. Возвращает новую голову кольца.
- */
-/**
  * Флаги частицы — в атрибуте тяжести, без нового атрибута: aGrav = тяжесть + FLAG_STEP × флаги (|тяжесть| < 50).
  * Штрих кисти, чужая и своя магия (кайма V3), своё у прицела (центр кадра чист, V4).
  */
@@ -30,6 +26,10 @@ export function unpackGravity(g: number): { gravity: number; flags: number } {
 const v3 = (c: readonly [number, number, number]): string => `vec3(${c.map((x) => glslFloat(Math.round(x * 1e4) / 1e4)).join(", ")})`;
 const tanDeg = (d: number): number => Math.tan((d * Math.PI) / 180);
 
+/**
+ * Место под n новых частиц в кольце ёмкостью cap, начиная с head: один или два диапазона (с переносом через
+ * конец). Больше cap за раз не помещается — n обрезается до cap. Возвращает новую голову кольца.
+ */
 export function allocateRing(head: number, cap: number, n: number): { head: number; ranges: { start: number; count: number }[] } {
   const k = Math.max(0, Math.min(Math.floor(n), cap));
   if (k === 0 || cap <= 0) return { head, ranges: [] };
@@ -156,9 +156,13 @@ void main() {
   // квадрат
   float r2 = kind > 2.5 ? max(vUv.x * vUv.x, vUv.y * vUv.y) : dot(vUv, vUv);
   if (r2 >= 1.0) discard;
-  float vis = fxVisibility(vSoft) * vNear;
-  // своё у прицела (Дыхание изнутри, V4): центр кадра остаётся чистым
-  if ((flags & FLAG_CLEAR) != 0) vis *= smoothstep(CLEAR_TAN0, CLEAR_TAN1, length(vView.xy) / max(-vView.z, 1e-3));
+  // своё у прицела (Дыхание изнутри, V4): центр кадра остаётся чистым — дешёвая проверка угла до выборок G-буфера
+  float clear = 1.0;
+  if ((flags & FLAG_CLEAR) != 0) {
+    clear = smoothstep(CLEAR_TAN0, CLEAR_TAN1, length(vView.xy) / max(-vView.z, 1e-3));
+    if (clear <= 0.0) discard;
+  }
+  float vis = fxVisibility(vSoft) * vNear * clear;
   if (vis <= 0.0) discard;
   vec3 rgb = vColor.rgb;
   float a = vColor.a;

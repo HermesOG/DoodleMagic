@@ -28,5 +28,7 @@ const BODY: Readonly<Record<Element, string>> = {
 
 /** SVG-знак стихии e: декоративный (aria-hidden) — имя стихии всегда стоит рядом текстом. */
 export function glyphSvg(e: Element): string {
+  // стихия может прийти от хоста в снимке — в разметку попадает только известное имя
+  if (!Object.hasOwn(BODY, e)) return "";
   return `<svg class="gl gl-${e}" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false">${BODY[e]}</svg>`;
 }
