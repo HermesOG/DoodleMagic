@@ -133,8 +133,11 @@ export const BOT_RULES = Object.freeze({
    * на edgeS.
    */
   dangerM: 3, edgeS: 0.6, pushNearM: 8, pushM: Object.freeze({ fire: 20, earth: 0, air: 9, water: 15 } as Readonly<Record<Element, number>>),
-  /** Каст: допуск взгляда, градусы, и сколько живёт план после задержки, с. */
-  castTolDeg: 6, planTtlS: 2,
+  /**
+   * Каст: допуск взгляда, градусы, и сколько живёт план после задержки, с. Наземный каст — точка под прицелом не дальше
+   * groundTolM от точки плана.
+   */
+  castTolDeg: 6, planTtlS: 2, groundTolM: 1,
   /** ЛКМ: держится, пока взгляд ближе fireTolDeg + σ к точке прицела. */
   fireTolDeg: 3,
   /** Руна: не больше runeBots ботов; сфера — если нет врага ближе orbSafeM. */

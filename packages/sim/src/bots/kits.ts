@@ -109,6 +109,13 @@ function voidBehind(v: BotView, t: Perceived, maxM: number): number {
   return Infinity;
 }
 
+/** Толчок на distM по линии «бот → цель» кончается над пустотой (не на мосту и не на полу за ущельем). */
+function pushEndsOverVoid(v: BotView, t: Perceived, distM: number): boolean {
+  const p = v.self.move.body.pos;
+  const u = unit2(t.pos.x - p.x, t.pos.z - p.z);
+  return u !== null && voidDistM(v.nav, { x: t.pos.x + u.x * distM, y: t.pos.y, z: t.pos.z + u.z * distM }) <= 0;
+}
+
 /** Стена за целью по линии «бот → цель» ближе maxM (удар о стену после толчка). */
 function wallBehind(v: BotView, t: Perceived, maxM: number): boolean {
   const p = v.self.move.body.pos;
@@ -242,13 +249,18 @@ function aheadOfSelf(v: BotView, m: number): Vec3 {
  * Постановка под сброс (Р9, ГД 4): цель у кромки (≤ ringM) — встать за ней со стороны пола на standM, чтобы толчок
  * шёл к пустоте. Сама точка — с запасом до кромки (dangerM). Ученик под сброс не ставит.
  */
-function ringStance(v: BotView, ringM: number, standM: number, slotReadyIn: number): Vec3 | null {
+function ringStance(v: BotView, ringM: number, standM: number, slotReadyIn: number, minM = standM): Vec3 | null {
   const t = v.target;
   if (isNovice(v) || !t || !t.visible || t.voidM > ringM || slotReadyIn > 1) return null;
   const d = voidDir(v.nav, t.pos);
   if (!d) return null;
-  const q = { x: t.pos.x - d.x * standM, y: t.pos.y, z: t.pos.z - d.z * standM };
-  return voidDistM(v.nav, q) >= 3 ? q : null;
+  // от standM ближе к цели по 0,5 м до minM: точка, откуда цель видна (не за укрытием, иначе удар не пройдёт)
+  const chest = { x: t.pos.x, y: t.pos.y + CHEST_M, z: t.pos.z };
+  for (let k = standM; k >= minM - 1e-9; k -= 0.5) {
+    const q = { x: t.pos.x - d.x * k, y: t.pos.y, z: t.pos.z - d.z * k };
+    if (voidDistM(v.nav, q) >= 3 && lineOfSight(v.world, { x: q.x, y: q.y + 1.6, z: q.z }, chest)) return q;
+  }
+  return null;
 }
 const readyIn = (v: BotView, slot: Slot): number => Math.max(0, v.self.mage!.ready[slot] - v.now) / 60;
 
@@ -301,11 +313,11 @@ function fireDecide(v: BotView, rand: () => number): CastPlan | null {
   // C: поперёк моста по цели на нём или между собой и врагом при отходе
   const tc = visibleTarget(v, 3, FIRE.fireWall.rangeM);
   if (tc && ready(v, "c")) {
-    if (isNovice(v) || tc.voidM < 1.6) return at("c", tc, BODY_DY, {});
+    if (isNovice(v) || tc.voidM < 1.6) return at("c", tc, BODY_DY, {}, { groundRangeM: FIRE.fireWall.rangeM });
     if (v.self.hp < v.self.maxHp * 0.45 && tc.dist <= 12) {
       const p = v.self.move.body.pos;
       const k = Math.min(6, tc.dist * 0.5) / tc.dist;
-      return { slot: "c", aim: { x: p.x + (tc.pos.x - p.x) * k, y: Math.min(p.y, tc.pos.y), z: p.z + (tc.pos.z - p.z) * k } };
+      return { slot: "c", aim: { x: p.x + (tc.pos.x - p.x) * k, y: Math.min(p.y, tc.pos.y), z: p.z + (tc.pos.z - p.z) * k }, groundRangeM: FIRE.fireWall.rangeM };
     }
   }
   return null;
@@ -358,11 +370,12 @@ function earthDecide(v: BotView, rand: () => number): CastPlan | null {
   const tq = visibleTarget(v, 0, EARTH.stonePillar.rangeM - 0.5);
   if (ground && tq && ready(v, "q") && !chained(v, tq)) {
     const tele = { windupS: EARTH.stonePillar.telegraphS };
-    if (isNovice(v)) return at("q", tq, BODY_DY, {});
+    const g = { groundRangeM: EARTH.stonePillar.rangeM };
+    if (isNovice(v)) return at("q", tq, BODY_DY, {}, g);
     const landing = !tq.airborne && tq.vel.y < -2;
-    if (speedXZ(tq) < STILL_MS || tq.ward || tq.ult !== null || tq.windup !== null || landing || tq.rooted) return at("q", tq, BODY_DY, tele, { tolDeg: 3 });
+    if (speedXZ(tq) < STILL_MS || tq.ward || tq.ult !== null || tq.windup !== null || landing || tq.rooted) return at("q", tq, BODY_DY, tele, { tolDeg: 3, ...g });
     // Архимаг: «Жонглёр» — столб, затем камень в подброшенного (камень — ЛКМ с дугой)
-    if (v.params.combos && tq.dist <= 14) return at("q", tq, BODY_DY, tele, { tolDeg: 3 });
+    if (v.params.combos && tq.dist <= 14) return at("q", tq, BODY_DY, tele, { tolDeg: 3, ...g });
   }
   return null;
 }
@@ -417,10 +430,13 @@ function airDecide(v: BotView, rand: () => number): CastPlan | null {
   const tq = visibleTarget(v, 0, isNovice(v) ? GU.rangeM : 14);
   if (tq && ready(v, "q") && !chained(v, tq) && !(tq.element === "water" && tq.ward)) {
     if (isNovice(v)) return at("q", tq, CHEST_M, {}, { tolDeg: 12 });
-    const behind = tq.element === "earth" ? 2.5 : 5;
-    const ring = ringOut(v, tq, behind);
-    // в упор: кромка за целью ≤ 5 м (Земля — 2,5) или стена ≤ 4 м; рядом (≤ 4 м) — отбросить
-    if (tq.dist <= 6 && (ring || wallBehind(v, tq, 4) || tq.dist <= 4)) return at("q", tq, CHEST_M, {}, { tolDeg: 10 });
+    const behind = gustBehindM(tq);
+    // сброс: кромка за целью по линии ≤ behind, и толчок 7 м кончается над пустотой (по диагонали — не на мост)
+    const ring = ringOut(v, tq, behind) && pushEndsOverVoid(v, tq, GU.knockback.distM);
+    // в упор: кромка за целью ≤ 5 м (Земля — 2,5) или стена ≤ 4 м; рядом (≤ 4 м) — отбросить. Цель у кромки — не
+    // отбрасывать вкось: бот заходит за неё (стойка), пока линия толчка не поведёт в пустоту
+    const atKerb = tq.voidM <= behind + 0.5;
+    if (tq.dist <= 6 && (ring || (!atKerb && (wallBehind(v, tq, 4) || tq.dist <= 4)))) return at("q", tq, CHEST_M, {}, { tolDeg: 10 });
     // заход: замах с 10–14 м, Взмах к цели в замахе (заряд останется)
     if (tq.dist >= 10 && ring && charges >= 2 && !m.dash) return at("q", tq, CHEST_M, {}, { tolDeg: 10 });
     // Архимаг: Смерч, потом Порыв — цель в своём Смерче
@@ -430,11 +446,18 @@ function airDecide(v: BotView, rand: () => number): CastPlan | null {
   const tc = visibleTarget(v, 0, AIR.tornado.rangeM - 1);
   if (tc && ready(v, "c") && !chained(v, tc)) {
     const tele = { windupS: AIR.tornado.growS };
-    if (isNovice(v)) return at("c", tc, BODY_DY, {});
-    if (tc.voidM <= RING_M || speedXZ(tc) < STILL_MS || tc.ult !== null) return at("c", tc, BODY_DY, tele, { tolDeg: 4 });
+    const g = { groundRangeM: AIR.tornado.rangeM };
+    if (isNovice(v)) return at("c", tc, BODY_DY, {}, g);
+    // цель под сброс Порывом (у кромки), Порыв готов или вот-вот — Смерч не ставит: он утащит цель с линии толчка,
+    // бот заходит за неё (стойка) и бьёт Q; Смерч у кромки — только когда Порыва ждать долго
+    if (readyIn(v, "q") <= 1 && tc.voidM <= gustBehindM(tc) + 0.5 && !chained(v, tc)) return null;
+    if (tc.voidM <= RING_M || speedXZ(tc) < STILL_MS || tc.ult !== null) return at("c", tc, BODY_DY, tele, { tolDeg: 4, ...g });
   }
   return null;
 }
+
+/** Кромка за целью для сброса Порывом не дальше этого, м: Земля тяжелее — 2,5, остальные — 5. */
+const gustBehindM = (t: Perceived): number => (t.element === "earth" ? 2.5 : 5);
 
 /** Своя зона kind с центром ближе rM к точке. */
 function ownZoneNear(v: BotView, kind: "tornado" | "spring", p: Vec3, rM: number): boolean {
@@ -497,7 +520,7 @@ function waterDecide(v: BotView, rand: () => number): CastPlan | null {
       return { slot: "c", aim: aheadOfSelf(v, 1.5), tolDeg: 8 };
     }
     const tb = visibleTarget(v, 3, WATER.spring.rangeM - 1);
-    if (tb && tb.voidM < 2) return at("c", tb, BODY_DY, { windupS: WATER.spring.telegraphS }, { tolDeg: 4 });
+    if (tb && tb.voidM < 2) return at("c", tb, BODY_DY, { windupS: WATER.spring.telegraphS }, { tolDeg: 4, groundRangeM: WATER.spring.rangeM });
   }
   // Q: Хват — цель в 6–14 м (стащить летуна, втянуть в Родник)
   const tq = visibleTarget(v, isNovice(v) ? 0 : 6, WG.projectile.rangeM - 1);
@@ -512,7 +535,12 @@ function waterDecide(v: BotView, rand: () => number): CastPlan | null {
 /** Огонь под сброс: за целью у кромки на 9 м — шар толкнёт к пустоте. */
 const fireStance = (v: BotView): Vec3 | null => ringStance(v, RING_M, 9, readyIn(v, "q"));
 /** Воздух: заход на 5 м за цель у кромки (Порыв 7 м), пока Порыв почти готов. */
-const airStance = (v: BotView): Vec3 | null => ringStance(v, v.target?.element === "earth" ? 2.5 : 5, 5, readyIn(v, "q"));
+const airStance = (v: BotView): Vec3 | null => {
+  if (!v.target) return null;
+  // в замахе своего Порыва стойка держится (Q уже на перезарядке): бот стоит на линии до выпуска
+  const rin = v.self.mage!.windup?.ability === "gust" ? 0 : readyIn(v, "q");
+  return ringStance(v, gustBehindM(v.target), 5, rin, 2.5);
+};
 
 // ---------------------------------------------------------------- киты
 

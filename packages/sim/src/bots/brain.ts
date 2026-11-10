@@ -4,6 +4,7 @@ import { scoreOf } from "../match/rules";
 import { NO_MATCH_INPUT, aimDir, clonePlain, eyeOf, idleInput, rightXZ, unitById } from "../match/state";
 import { NEVER, NOBODY, type AbilityId, type Element, type MatchContext, type MatchInput, type MatchState, type Slot, type Unit, type UnitId, type UltId } from "../match/types";
 import { forwardXZ } from "../player";
+import { raycast } from "../raycast";
 import { TICK_DT, TICK_HZ, type Vec3 } from "../types";
 import type { World } from "../world";
 import { BOT_KITS, type BotKit, type BotPrimary } from "./kits";
@@ -55,6 +56,10 @@ export interface BotPlan {
   holdJump: number;
   /** План спасения над пустотой: новое спасение его не перебивает. */
   rescue: boolean;
+  /** Наземный каст: дальность для проверки точки под прицелом на тике нажатия (0 — не наземный). */
+  groundRangeM: number;
+  /** Без задержки уровня (спасение, уворот, ульта): жмётся и в своём замахе. */
+  urgent: boolean;
 }
 
 /** Память бота — простые данные (JSON), её держит хост. */
@@ -279,6 +284,9 @@ function bookkeeping(c: Ctx): void {
     marks.push(k);
   }
   b.marks = marks;
+  // маг ушёл из матча (вышел, бота вытеснил человек) — забыть сразу, а не на мысли: цель в claims не висит лишние тики
+  if (b.memory.some((m) => !unitById(s, m.id))) b.memory = b.memory.filter((m) => unitById(s, m.id) !== undefined);
+  if (b.target !== NOBODY && !unitById(s, b.target)) dropTarget(b);
   const lonely: { id: UnitId; since: number }[] = [];
   for (const h of w.humans) {
     const v = unitById(s, h);
@@ -766,7 +774,8 @@ function toPlan(c: Ctx, p: CastPlan, rescue = false): BotPlan {
     // в памяти — без Infinity (JSON): скорость 0 — удар без полёта
     trackShot: { speed: p.track?.speed ?? 0, gravity: p.track?.gravity ?? 0, rangeM: 0, windupS: p.track?.windupS ?? 0, instant: !((p.track?.speed ?? 0) > 0) },
     move: p.move ? { x: p.move.x, z: p.move.z } : null, jump: p.jump === true, tolDeg: p.tolDeg ?? R.castTolDeg, notBefore, until: notBefore + ticks(p.ttlS ?? R.planTtlS),
-    moveM: p.moveM ?? 0, holdJump: p.holdJumpS ? ticks(p.holdJumpS) : 0, rescue,
+    moveM: p.moveM ?? 0, holdJump: p.holdJumpS ? ticks(p.holdJumpS) : 0, rescue, groundRangeM: p.groundRangeM ?? 0,
+    urgent: p.urgent === true,
   };
 }
 
@@ -881,7 +890,10 @@ function combatDir(c: Ctx, tm: BotMemory): { x: number; z: number } | null {
     const sx = st.x - p.x;
     const sz = st.z - p.z;
     const sd = Math.sqrt(sx * sx + sz * sz);
-    if (sd > 1) return norm2(sx / sd - uz * b.strafe * 0.3, sz / sd + ux * b.strafe * 0.3);
+    // свой замах (Порыв под сброс): к точке прямо и стоять на ней — линия толчка не уходит вбок со стрейфом
+    const winding = c.me.mage!.windup !== null;
+    if (sd > 1) return winding ? { x: sx / sd, z: sz / sd } : norm2(sx / sd - uz * b.strafe * 0.3, sz / sd + ux * b.strafe * 0.3);
+    if (winding) return sd > 0.3 ? { x: sx / sd, z: sz / sd } : null;
     return norm2(-uz * b.strafe * 0.4 + sx * 0.5, ux * b.strafe * 0.4 + sz * 0.5);
   }
   const radial = d < lo ? -1 : d > hi ? 1 : clampN((d - mid) / ((hi - lo) / 2), -1, 1) * 0.5;
@@ -989,7 +1001,29 @@ function angleTo(eye: Vec3, yaw: number, pitch: number, q: Vec3): number {
   return Math.acos(clampN((d.x * dx + d.y * dy + d.z * dz) / l, -1, 1)) / DEG;
 }
 
+/**
+ * Куда ляжет наземный каст по взгляду (yaw, pitch) — как видит игрок по прицелу (aimGround): луч на rangeM ловит тело
+ * цели (по памяти, body — её ступни) — её ступни; иначе первое попадание в мир; ничего — конец дальности. Только XZ.
+ */
+function groundLanding(c: Ctx, eye: Vec3, yaw: number, pitch: number, rangeM: number, body: Vec3 | null): { x: number; z: number } {
+  const d = aimDir(yaw, pitch);
+  const hit = raycast(c.world(), eye, d, rangeM, "shot");
+  const wallT = hit ? hit.dist : rangeM;
+  const h2 = d.x * d.x + d.z * d.z;
+  if (body && h2 > 1e-9) {
+    // точка луча, ближайшая по XZ к оси тела, — внутри тела и до стены
+    const hw = c.me.move.body.halfW;
+    const t = clampN(((body.x - eye.x) * d.x + (body.z - eye.z) * d.z) / h2, 0, wallT);
+    const y = eye.y + d.y * t;
+    if (Math.abs(eye.x + d.x * t - body.x) <= hw && Math.abs(eye.z + d.z * t - body.z) <= hw && y >= body.y && y <= body.y + c.me.move.body.height) return { x: body.x, z: body.z };
+  }
+  return hit ? { x: hit.point.x, z: hit.point.z } : { x: eye.x + d.x * rangeM, z: eye.z + d.z * rangeM };
+}
+
 // ---------------------------------------------------------------- шаг
+
+/** Без полёта и замаха: aimPoint с ним — где цель по памяти сейчас (её ступни при dy 0). */
+const STILL_SHOT: BotPrimary = Object.freeze({ speed: 0, gravity: 0, rangeM: 0, windupS: 0, instant: true });
 
 function slotReady(me: Readonly<Unit>, slot: "q" | "e" | "c" | "x", now: number): boolean {
   const m = me.mage!;
@@ -1165,13 +1199,27 @@ export function stepBot(bot: Readonly<BotState>, s: Readonly<MatchState>, w: Bot
   if (plan) {
     if (now > plan.until) b.plan = null;
     else if (now >= plan.notBefore) {
-      const ready = (plan.slot === null || (slotReady(me, plan.slot, now) && !m.held[plan.slot])) && (!plan.jump || !me.move.jumpHeld);
       const aimed = plan.aim !== null || plan.track !== NOBODY;
-      const aligned = !aimed || (look !== null && angleTo(eye, yaw, pitch, look) <= plan.tolDeg);
+      // прицельный каст по плану не жмётся в своём замахе или рывке: игра держит нажатие в буфере, и каст уходит
+      // позже — со взглядом того тика, уже не на точку плана (столб улетал на всю дальность)
+      const free = !aimed || plan.urgent || !busy;
+      const ready = free && (plan.slot === null || (slotReady(me, plan.slot, now) && !m.held[plan.slot])) && (!plan.jump || !me.move.jumpHeld);
+      let aligned = !aimed || (look !== null && angleTo(eye, yaw, pitch, look) <= plan.tolDeg);
+      // наземный каст: точка под прицелом — у точки плана или под телом цели, а не в укрытии перед собой (столб под
+      // себя за стеной) и не в конце дальности за промахнувшимся лучом
+      if (aligned && look && plan.groundRangeM > 0) {
+        const pm = plan.track !== NOBODY ? memOf(b, plan.track) : undefined;
+        const body = pm ? aimPoint(c, pm, 0, STILL_SHOT) : null;
+        const at = groundLanding(c, eye, yaw, pitch, plan.groundRangeM, body);
+        const near = (q: { x: number; z: number }): boolean => dist2(at, q) <= R.groundTolM * R.groundTolM;
+        aligned = near(look) || (body !== null && near(body));
+      }
       // рывок по отложенному плану: бот с тех пор сдвинулся — приземление проверяется заново (Р9)
       if (ready && plan.move && plan.moveM > 0 && !dashLandingOk(nav, p, plan.move, plan.moveM)) b.plan = null;
       else if (ready && aligned) {
         if (plan.slot) btn[plan.slot] = true;
+        // ЛКМ на том же тике начала бы замах раньше слота (порядок слотов: ЛКМ первой) — и слот ушёл бы в буфер
+        if (aimed && !plan.urgent) primary = false;
         if (plan.jump) jump = true;
         if (plan.jump && plan.holdJump > 0) b.jumpHoldUntil = now + plan.holdJump;
         if (plan.move) dir = { x: plan.move.x, z: plan.move.z };
