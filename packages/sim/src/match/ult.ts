@@ -14,8 +14,11 @@ import { NOBODY, type DamageSource, type Element, type MatchInput, type MatchSta
 const ULT_OF: Readonly<Record<Element, UltId>> = Object.freeze({ fire: "dragonBreath", earth: "tectonicRift", air: "hurricane", water: "tsunami" });
 const PASSIVE_TICKS = ticks(ULT_CHARGE.passiveEveryS); // 360
 const ASSIST_TICKS = ticks(ULT_CHARGE.assistS); // 300
-/** Дробный заряд: ближе этого к 100 — уже 100 (сумма дробей 1/15 не должна застрять на 99,999…). */
-const FULL_EPS = 1e-9;
+/**
+ * Дробный заряд: ближе этого к 100 — уже 100 (сумма дробей 1/15 не должна застрять на 99,999…). Не меньше шага
+ * округления снапшота (1e−5): иначе игрок получил бы ровно 100 и предсказал каст, который хост отклонит.
+ */
+const FULL_EPS = 1e-5;
 
 const copy = (v: Vec3): Vec3 => ({ x: v.x, y: v.y, z: v.z });
 
