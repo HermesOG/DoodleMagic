@@ -145,6 +145,36 @@ export const WATER_RECIPES: Readonly<Record<WaterSoundId, Recipe>> = {
       tone("sine", 1200, 1350, 0.3, 0.14, { attack: 0.03, delay: 0.06 }),
     ],
   },
+  // рост Цунами 0,8 с: шум воды поднимается 300 → 1200 Гц до самого выпуска, под ним — нарастающее тело 55 → 95 Гц
+  // (наушники), омывающий шорох и бульканье
+  tsunamiRise: {
+    reverb: REVERB_SEND.large,
+    layers: [
+      noise("bandpass", 300, 1200, 0.8, 0.6, { q: 1.2, attack: 0.65, ...SIG }),
+      tone("sine", 55, 95, 0.8, 0.35, { attack: 0.6 }),
+      noise("lowpass", 400, 900, 0.8, 0.3, { q: 0, attack: 0.55 }),
+      noise("bandpass", 800, 600, 0.6, 0.15, { q: 1, delay: 0.2, clicks: 6 }),
+    ],
+  },
+  // зерно рокота хода 0,5 с раз в 0,4 с (Р15): гул воды 450–700 Гц и низ — зёрна перекрываются, волна рокочет
+  tsunamiRoll: {
+    vary: 0.05,
+    layers: [
+      noise("bandpass", 450, 700, 0.5, 0.45, { q: 1.5, attack: 0.15, ...SIG }),
+      noise("lowpass", 250, 180, 0.5, 0.4, { q: 1, attack: 0.15 }),
+      tone("sine", 70, 60, 0.5, 0.2, { attack: 0.15 }),
+    ],
+  },
+  // удар волны: обвал воды 1,5 → 0,35 кГц, тяжёлое тело 130 → 50 Гц и брызги (крупная ступень, реверб 0,35)
+  tsunamiHit: {
+    vary: 0.04,
+    reverb: REVERB_SEND.large,
+    layers: [
+      noise("lowpass", 1500, 350, 0.55, 0.95, { q: 1, attack: 0.003, sweep: 0.6, ...SIG }),
+      tone("sine", 130, 50, 0.3, 0.7, { attack: 0.002, sweep: 0.5, drive: 1.5 }),
+      noise("bandpass", 900, 500, 0.5, 0.35, { q: 1, clicks: 10 }),
+    ],
+  },
 };
 
 /** Подписи кнопок прослушки (audition.ts). */
@@ -167,4 +197,7 @@ export const WATER_SOUND_LABELS: Readonly<Record<WaterSoundId, string>> = {
   springBubble: "Родник: журчание",
   steamHiss: "Пар",
   heal: "Лечение",
+  tsunamiRise: "Цунами: рост",
+  tsunamiRoll: "Цунами: рокот",
+  tsunamiHit: "Цунами: удар",
 };

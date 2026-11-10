@@ -3,7 +3,8 @@ import { AIR, forwardXZ, rightXZ, type Unit, type UnitId, type Vec3, type Zone }
 import { createInkMaterial } from "../render/gbuffer";
 import { INK } from "../render/palette";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
-import { FX_COLOR, KIND, type Kind, type ParticleSpec, type Rng } from "./particleKit";
+import { FX_COLOR, KIND, UP, spawn, type Kind, type ParticleSpec, type Rng } from "./particleKit";
+import { AIR_STREAM } from "./presets.air";
 
 /*
  * Эффекты Воздуха (02-air, «Читается»):
@@ -12,7 +13,11 @@ import { FX_COLOR, KIND, type Kind, type ParticleSpec, type Rng } from "./partic
  * - Смерч: 0,5 с по полу раскручивается кольцо штрихов и пыли, дальше — столб ветра по спирали (≤ 60 частиц/с),
  *   кольцо пыли по краю диска (тяга) и свечение столба без света; огненный смерч — пламя в столбе и свет огня;
  * - Взмах: полоса ветра по траектории рывка.
+ * - Ураган (ульта, фаза 5): весь замах (ult.cast до releaseTick) штрихи ветра и пыль кружат и стягиваются к магу по
+ *   спирали с круга 10 м (≤ 80 частиц/с), у чужого — растущее свечение вихря без света; на выпуске (всплеск
+ *   hurricaneBlast) по кругу уходит кольцо свечения с 1 до 10 м за 0,25 с.
  * Свой меш один — InstancedMesh лент (+1 вызов); частицы — через общий пул (emit), свечение — через общий список.
+ * Ураган новых мешей не добавляет (+0 вызовов).
  */
 
 /** Звеньев в ленте, длина звена, м (готовая и в парении — длиннее, развевается). */
@@ -146,6 +151,49 @@ export function vortexParticles(z: Zone, tick: number, nowS: number, n: { grow: 
 
 const isVortex = (z: Zone): boolean => z.kind === "tornado" || z.kind === "fireTornado" || z.kind === "sandTornado";
 
+/** Темп стяжки замаха Урагана, в секунду: штрихи ветра и пыль (вместе ≤ 80). */
+export const GATHER_RATE = { wind: 56, dust: 20 } as const;
+/** Стяжка начинается с круга Урагана (10 м) и к выпуску сходится до 1,5 м. */
+const GATHER_END_M = 1.5;
+/** Кольцо свечения выпуска: с 1 до 10 м за 0,25 с (как кольцо штрихов hurricaneBlast), гаснет к 0,3 с; точек на круге. */
+export const BLAST_RING_S = 0.25;
+const BLAST_GLOW_S = 0.3;
+const BLAST_GLOWS = 6;
+
+/**
+ * Доля замаха Урагана мага u на дробном тике: 0 — каст, 1 — выпуск. null — замаха нет: нет каста Урагана, маг
+ * мёртв или выпуск уже был (tick ≥ releaseTick).
+ */
+export function hurricaneWindup(u: Unit, tick: number): number | null {
+  const c = u.mage?.ult.cast;
+  if (!c || c.ability !== "hurricane" || !u.alive || tick >= c.releaseTick) return null;
+  return Math.min(1, Math.max(0, (tick - c.startTick) / Math.max(1, c.releaseTick - c.startTick)));
+}
+
+/**
+ * Частицы стяжки за кадр (n — сколько каждого вида, дробные остатки копит вызывающий): на круге вокруг ног мага c,
+ * радиус сходится с 10 м к 1,5 м по доле замаха k. Скорость — по касательной против часовой (вид сверху) и к магу,
+ * к выпуску быстрее: кольцо крутится и стягивается. Штрихи — на высоте 0,3–2,5 м, пыль — по полу. out — куда писать.
+ */
+export function hurricaneGather(c: Vec3, k: number, n: { wind: number; dust: number }, rng: Rng, out: ParticleSpec[] = []): ParticleSpec[] {
+  const R = AIR.hurricane.radiusM;
+  const base = R - (R - GATHER_END_M) * Math.min(1, Math.max(0, k));
+  const vt = 6 + 4 * k;
+  const vin = 7 + 5 * k;
+  const total = n.wind + n.dust;
+  for (let i = 0; i < total; i++) {
+    const dust = i >= n.wind;
+    const a = rng() * Math.PI * 2;
+    const cx = Math.cos(a);
+    const cz = Math.sin(a);
+    const r = base * (0.85 + 0.3 * rng());
+    const p = spawn(dust ? AIR_STREAM.gatherDust : AIR_STREAM.gatherWind, { x: c.x + cx * r, y: c.y + (dust ? 0.05 : 0.3 + 2.2 * rng()), z: c.z + cz * r }, UP, rng);
+    p.vel = { x: -cz * vt - cx * vin, y: dust ? 0.2 : 0.3 * rng(), z: cx * vt - cz * vin };
+    out.push(p);
+  }
+  return out;
+}
+
 export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
   const geom = new BoxGeometry(1, 1, 1);
   const inks = new InstancedBufferAttribute(new Float32Array(MAX_SEGS), 1);
@@ -175,6 +223,57 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
   const liveWakes = new Set<UnitId>();
   const due = { grow: 0, column: 0, rim: 0, flame: 0 };
   const wakeOut: ParticleSpec[] = [];
+  /** Дробные остатки темпа стяжки Урагана по магу; маги, у которых замах идёт в этом кадре. */
+  const gatherAcc = new Map<UnitId, { wind: number; dust: number }>();
+  const liveGathers = new Set<UnitId>();
+  const gatherDue = { wind: 0, dust: 0 };
+  const gatherOut: ParticleSpec[] = [];
+  /** Выпуски Урагана (центр кольца и часы рождения) — по всплеску hurricaneBlast; не больше четырёх разом. */
+  const blasts: { x: number; y: number; z: number; bornS: number }[] = [];
+
+  function drawHurricanes(f: ElementVfxFrame): void {
+    liveGathers.clear();
+    for (const it of f.units) {
+      const k = hurricaneWindup(it.u, f.tick);
+      if (k === null) continue;
+      liveGathers.add(it.id);
+      let a = gatherAcc.get(it.id);
+      if (!a) {
+        a = { wind: 0, dust: 0 };
+        gatherAcc.set(it.id, a);
+      }
+      a.wind += f.dt * GATHER_RATE.wind;
+      a.dust += f.dt * GATHER_RATE.dust;
+      gatherDue.wind = Math.floor(a.wind);
+      gatherDue.dust = Math.floor(a.dust);
+      a.wind -= gatherDue.wind;
+      a.dust -= gatherDue.dust;
+      gatherOut.length = 0;
+      hurricaneGather(it.pos, k, gatherDue, rng, gatherOut);
+      // emit сразу копирует частицы в пул: массив можно переиспользовать
+      if (gatherOut.length > 0) f.emit(gatherOut);
+      // чужой Ураган копит вихрь — свечение растёт к выпуску; своё свечение у камеры залило бы кадр
+      if (it.id !== f.localId)
+        f.glow({ pos: { x: it.pos.x, y: it.pos.y + 1.1, z: it.pos.z }, color: FX_COLOR.air, halo: 0.6 + 1.6 * k, light: 0, intensity: 0.25 + 0.5 * k, core: 0.1 }, 2);
+    }
+    for (const id of gatherAcc.keys()) if (!liveGathers.has(id)) gatherAcc.delete(id);
+    // кольцо выпуска: точки свечения по кругу уходят с 1 до 10 м за 0,25 с (ease-out, как штрихи с сопротивлением)
+    for (let i = blasts.length - 1; i >= 0; i--) {
+      const b = blasts[i]!;
+      const age = f.nowS - b.bornS;
+      if (age >= BLAST_GLOW_S || age < -0.5) {
+        blasts.splice(i, 1);
+        continue;
+      }
+      const u = Math.min(1, Math.max(0, age / BLAST_RING_S));
+      const r = 1 + (AIR.hurricane.radiusM - 1) * (1 - (1 - u) ** 2);
+      const fade = 1 - Math.max(0, age) / BLAST_GLOW_S;
+      for (let j = 0; j < BLAST_GLOWS; j++) {
+        const phi = (j / BLAST_GLOWS) * Math.PI * 2 + b.bornS;
+        f.glow({ pos: { x: b.x + Math.cos(phi) * r, y: b.y, z: b.z + Math.sin(phi) * r }, color: FX_COLOR.air, halo: 1.4, light: 0, intensity: 0.7 * fade, core: 0.1 }, 2);
+      }
+    }
+  }
 
   function drawRibbons(f: ElementVfxFrame): void {
     let n = 0;
@@ -320,10 +419,17 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
   return {
     world: ribbons,
     light: null,
+    apply(e, nowS) {
+      // выпуск Урагана: кольцо свечения из центра всплеска (штрихи и пыль даёт общий пул по пресету)
+      if (e.kind !== "burst" || e.preset !== "hurricaneBlast") return;
+      blasts.push({ x: e.pos.x, y: e.pos.y, z: e.pos.z, bornS: nowS });
+      if (blasts.length > 4) blasts.shift();
+    },
     sync(f) {
       drawRibbons(f);
       drawVortices(f);
       drawWakes(f);
+      drawHurricanes(f);
     },
     dispose() {
       geom.dispose();
@@ -332,6 +438,8 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
       acc.clear();
       wake.clear();
       glideAcc.clear();
+      gatherAcc.clear();
+      blasts.length = 0;
     },
   };
 };

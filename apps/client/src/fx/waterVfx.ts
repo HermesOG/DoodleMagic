@@ -11,8 +11,12 @@ import { WATER_STREAM } from "./presets.water";
  * Эффекты Воды (03-water, «Читается»). Один меш прохода света — InstancedMesh «листов» трёх видов, один вызов отрисовки:
  * - 0 — отрезок струи: канат Хвата в полёте и натянутый канат буксира, дуга хлыста (лента к камере, тонкие отрезки);
  * - 1 — диск Отражения ~2 × 2 м перед чужой Водой; свой — полупрозрачное кольцо в 1,2 м перед камерой;
- * - 2 — лужа Родника: кольцо разбегается за 0,4 с, рябь, лазурное свечение; у чужой — тёмная зубчатая кромка (GDD 2.2).
- * Частицы (пузыри, пар, капли Мокрого, брызги дуги) — общим пулом через frame.emit, свет — frame.glow.
+ * - 2 — лужа Родника: кольцо разбегается за 0,4 с, рябь, лазурное свечение; у чужой — тёмная зубчатая кромка (GDD 2.2);
+ * - 3 — гребень Цунами (ульта, фаза 5): стена воды 14 × 2,5 м по отрезку зоны tsunami, верх в пене и наклонён по ходу;
+ *   два листа на волну — задний высокий и передний ниже, пенный. Растёт 0,8 с за спиной Воды (до armTick), катится
+ *   с зоной (a, b между тиками), к концу опадает. Брызги с верха (≤ 60/с) и пена — общим пулом.
+ * Частицы (пузыри, пар, капли Мокрого, брызги дуги и гребня) — общим пулом через frame.emit, свет — frame.glow.
+ * Цунами новых мешей не добавляет (+0 вызовов).
  */
 
 /** Отрезков на канат и на дугу хлыста. */
@@ -24,18 +28,67 @@ export const ARC_S = 0.18;
 export const OWN_WARD_M = 1.2;
 const OWN_WARD_R = 0.62;
 const WARD_R = 1;
-/** Частоты струй, в секунду: пузыри лужи ≤ 20, пар ≤ 30, капли Мокрого ≤ 6 на юнита. */
-export const RATE = { bubbles: 16, steam: 24, drips: 5, towSpray: 10 } as const;
+/**
+ * Частоты струй, в секунду: пузыри лужи ≤ 20, пар ≤ 30, капли Мокрого ≤ 6 на юнита; гребень Цунами — брызги и пена
+ * на ходу (вместе ≤ 60), пена у подошвы на росте.
+ */
+export const RATE = { bubbles: 16, steam: 24, drips: 5, towSpray: 10, crestSpray: 40, crestFoam: 18, riseSpray: 20, riseFoam: 30 } as const;
 const MAX_SHEETS = 160;
+/** Гребень опадает последние 12 тиков волны (0,2 с). */
+const CREST_FALL_TICKS = 12;
+/** Наклон верха заднего листа гребня по ходу волны, доля высоты. */
+const CREST_CURL = 0.35;
 
 export type Sheet =
   | { type: 0; a: Vec3; b: Vec3; width: number; intensity: number; seed: number }
   | { type: 1; centre: Vec3; normal: Vec3; radius: number; intensity: number; seed: number; bright: number; ringOnly: boolean }
-  | { type: 2; centre: Vec3; radius: number; intensity: number; seed: number; spread: number; enemy: boolean };
+  | { type: 2; centre: Vec3; radius: number; intensity: number; seed: number; spread: number; enemy: boolean }
+  // гребень: от a до b по полу, высота height, верх наклонён по ходу на curl × высоту; front — передний пенный лист
+  | { type: 3; a: Vec3; b: Vec3; height: number; intensity: number; seed: number; curl: number; front: boolean };
 
 /** Струи частиц с накоплением: ключ — id (канат, зона, юнит) × 4 + вид; для любых целых id ключи не совпадают. */
 const STREAM = { tow: 0, spring: 1, steam: 2, wet: 3 } as const;
 export const streamKey = (kind: number, id: number): number => id * 4 + kind;
+/** Струи гребня Цунами (брызги, пена) — отрицательные ключи по id зоны: с ключами streamKey не совпадают. */
+const crestKey = (kind: 0 | 1, id: number): number => -1 - (id * 2 + kind);
+
+/** Гребень Цунами на дробном тике: линия по полу (a, b — между тиками), высота, плотность, ход волны. */
+export interface Crest {
+  a: Vec3;
+  b: Vec3;
+  /** Ход волны по XZ, единичный: (n.z, −n.x), n — от a к b. */
+  dir: Vec3;
+  height: number;
+  intensity: number;
+  /** Доля роста: 0 — каст, 1 — взвод (дальше волна катится). */
+  rise: number;
+}
+
+/**
+ * Гребень Цунами зоны z на дробном тике tick: a, b — концы отрезка зоны, линейно от prev (та же зона в прошлом
+ * состоянии; нет — как в cur) к cur по alpha. До взвода гребень растёт до 2,5 м (ease-out), последние 12 тиков опадает
+ * и гаснет. null — не волна или вне её жизни.
+ */
+export function tsunamiCrest(prev: Zone | undefined, z: Zone, alpha: number, tick: number): Crest | null {
+  if (z.kind !== "tsunami" || z.shape.type !== "segment" || tick < z.bornTick || tick >= z.endTick) return null;
+  const s = z.shape;
+  const p = prev && prev.shape.type === "segment" ? prev.shape : s;
+  const a = lerpV(p.a, s.a, alpha);
+  const b = lerpV(p.b, s.b, alpha);
+  const nx = b.x - a.x;
+  const nz = b.z - a.z;
+  const l = Math.hypot(nx, nz) || 1;
+  const rise = clamp01((tick - z.bornTick) / Math.max(1, z.armTick - z.bornTick));
+  const fall = clamp01((z.endTick - tick) / CREST_FALL_TICKS);
+  return {
+    a,
+    b,
+    dir: { x: nz / l, y: 0, z: -nx / l },
+    height: WATER.tsunami.heightM * (1 - (1 - rise) ** 2) * (0.35 + 0.65 * fall),
+    intensity: Math.min(clamp01(rise * 4), fall),
+    rise,
+  };
+}
 /** Жгутов в полёте нет — общий пустой список, без нового массива в кадре. */
 const NO_GRABS: readonly { pr: Projectile; pos: Vec3 }[] = [];
 
@@ -146,17 +199,19 @@ export function springPool(z: Zone, tick: number, localId: UnitId): Extract<Shee
 
 const VERT = /* glsl */ `
 attribute vec4 aA; // 0: начало отрезка; 1, 2: центр. w — вид листа
-attribute vec4 aB; // 0: конец отрезка; 1: нормаль диска. w — полуширина или радиус
-attribute vec4 aC; // яркость, семя, p, q (диск: светлота, «только кольцо»; лужа: доля радиуса, чужая)
+attribute vec4 aB; // 0, 3: конец отрезка; 1: нормаль диска. w — полуширина, радиус или высота гребня
+attribute vec4 aC; // яркость, семя, p, q (диск: светлота, «только кольцо»; лужа: доля радиуса, чужая; гребень: наклон, передний)
 varying vec2 vQ;
 varying vec4 vS;
 varying float vType;
 varying float vLen;
+varying float vDepth;
 void main() {
   float type = aA.w;
   vec2 q = position.xy * 2.0;
   vec3 w;
   vLen = 1.0;
+  vDepth = 100.0;
   if (type < 0.5) {
     // лента от a до b, развёрнута к камере
     vec3 d = aB.xyz - aA.xyz;
@@ -171,9 +226,19 @@ void main() {
     vec3 u = normalize(abs(n.y) < 0.95 ? cross(vec3(0.0, 1.0, 0.0), n) : cross(vec3(1.0, 0.0, 0.0), n));
     vec3 v = cross(n, u);
     w = aA.xyz + (u * q.x + v * q.y) * aB.w;
-  } else {
+  } else if (type < 2.5) {
     // лужа чуть над полом: глубина мира не прячет её целиком
     w = aA.xyz + vec3(q.x * aB.w, 0.06, q.y * aB.w);
+  } else {
+    // гребень: лист от a до b по полу высотой aB.w; верх наклонён по ходу волны d на aC.z × высоту (по v²)
+    vec3 along = aB.xyz - aA.xyz;
+    vec3 n = normalize(vec3(along.x, 0.0, along.z) + vec3(1e-6, 0.0, 0.0));
+    vec3 d = vec3(n.z, 0.0, -n.x);
+    float v = q.y * 0.5 + 0.5;
+    float H = aB.w;
+    w = mix(aA.xyz, aB.xyz, q.x * 0.5 + 0.5) + vec3(0.0, v * H, 0.0) + d * (aC.z * H * v * v);
+    vLen = length(along);
+    vDepth = -(viewMatrix * vec4(w, 1.0)).z;
   }
   vQ = q;
   vS = aC;
@@ -191,8 +256,10 @@ varying vec2 vQ;
 varying vec4 vS;
 varying float vType;
 varying float vLen;
+varying float vDepth;
 void main() {
-  float vis = fxVisibility(vType > 1.5 ? 0.04 : 0.15);
+  // гребень мягко уходит в пол (0,3 м), лужа лежит на нём (0,04), прочее — 0,15
+  float vis = fxVisibility(vType > 2.5 ? 0.3 : vType > 1.5 ? 0.04 : 0.15);
   if (vis <= 0.0) discard;
   float I = vS.x;
   float seed = vS.y;
@@ -221,6 +288,23 @@ void main() {
     col = mix(uWater, uFoam, 0.15 + 0.65 * bright);
     a = (rim * 0.7 + fill) * I * mix(1.0, 0.5, ringOnly);
     glow = (rim * (0.35 + 0.9 * bright) + fill * bright * 1.2) * I;
+  } else if (vType > 2.5) {
+    // гребень: тело темнее у подошвы, рваный пенный верх, струи стекают вниз; края по длине и вплотную к камере тают
+    // (своя волна проходит сквозь Воду). Передний лист ниже, светлее и прозрачнее — пена
+    float u = vQ.x * 0.5 + 0.5;
+    float v = vQ.y * 0.5 + 0.5;
+    float x = u * vLen;
+    float front = vS.w;
+    float n = fxFbm(vec2(x * 0.45 + seed, uTime * 0.8 + seed));
+    float top = mix(0.8, 0.7, front) + 0.2 * n;
+    if (v > top) discard;
+    float ends = smoothstep(0.0, 0.1, u + (n - 0.5) * 0.08) * smoothstep(0.0, 0.1, 1.0 - u + (n - 0.5) * 0.08);
+    float streak = fxNoise(vec2(x * 1.3 + seed, v * 2.5 + uTime * 2.4));
+    float foam = smoothstep(top - 0.22, top - 0.03, v);
+    float near = smoothstep(0.4, 2.0, vDepth);
+    col = mix(uWater * (0.55 + 0.45 * v), uFoam, clamp(foam * 0.9 + streak * 0.2 * v + front * 0.25, 0.0, 1.0));
+    a = (mix(0.62, 0.4, front) + 0.2 * v + foam * 0.2) * ends * near * I;
+    glow = (0.1 + foam * 0.45) * ends * near * I;
   } else {
     // лужа: тело до доли радиуса vS.z, светлая кромка-волна, рябь
     float r = length(vQ);
@@ -305,12 +389,50 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
       a0.setXYZW(n, s.centre.x, s.centre.y, s.centre.z, 1);
       a1.setXYZW(n, s.normal.x, s.normal.y, s.normal.z, s.radius);
       a2.setXYZW(n, s.intensity, s.seed, s.bright, s.ringOnly ? 1 : 0);
-    } else {
+    } else if (s.type === 2) {
       a0.setXYZW(n, s.centre.x, s.centre.y, s.centre.z, 2);
       a1.setXYZW(n, 0, 1, 0, s.radius);
       a2.setXYZW(n, s.intensity, s.seed, s.spread, s.enemy ? 1 : 0);
+    } else {
+      a0.setXYZW(n, s.a.x, s.a.y, s.a.z, 3);
+      a1.setXYZW(n, s.b.x, s.b.y, s.b.z, s.height);
+      a2.setXYZW(n, s.intensity, s.seed, s.curl, s.front ? 1 : 0);
     }
     n++;
+  };
+  /**
+   * Гребень Цунами: два листа (задний высокий с наклоном 0,35, передний ниже на 0,6 м впереди), свет воды на мир у
+   * середины; частицы — на росте пена у подошвы и брызги вверх, на ходу брызги и пена с верха вперёд (с ходом волны).
+   */
+  const crest = (f: ElementVfxFrame, z: Zone, c: Crest): void => {
+    const seed = (z.id * 0.61) % 9;
+    push({ type: 3, a: c.a, b: c.b, height: c.height, intensity: c.intensity, seed, curl: CREST_CURL, front: false });
+    const fa = { x: c.a.x + c.dir.x * 0.6, y: c.a.y, z: c.a.z + c.dir.z * 0.6 };
+    const fb = { x: c.b.x + c.dir.x * 0.6, y: c.b.y, z: c.b.z + c.dir.z * 0.6 };
+    push({ type: 3, a: fa, b: fb, height: c.height * 0.55, intensity: c.intensity, seed: seed + 3.7, curl: 0.5, front: true });
+    f.glow({ pos: { x: (c.a.x + c.b.x) / 2, y: c.a.y + c.height / 2, z: (c.a.z + c.b.z) / 2 }, color: FX_COLOR.water, halo: 0, light: 6, intensity: 0.35 * c.intensity, core: 0 }, 2);
+    const rising = c.rise < 1;
+    const rng = Math.random;
+    const run = rising ? 0 : WATER.tsunami.speed;
+    // брызги с верха — по ходу и вверх; на росте — прямо вверх
+    const sprayDir = rising ? UP : { x: c.dir.x * 0.8, y: 0.6, z: c.dir.z * 0.8 };
+    for (let i = due(crestKey(0, z.id), rising ? RATE.riseSpray : RATE.crestSpray, f.dt); i > 0; i--) {
+      const t = 0.04 + 0.92 * rng();
+      const h = c.height * 0.8;
+      const p = spawn(WATER_STREAM.crestSpray, { x: c.a.x + (c.b.x - c.a.x) * t + c.dir.x * CREST_CURL * h * 0.8, y: c.a.y + h, z: c.a.z + (c.b.z - c.a.z) * t + c.dir.z * CREST_CURL * h * 0.8 }, sprayDir, rng);
+      p.vel.x += c.dir.x * run;
+      p.vel.z += c.dir.z * run;
+      out.push(p);
+    }
+    // пена: на росте — у подошвы, на ходу — по верху
+    for (let i = due(crestKey(1, z.id), rising ? RATE.riseFoam : RATE.crestFoam, f.dt); i > 0; i--) {
+      const t = 0.04 + 0.92 * rng();
+      const h = rising ? 0.1 : c.height * 0.75;
+      const p = spawn(WATER_STREAM.crestFoam, { x: c.a.x + (c.b.x - c.a.x) * t, y: c.a.y + h, z: c.a.z + (c.b.z - c.a.z) * t }, rising ? UP : sprayDir, rng);
+      p.vel.x += c.dir.x * run;
+      p.vel.z += c.dir.z * run;
+      out.push(p);
+    }
   };
   const strip = (pts: readonly Vec3[], width: number, intensity: number, seed: number): void => {
     for (let i = 0; i + 1 < pts.length; i++) push({ type: 0, a: pts[i]!, b: pts[i + 1]!, width, intensity, seed: seed + i * 0.13 });
@@ -433,6 +555,12 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
             const d = r * Math.sqrt(rng());
             out.push(spawn(WATER_STREAM.bubble, { x: pool.centre.x + Math.cos(phi) * d, y: pool.centre.y + 0.05, z: pool.centre.z + Math.sin(phi) * d }, UP, rng));
           }
+        } else if (z.kind === "tsunami") {
+          // гребень едет с зоной: a, b — между тиками, по той же зоне прошлого состояния
+          let pz: Zone | undefined;
+          for (const q of f.prev.zones) if (q.id === z.id) pz = q;
+          const c = tsunamiCrest(pz, z, f.alpha, tick);
+          if (c) crest(f, z, c);
         } else if (z.kind === "steam" && z.shape.type === "disc" && tick < z.endTick) {
           const c = z.shape.center;
           for (let i = due(streamKey(STREAM.steam, z.id), RATE.steam, f.dt); i > 0; i--) {

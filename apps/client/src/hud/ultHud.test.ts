@@ -176,7 +176,8 @@ describe("ult events: net keys and feel", () => {
   it("clicks «ready» only for my own full charge; other phases and other mages are left to the elements", () => {
     expect(effectsFor(ult(ME, "ready"), view)).toEqual([{ kind: "sound", id: "ultReady", pos: null, gain: 1 }]);
     expect(effectsFor(ult(OTHER, "ready"), view)).toEqual([]);
-    expect(effectsFor(ult(ME, "release"), view)).toEqual([]);
+    // выпуск Цунами оформляет Вода (waterFx, задача 6): «готово» на нём не щёлкает
+    expect(effectsFor(ult(ME, "release"), view).some((e) => e.kind === "sound" && e.id === "ultReady")).toBe(false);
     expect(effectsFor(ult(ME, "end"), view)).toEqual([]);
   });
 
@@ -203,10 +204,12 @@ describe("ult names in the kill feed and on the death screen", () => {
 describe("client registries cover the new abilities and zones", () => {
   it("has a gesture for every ability; the ult stubs move the hands like the C gesture of their element", () => {
     for (const a of ABILITY_IDS) expect(typeof isFistGesture(a), a).toBe("boolean");
-    const C = { dragonBreath: "fireWall", tectonicRift: "earthquake", hurricane: "tornado", tsunami: "spring" } as const;
+    // Ураган и Цунами — уже свои жесты (задача 6, ultAirWater.test.ts)
+    const C: Partial<Record<(typeof ULT_IDS)[number], (typeof ABILITY_IDS)[number]>> = { dragonBreath: "fireWall", tectonicRift: "earthquake" };
     for (const a of ULT_IDS) {
       const pose = (ability: (typeof ABILITY_IDS)[number]) => stepGestures(startGesture(createGestures(), ability), 0.3).pose;
-      expect(pose(a), a).toEqual(pose(C[a]));
+      const c = C[a];
+      if (c) expect(pose(a), a).toEqual(pose(c));
       expect(Object.values(pose(a).right).some((v) => Math.abs(v) > 1e-3) || Object.values(pose(a).left).some((v) => Math.abs(v) > 1e-3), a).toBe(true);
     }
   });

@@ -6,11 +6,17 @@ import type { EventView } from "./eventMap";
 /*
  * Ощущение Воздуха (02-air, «Читается»): события Воздуха → эффекты и покадровые зёрна (парение, гул Смерча).
  * Своё — жест, ладони, камера и звук у уха; чужое — только мир и звук в точке. Попадания (hit) и смерть
- * остаются общей карте (ступени, хитмаркер, deathAir по стихии убийцы).
+ * остаются общей карте (ступени, хитмаркер, deathAir по стихии убийцы); кроме смерти от Урагана — у неё тост убийце.
+ *
+ * Ульта «Ураган» (фаза 5): каст — свист замаха 0,8 с и руки над головой (стяжку ветра по спирали рисует airVfx по
+ * ult.cast); выпуск (ult/release) — кольцо штрихов и пыли на 10 м, хлопок, у себя — крупная ступень и FOV +10°.
+ * Гул ultWarn на всю карту у чужого каста X добавляет общая карта (effectsFor), здесь его нет.
  */
 
 const UP: Vec3 = { x: 0, y: 1, z: 0 };
-const AIR_ABILITIES: ReadonlySet<AbilityId> = new Set<AbilityId>(["airSickle", "gust", "swoop", "tornado"]);
+const AIR_ABILITIES: ReadonlySet<AbilityId> = new Set<AbilityId>(["airSickle", "gust", "swoop", "tornado", "hurricane"]);
+/** Крупная ступень у кастующего ульту (round3/01, 2.1; TIERS.large общей карты): trauma 0,8, толчок 2°, FOV +10°. */
+export const ULT_CASTER = { trauma: 0.8, kickDeg: 2, fovDeg: 10 } as const;
 const VORTEX: ReadonlySet<ZoneKind> = new Set<ZoneKind>(["tornado", "fireTornado", "sandTornado"]);
 /** Своё попадание слышно не тише этого и издалека — как в общей карте (round3/01, H3). */
 const OWN_FLOOR = 0.6;
@@ -38,6 +44,8 @@ function castFx(ev: Extract<MatchEvent, { type: "cast" }>, mine: boolean): Effec
     if (ev.ability === "gust") return [sound("gustWindup", ev.pos)];
     if (ev.ability === "swoop") return [sound("swoop", ev.pos)];
     if (ev.ability === "tornado") return [sound("tornadoCast", ev.pos)];
+    // свист замаха чужого Урагана — в точке каста: слышно, где рванёт (гул на всю карту — общая карта)
+    if (ev.ability === "hurricane") return [sound("hurricaneWindup", ev.pos)];
     return [];
   }
   // gesture всегда раньше palm: по нему интеграция узнаёт руку серпа
@@ -62,9 +70,34 @@ function castFx(ev: Extract<MatchEvent, { type: "cast" }>, mine: boolean): Effec
         sound("tornadoCast"),
         { kind: "kick", pitchDeg: 1, yawDeg: 0, rollDeg: 0 },
       ];
+    case "hurricane":
+      // замах: руки сводятся над головой, у ладоней сходится ветер, свист растёт 0,8 с; удар камеры — на выпуске
+      return [{ kind: "gesture", ability: "hurricane" }, { kind: "palm", hand: "both", element: "air", preset: "charge" }, sound("hurricaneWindup")];
     default:
       return [];
   }
+}
+
+/**
+ * Выпуск Урагана (ult/release): кольцо штрихов на высоте груди и кольцо пыли у ног — от центра тела кастующего, как
+ * в симуляции; у себя — ладони, хлопок у уха и крупная ступень (камера вверх: мага подбрасывает на 3 м); чужой —
+ * мир и хлопок в точке.
+ */
+function hurricaneBlastFx(ev: Extract<MatchEvent, { type: "ult" }>, caster: Unit | undefined, mine: boolean): Effect[] {
+  const c = caster ? centre(caster) : { x: ev.pos.x, y: ev.pos.y - 0.7, z: ev.pos.z };
+  const feet = caster ? { ...caster.move.body.pos } : { x: c.x, y: c.y - 0.9, z: c.z };
+  const ring = burst("hurricaneBlast", c);
+  const dust = burst("hurricaneDust", feet);
+  if (!mine) return [ring, dust, sound("hurricaneBoom", c)];
+  return [
+    ring,
+    dust,
+    { kind: "palm", hand: "both", element: "air", preset: "flash" },
+    sound("hurricaneBoom"),
+    { kind: "trauma", amount: ULT_CASTER.trauma },
+    { kind: "kick", pitchDeg: ULT_CASTER.kickDeg, yawDeg: 0, rollDeg: 0 },
+    { kind: "fov", deg: ULT_CASTER.fovDeg },
+  ];
 }
 
 /** Выпуск: серп звучит на касте; Порыв — удар ветра конусом, у себя — толчок камеры средней ступени. */
@@ -158,6 +191,14 @@ export function airEffects(ev: MatchEvent, view: EventView, me: Unit | undefined
       if (mine(ev.owner)) out.push({ kind: "toast", text: "Огненный смерч!" });
       return out;
     }
+    case "ult":
+      // «заряд полон» — общий звук (общая карта); конец Урагана — на следующем тике после выпуска, без отклика
+      if (ev.ability !== "hurricane" || ev.phase === "ready") return null;
+      return ev.phase === "release" ? hurricaneBlastFx(ev, unitById(view.state, ev.unit), mine(ev.unit)) : [];
+    case "death":
+      // смерть от Урагана — как в общей карте (ветер по стихии убийцы, «kill» убийце) и тост убийце
+      if (ev.ability !== "hurricane") return null;
+      return mine(ev.killer) ? [burst("deathAir", ev.pos), sound("kill"), { kind: "toast", text: "Ураган!" }] : [burst("deathAir", ev.pos)];
     default:
       return null;
   }

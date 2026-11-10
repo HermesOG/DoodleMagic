@@ -1,4 +1,18 @@
-import { NOBODY, TICK_HZ, WATER, forwardXZ, unitById, type AbilityId, type MatchEvent, type ProjectileKind, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
+import {
+  NOBODY,
+  TICK_HZ,
+  WATER,
+  forwardXZ,
+  unitById,
+  type AbilityId,
+  type MatchEvent,
+  type MatchState,
+  type ProjectileKind,
+  type Unit,
+  type UnitId,
+  type Vec3,
+  type Zone,
+} from "@doodlemagic/sim";
 import type { BurstPreset, Effect, SoundId } from "./effects";
 import type { FrameView } from "./elementFx";
 import type { EventView } from "./eventMap";
@@ -7,9 +21,20 @@ import type { EventView } from "./eventMap";
  * Ощущение Воды (03-water, «Читается»): события Воды → эффекты и покадровые зёрна журчания Родника.
  * Чистые функции, как общая карта: частицы, звук, камеру, руки и HUD исполняют результат сами.
  * Попадание (hit), смерть и статусы остаются общей карте: хитмаркер, цифры и отклик жертвы там одни на все стихии.
+ *
+ * Ульта «Цунами» (фаза 5): каст — шум роста 0,8 с, руки черпают снизу и поднимают волну; зона tsunami встаёт —
+ * вода бьёт из-под пола; выпуск (ult/release) — толчок обеими, у себя — крупная ступень. Ход волны — по состоянию
+ * (waterFrame): рокот зёрнами в гребне и всплеск с ударом на каждом, кого волна записала в rehit; гребень рисует
+ * waterVfx. Смерть от Цунами — с тостом убийце. Гул ultWarn чужой ульты добавляет общая карта (effectsFor).
  */
 
 const UP: Vec3 = { x: 0, y: 1, z: 0 };
+/** Крупная ступень у кастующего ульту (round3/01, 2.1; TIERS.large общей карты): trauma 0,8, толчок 2°, FOV +10°. */
+const ULT_CASTER = { trauma: 0.8, kickDeg: 2, fovDeg: 10 } as const;
+/** Зерно рокота хода Цунами: раз в 0,4 с, длина 0,5 с (Р15). */
+export const ROLL_GRAIN_S = 0.4;
+/** Рокот и всплеск — у гребня, на середине его высоты (2,5 м / 2). */
+const CREST_MID_M = WATER.tsunami.heightM / 2;
 const WATER_ABILITIES: readonly AbilityId[] = ["waterWhip", "waterGrab", "waterWard", "spring"];
 const isWater = (a: AbilityId): boolean => WATER_ABILITIES.includes(a);
 /** Своё попадание слышно не тише этого и издалека (как OWN_HIT_FLOOR общей карты, round3/01 H3). */
@@ -88,6 +113,16 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
   const mine = (id: UnitId): boolean => id === view.localId;
   switch (ev.type) {
     case "cast": {
+      if (ev.ability === "tsunami")
+        // рост волны: у себя — жест, ладони, шум у уха и ладони вниз, к воде; чужой — шум в точке каста
+        return mine(ev.unit)
+          ? [
+              { kind: "gesture", ability: "tsunami" },
+              { kind: "palm", hand: "both", element: "water", preset: "flash" },
+              sound("tsunamiRise"),
+              { kind: "kick", pitchDeg: -0.8, yawDeg: 0, rollDeg: 0, dropM: 0.03 },
+            ]
+          : [sound("tsunamiRise", ev.pos)];
       if (!isWater(ev.ability)) return null;
       const a = ev.ability as keyof typeof CAST_SOUND;
       // чужой каст: только звук в точке каста — без жестов, ладоней и толчка моей камеры
@@ -156,6 +191,14 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
       return [burst("healMotes", ev.pos, UP, 0.6)];
     case "zone": {
       if (ev.kind === "steam") return [];
+      if (ev.kind === "tsunami") {
+        // волна встаёт за спиной Воды: вода бьёт из-под пола посередине; дальше гребень, рокот и всплески — по состоянию
+        if (ev.phase !== "telegraph") return [];
+        const z = view.state.zones.find((q) => q.id === ev.zone);
+        if (!z || z.shape.type !== "segment") return [];
+        const { a, b } = z.shape;
+        return [burst("tsunamiSurge", { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 })];
+      }
       if (ev.kind !== "spring") return null;
       if (ev.phase !== "telegraph") return [];
       const z = view.state.zones.find((q) => q.id === ev.zone);
@@ -182,6 +225,21 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
       if (mine(ev.owner)) out.push({ kind: "toast", text: "Пар!" });
       return out;
     }
+    case "ult":
+      // «заряд полон» — общий звук (общая карта); выпуск — волна покатилась: у себя толчок обеими и крупная ступень,
+      // у чужой её видно и слышно по гребню; конец каста — на следующем тике, волна живёт своей зоной
+      if (ev.ability !== "tsunami" || ev.phase === "ready") return null;
+      if (ev.phase !== "release" || !mine(ev.unit)) return [];
+      return [
+        { kind: "palm", hand: "both", element: "water", preset: "flash" },
+        { kind: "trauma", amount: ULT_CASTER.trauma },
+        { kind: "kick", pitchDeg: ULT_CASTER.kickDeg, yawDeg: 0, rollDeg: 0 },
+        { kind: "fov", deg: ULT_CASTER.fovDeg },
+      ];
+    case "death":
+      // смерть от Цунами — как в общей карте (брызги по стихии убийцы, «kill» убийце) и тост убийце
+      if (ev.ability !== "tsunami") return null;
+      return mine(ev.killer) ? [burst("deathWater", ev.pos), sound("kill"), { kind: "toast", text: "Цунами!" }] : [burst("deathWater", ev.pos)];
     default:
       return null;
   }
@@ -190,17 +248,76 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
 /** Событие Воды → эффекты; null — не Воды (дальше общая карта). Один на клиент: звон лечения помнит прошлый. */
 export const waterEffects = createWaterEffects();
 
+/** Перешли ли часы кадра границу зерна длины step со сдвигом ph за этот кадр (не чаще раза в step). */
+const grainDue = (f: FrameView, step: number, ph: number): boolean => Math.floor((f.nowS + ph) / step) > Math.floor((f.nowS - f.dtS + ph) / step);
+
 /**
- * Раз в кадр: журчание Родника зёрнами (Р15) — раз в SPRING_GRAIN_S у каждой взведённой лужи, в её центре.
- * Фаза зерна — от id зоны: две лужи не журчат в такт.
+ * Середина гребня Цунами между тиками: середина отрезка зоны, линейно от prev к cur по alpha (как его рисует waterVfx),
+ * на высоте половины гребня. Зоны нет в prev — как в cur.
  */
-export function waterFrame(f: FrameView): Effect[] {
-  let out: Effect[] | null = null;
-  for (const z of f.cur.zones) {
-    if (z.kind !== "spring" || z.shape.type !== "disc" || f.cur.tick < z.armTick || f.cur.tick >= z.endTick) continue;
-    const ph = (z.id * 0.37) % SPRING_GRAIN_S;
-    if (Math.floor((f.nowS + ph) / SPRING_GRAIN_S) <= Math.floor((f.nowS - f.dtS + ph) / SPRING_GRAIN_S)) continue;
-    (out ??= []).push(sound("springBubble", z.shape.center, z.owner === f.localId ? 0.5 : 0.6));
-  }
-  return out ?? [];
+export function crestMid(prev: MatchState, z: Zone, alpha: number): Vec3 | null {
+  if (z.shape.type !== "segment") return null;
+  const s = z.shape;
+  let ps = s;
+  for (const q of prev.zones) if (q.id === z.id && q.shape.type === "segment") ps = q.shape;
+  const mx = (s.a.x + s.b.x) / 2;
+  const mz = (s.a.z + s.b.z) / 2;
+  const px = (ps.a.x + ps.b.x) / 2;
+  const pz = (ps.a.z + ps.b.z) / 2;
+  return { x: px + (mx - px) * alpha, y: s.a.y + CREST_MID_M, z: pz + (mz - pz) * alpha };
 }
+
+/**
+ * Покадровые эффекты Воды со своей памятью:
+ * - журчание Родника зёрнами (Р15) — раз в SPRING_GRAIN_S у каждой взведённой лужи, в её центре; фаза — от id зоны,
+ *   две лужи не журчат в такт;
+ * - рокот хода Цунами — зерно tsunamiRoll раз в ROLL_GRAIN_S в середине гребня, от взвода до конца зоны;
+ * - удар волны — по состоянию: новая запись rehit зоны tsunami (волна задела юнита) даёт всплеск tsunamiSplash и
+ *   tsunamiHit на нём: задетому — у уха, хозяйке волны — не тише OWN_HIT_FLOOR, прочим — в точке. Записи, что уже
+ *   были у зоны, когда кадр увидел её впервые (подключился посреди волны), молчат.
+ */
+export function createWaterFrame(): (f: FrameView) => Effect[] {
+  /** Кого волна уже задела (по зоне): им всплеск уже был. */
+  const splashed = new Map<number, UnitId[]>();
+  const live = new Set<number>();
+  return (f) => {
+    let out: Effect[] | null = null;
+    live.clear();
+    for (const z of f.cur.zones) {
+      if (z.kind === "spring") {
+        if (z.shape.type !== "disc" || f.cur.tick < z.armTick || f.cur.tick >= z.endTick) continue;
+        if (!grainDue(f, SPRING_GRAIN_S, (z.id * 0.37) % SPRING_GRAIN_S)) continue;
+        (out ??= []).push(sound("springBubble", z.shape.center, z.owner === f.localId ? 0.5 : 0.6));
+        continue;
+      }
+      if (z.kind !== "tsunami" || z.shape.type !== "segment") continue;
+      live.add(z.id);
+      if (f.cur.tick >= z.armTick && f.cur.tick < z.endTick && grainDue(f, ROLL_GRAIN_S, (z.id * 0.29) % ROLL_GRAIN_S))
+        (out ??= []).push(sound("tsunamiRoll", crestMid(f.prev, z, f.alpha)));
+      const seen = splashed.get(z.id);
+      if (!seen) {
+        splashed.set(z.id, z.rehit.map((r) => r.unit));
+        continue;
+      }
+      for (const r of z.rehit) {
+        if (seen.includes(r.unit)) continue;
+        seen.push(r.unit);
+        const v = unitById(f.cur, r.unit);
+        if (!v) continue;
+        const b = v.move.body;
+        const at = { x: b.pos.x, y: b.pos.y + b.height / 2, z: b.pos.z };
+        // всплеск — по ходу волны и вверх: ход d = (n.z, −n.x), n — вдоль гребня
+        const n = unitDir({ x: z.shape.b.x - z.shape.a.x, y: 0, z: z.shape.b.z - z.shape.a.z });
+        (out ??= []).push(
+          burst("tsunamiSplash", at, unitDir({ x: n.z, y: 0.8, z: -n.x })),
+          r.unit === f.localId ? sound("tsunamiHit") : hitSound("tsunamiHit", at, z.owner === f.localId),
+        );
+      }
+    }
+    for (const id of splashed.keys()) if (!live.has(id)) splashed.delete(id);
+    return out ?? [];
+  };
+}
+
+/** Раз в кадр: непрерывные звуки Воды (журчание Родника, рокот Цунами) и удары волны. Один на клиент. */
+export const waterFrame: (f: FrameView) => Effect[] = createWaterFrame();

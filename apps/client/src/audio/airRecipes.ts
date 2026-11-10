@@ -122,6 +122,28 @@ export const AIR_RECIPES: Readonly<Record<AirSoundId, Recipe>> = {
       tone("sine", 1650, 1650, 0.4, 0.04, { attack: 0.12 }),
     ],
   },
+  // замах Урагана 0,8 с: свист нарастает 800 → 4000 Гц до самого выпуска, под ним — свист тоном и гул-подъём снизу
+  // (наушники); подпись — ветер
+  hurricaneWindup: {
+    reverb: REVERB_SEND.medium,
+    layers: [
+      noise("bandpass", 800, 4000, 0.8, 0.55, { q: 4, attack: 0.72, ...SIG }),
+      tone("sine", 500, 2000, 0.8, 0.05, { attack: 0.7 }),
+      noise("lowpass", 140, 320, 0.8, 0.3, { q: 1, attack: 0.65 }),
+    ],
+  },
+  // выпуск Урагана: хлопок ветра 2,5 → 0,8 кГц, низкое «тело» 70 → 32 Гц без подписи (крупная ступень, реверб 0,35)
+  // и хвост ветра, уходящий кольцом
+  hurricaneBoom: {
+    vary: 0.03,
+    reverb: REVERB_SEND.large,
+    layers: [
+      noise("bandpass", 2500, 800, 0.6, 0.9, { q: 1, attack: 0.004, sweep: 0.6, ...SIG }),
+      tone("sine", 70, 32, 0.45, 0.85, { attack: 0.003, sweep: 0.5, drive: 1.6 }),
+      noise("lowpass", 500, 120, 0.35, 0.5, { q: 1, attack: 0.003 }),
+      noise("bandpass", 1600, 1000, 0.72, 0.3, { q: 2, attack: 0.15, delay: 0.08 }),
+    ],
+  },
 };
 
 /** Подписи кнопок прослушки (audition.ts). */
@@ -140,4 +162,6 @@ export const AIR_SOUND_LABELS: Readonly<Record<AirSoundId, string>> = {
   fireTornado: "Огненный смерч",
   airJump: "Второй прыжок",
   glideWhistle: "Парение: свист",
+  hurricaneWindup: "Ураган: замах",
+  hurricaneBoom: "Ураган: выпуск",
 };
