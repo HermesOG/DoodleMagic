@@ -26,7 +26,7 @@ export function controlRows(element: Element): ControlRow[] {
     row("Q", ABILITY_NAME[a.q]),
     row("E", ABILITY_NAME[a.e]),
     row("C", ABILITY_NAME[a.c]),
-    row("X", ELEMENT_INFO[element].ult, true),
+    row("X", ELEMENT_INFO[element].ult),
     row("WASD", "ходить"),
     row("Пробел", "прыжок"),
     row("Esc", "меню"),

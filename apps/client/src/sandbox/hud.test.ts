@@ -8,13 +8,13 @@ describe("pause menu copy", () => {
     expect(HINT).toBe("ЛКМ — атака · Q E C — приёмы · пробел — прыжок · Esc — меню");
   });
 
-  it("lists the element's four abilities by key, the ult as «скоро», then movement and the menu", () => {
+  it("lists the element's four abilities by key, the ult (now castable), then movement and the menu", () => {
     expect(controlRows("fire")).toEqual([
       { key: "ЛКМ", action: "Огненные кулаки", soon: false },
       { key: "Q", action: "Огненный шар", soon: false },
       { key: "E", action: "Реактивный рывок", soon: false },
       { key: "C", action: "Стена огня", soon: false },
-      { key: "X", action: "Дыхание дракона", soon: true },
+      { key: "X", action: "Дыхание дракона", soon: false },
       { key: "WASD", action: "ходить", soon: false },
       { key: "Пробел", action: "прыжок", soon: false },
       { key: "Esc", action: "меню", soon: false },
