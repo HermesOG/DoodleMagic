@@ -22,7 +22,7 @@ interface Spec { id: UnitId; el?: Element; kills?: number; falls?: number; death
 function game(phase: GameState["phase"], specs: Spec[], patch: Partial<GameState> = {}): GameState {
   const units = specs.map((s) => {
     const u = createMageUnit(s.id, s.el ?? "fire", { pos, yaw: 0 });
-    u.mage!.stats = { damage: 0, kills: s.kills ?? 0, falls: s.falls ?? 0, deaths: s.deaths ?? 0 };
+    u.mage!.stats = { ...u.mage!.stats, kills: s.kills ?? 0, falls: s.falls ?? 0, deaths: s.deaths ?? 0 };
     if (s.hp !== undefined) u.hp = s.hp;
     if (s.alive === false) u.alive = false;
     return u;

@@ -14,8 +14,11 @@ import { pickSpawn } from "./units";
 /** Точка появления: живёт в units.ts (её же зовёт возрождение в stepLife), здесь — реэкспорт для хоста и клиента. */
 export { pickSpawn } from "./units";
 
-/** «Свалка» (GDD 3; решения Н6–Н8 плана фазы 3-lite). */
-export const PVP = { maxPlayers: 6, countdownS: 3, matchS: 420, suddenDeathS: 60, respawnS: 3, shieldS: 2 } as const;
+/**
+ * «Свалка» (GDD 3; решения Н6–Н8 плана фазы 3-lite). Быстрый финал (Р3 фазы 9): в последние finalS боя и во внезапной
+ * смерти маг возрождается через finalRespawnS.
+ */
+export const PVP = { maxPlayers: 6, countdownS: 3, matchS: 420, suddenDeathS: 60, respawnS: 3, shieldS: 2, finalS: 60, finalRespawnS: 2 } as const;
 
 export type GamePhase = "warmup" | "countdown" | "live" | "results";
 export interface Standing { id: UnitId; score: number; kills: number; falls: number; deaths: number }
@@ -37,6 +40,7 @@ export interface GameStep { game: GameState; events: MatchEvent[] }
 const COUNTDOWN_TICKS = ticks(PVP.countdownS); // 180
 const MATCH_TICKS = ticks(PVP.matchS); // 25200
 const SUDDEN_DEATH_TICKS = ticks(PVP.suddenDeathS); // 3600
+const FINAL_TICKS = ticks(PVP.finalS); // 3600
 const RUNE_FIRST_TICKS = ticks(PICKUPS.rune.firstS); // 2700
 
 /** Очки: убийства и засчитанные сбросы. Не маг — 0. */
@@ -194,9 +198,12 @@ function finish(game: GameState): void {
  * - live: лимит не ниже прежнего. Лидер набрал лимит — конец. Иначе на phaseEnd: ничья лидеров (магов ≥ 2, очки первых
  *   двух равны) — внезапная смерть на 60 с, иначе конец. Во внезапной смерти ничья разбита или время вышло — конец.
  * - results: ничего не меняется, бой идёт без счёта.
+ * Быстрый финал (Р3 фазы 9): в бою за finalS до конца и во внезапной смерти stepMatch получает возрождение
+ * finalRespawnS — по состоянию до шага, поэтому предсказание клиента считает его так же.
  */
 export function stepGame(g: Readonly<GameState>, inputs: Readonly<Partial<Record<UnitId, MatchInput>>>, ctx: MatchContext): GameStep {
-  const r = stepMatch(g.match, inputs, ctx);
+  const final = g.phase === "live" && (g.suddenDeath || g.phaseEnd - g.match.tick <= FINAL_TICKS);
+  const r = stepMatch(g.match, inputs, final ? { ...ctx, mageRespawnS: PVP.finalRespawnS } : ctx);
   const game = copyGame(g, r.state);
   const ev = r.events;
   const now = game.match.tick;

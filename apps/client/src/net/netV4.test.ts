@@ -26,10 +26,6 @@ function snapshot(): SnapshotMsg {
 }
 
 describe("net v4", () => {
-  it("is version 4 with its own peer ids", () => {
-    expect(NET_VERSION).toBe(4);
-    expect(gamePeerId("ABCD")).toBe("doodlemagic-g4-abcd-host");
-  });
 
   it("a snapshot carries the pickups and the fury; without pickups it is not a snapshot", async () => {
     const s = snapshot();
@@ -66,6 +62,31 @@ describe("net v4", () => {
       [{ type: "fury", unit: 3, phase: "end", by: NOBODY, pos: V() }, "fury:3:end:-1"],
       [{ type: "fury", unit: 3, phase: "slain", by: 1, pos: V() }, "fury:3:slain:1"],
       [{ type: "status", target: 3, status: "fury", ticks: 720, source: 3 }, "status:3:3:fury"],
+    ];
+    for (const [ev, key] of evs) expect(eventKey(ev)).toBe(key);
+  });
+});
+
+/** Сеть v5 фазы 9 (Р9): добыча и серии меняют предсказание; серии едут в stats снапшота. */
+describe("net v5", () => {
+  it("is version 5 with its own peer ids", () => {
+    expect(NET_VERSION).toBe(5);
+    expect(gamePeerId("ABCD")).toBe("doodlemagic-g5-abcd-host");
+  });
+
+  it("the streak fields of stats survive the binary snapshot, −1 included", async () => {
+    const s = snapshot();
+    Object.assign(s.game.match.units[0]!.mage!.stats, { streak: 7, multi: 3, lastScoreTick: 123456 });
+    Object.assign(s.game.match.units[1]!.mage!.stats, { streak: 0, multi: 0, lastScoreTick: -1 });
+    const back = (await decodeBinary(await encodeBinary(s))) as SnapshotMsg;
+    expect(back.game.match.units.map((u) => u.mage!.stats)).toEqual(s.game.match.units.map((u) => u.mage!.stats));
+    expect(back.game.match.units.map((u) => [u.mage!.stats.streak, u.mage!.stats.multi, u.mage!.stats.lastScoreTick])).toEqual([[7, 3, 123456], [0, 0, -1]]);
+  });
+
+  it("keys the loot and streak events", () => {
+    const evs: [MatchEvent, string][] = [
+      [{ type: "loot", unit: 1, victim: 2, amount: 30, pos: V() }, "loot:1:2"],
+      [{ type: "streak", unit: 1, multi: 2, streak: 5, broke: NOBODY, brokeStreak: 0 }, "streak:1:2:5"],
     ];
     for (const [ev, key] of evs) expect(eventKey(ev)).toBe(key);
   });

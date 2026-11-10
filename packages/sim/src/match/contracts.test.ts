@@ -5,8 +5,8 @@ import { ABILITY_IDS, ELEMENTS, NEVER, SLOTS } from "./types";
 
 describe("ability tables follow GDD 4.3–4.4", () => {
   it("pins the Fire card", () => {
-    expect([FIRE.hp, FIRE.runSpeed, FIRE.fireFists.damage, FIRE.fireFists.ratePerS, FIRE.fireFists.projectile.speed]).toEqual([150, 6.5, 12, 5, 40]);
-    expect(FIRE.heat).toEqual({ perShot: 8, max: 100, coolPerS: 35, coolDelayS: 0.3, overheatS: 1.5, overheatRateMul: 0.5 });
+    expect([FIRE.hp, FIRE.runSpeed, FIRE.fireFists.damage, FIRE.fireFists.ratePerS, FIRE.fireFists.projectile.speed]).toEqual([150, 6.5, 15, 4, 50]); // фаза 9, Р2
+    expect(FIRE.heat).toEqual({ perShot: 10, max: 100, coolPerS: 35, coolDelayS: 0.3, overheatS: 1.5, overheatRateMul: 0.5 });
     expect(FIRE.fireball).toMatchObject({ cooldownS: 8, windupS: 0.25, damageCenter: 50, damageEdge: 20, radiusM: 3, projectile: { speed: 22 } });
     expect(FIRE.jetDash).toMatchObject({ cooldownS: 8, distM: 8, durationS: 0.2, trailS: 2, trailDps: 6 });
     expect(FIRE.fireWall).toMatchObject({ cooldownS: 12, rangeM: 15, lengthM: 10, heightM: 2.5, lifeS: 5, telegraphS: 0.4, contactDamage: 30 });
@@ -14,7 +14,7 @@ describe("ability tables follow GDD 4.3–4.4", () => {
 
   it("pins the Earth card", () => {
     expect([EARTH.hp, EARTH.runSpeed, EARTH.passive.knockbackMul]).toEqual([170, 6, 0.5]);
-    expect(EARTH.stoneShot).toMatchObject({ damage: 30, ratePerS: 1.9, windupS: 0.2, projectile: { speed: 40, radiusM: 0.25 } });
+    expect(EARTH.stoneShot).toMatchObject({ damage: 30, ratePerS: 1.9, windupS: 0.12, projectile: { speed: 46, radiusM: 0.25 } }); // фаза 9, Р2
     expect(EARTH.stonePillar).toMatchObject({ cooldownS: 10, rangeM: 20, telegraphS: 0.6, damage: 35, sizeM: 1.2, heightM: 2.5, hp: 200, lifeS: 4, selfLiftM: 2.5, knockback: { upM: 3.5 } });
     expect(EARTH.stoneWall).toMatchObject({ cooldownS: 12, aheadM: 2, lengthM: 4, heightM: 2.5, thickM: 0.6, growS: 0.3, solidS: 0.2, hp: 250, lifeS: 6 });
     expect(EARTH.earthquake).toMatchObject({ cooldownS: 14, telegraphS: 0.4, radiusM: 7, damage: 40, slowMul: 0.6, slowS: 2, rootRadiusM: 3, rootS: 0.5 });
@@ -43,7 +43,7 @@ describe("ability tables follow GDD 4.3–4.4", () => {
 
   it("converts seconds to whole ticks", () => {
     expect([ticks(0.25), ticks(0.2), ticks(0.4), ticks(1.5)]).toEqual([15, 12, 24, 90]);
-    expect([slotCooldownTicks("fire", "primary"), slotCooldownTicks("earth", "primary"), slotCooldownTicks("fire", "q"), slotCooldownTicks("earth", "c")]).toEqual([12, 32, 480, 840]);
+    expect([slotCooldownTicks("fire", "primary"), slotCooldownTicks("earth", "primary"), slotCooldownTicks("fire", "q"), slotCooldownTicks("earth", "c")]).toEqual([15, 32, 480, 840]);
   });
 });
 

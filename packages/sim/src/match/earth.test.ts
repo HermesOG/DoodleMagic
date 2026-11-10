@@ -30,9 +30,9 @@ const hitsOf = (log: Log, ability: string) => log.flatMap(({ t, e }) => (e.type 
 const reject = (t: number, slot: string, reason: string) => ({ t, e: expect.objectContaining({ type: "reject", slot, reason }) });
 
 describe("Earth kit", () => {
-  it("stone shot: 0.2 s windup, 30 damage, every 32 ticks while held", () => {
+  it("stone shot: 0.12 s windup, 30 damage, every 32 ticks while held", () => {
     const { log } = play([at(-12)], 120, () => ({ primary: true, pitch: pitchTo(12, 1.3) }));
-    expect([ticksOf(log, "cast", "stoneShot"), ticksOf(log, "release", "stoneShot")]).toEqual([[0, 32, 64, 96], [12, 44, 76, 108]]);
+    expect([ticksOf(log, "cast", "stoneShot"), ticksOf(log, "release", "stoneShot")]).toEqual([[0, 32, 64, 96], [7, 39, 71, 103]]); // замах 7 тиков — фаза 9, Р2
     const hits = hitsOf(log, "stoneShot");
     expect([hits.length >= 3, hits.every(({ e }) => e.amount === 30)]).toEqual([true, true]);
   });
@@ -76,7 +76,7 @@ describe("Earth kit", () => {
 
   it("buffers a Q pressed during the stone windup while LMB is held and casts it when the windup ends", () => {
     const { log } = play([], 40, (k) => ({ primary: true, q: k === 4, pitch: pitchTo(12, 0.5) }));
-    expect([ticksOf(log, "release", "stoneShot"), ticksOf(log, "cast", "stonePillar"), log.filter(({ e }) => e.type === "reject")]).toEqual([[12], [13], []]);
+    expect([ticksOf(log, "release", "stoneShot"), ticksOf(log, "cast", "stonePillar"), log.filter(({ e }) => e.type === "reject")]).toEqual([[7, 39], [8], []]);
   });
 
   it("stone wall: 2 m ahead, 4 × 2.5 × 0.6, solid after 0.2 s, holds stones until 250 HP are gone", () => {
@@ -105,10 +105,10 @@ describe("Earth kit", () => {
     // нажатие на 723 ждёт в буфере и выходит на 725, когда E готова: отказа нет
     expect([ticksOf(air.log, "cast", "stoneWall"), air.log.filter(({ e }) => e.type === "reject")]).toEqual([[5, 725], []]);
     const busy = play([], 870, (k) => ({ primary: k === 0, q: k === 6, c: k === 6 || k === 20 || k === 858 || k === 860 }));
-    // Q и C в замахе камня (выпуск на 12) ждут в буфере и выходят на 13; C на 20 и на 860 готова не скоро — отказ сразу
+    // Q и C в замахе камня (выпуск на 7) ждут в буфере и выходят на 8; C на 20 и на 860 готова не скоро — отказ сразу
     expect([ticksOf(busy.log, "cast", "stonePillar"), ticksOf(busy.log, "cast", "earthquake"), busy.log.filter(({ e }) => e.type === "reject")]).toEqual([
-      [13],
-      [13, 858],
+      [8],
+      [8, 858],
       [reject(20, "c", "cooldown"), reject(860, "c", "cooldown")],
     ]);
     const edge = play([], 2, () => ({ q: true, yaw: -Math.PI / 2 }), { pos: { x: 18, y: 0, z: 0 }, yaw: -Math.PI / 2 });
