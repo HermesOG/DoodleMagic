@@ -8,7 +8,7 @@ import { TICK_DT, TICK_HZ, type Vec3 } from "../types";
 import type { World } from "../world";
 import { BOT_KITS, type BotKit, type BotPrimary } from "./kits";
 import {
-  NAV_JUMP, NAV_WALK, columnNode, edgeKindOf, findPath, navNode, nearestFloor, nearestSafe, nodePos, safeNodeNear, voidDir, voidDistM, type NavGrid,
+  NAV_JUMP, NAV_WALK, columnNode, dashLandingOk, edgeKindOf, navColumn, findPath, navNode, nearestFloor, nearestSafe, nodePos, safeNodeNear, voidDir, voidDistM, type NavGrid,
 } from "./nav";
 import { BOT_PARAMS, BOT_RULES, BOT_TRAITS, type BotLevel, type BotParams, type BotTrait } from "./params";
 import { nextRandom, seedRandom } from "./rng";
@@ -49,6 +49,12 @@ export interface BotPlan {
   slot: "q" | "e" | "c" | "x" | null;
   aim: Vec3 | null; track: UnitId; trackDy: number; trackShot: BotPrimary;
   move: { x: number; z: number } | null; jump: boolean; tolDeg: number; notBefore: number; until: number;
+  /** Рывок на moveM: приземление проверяется заново на тике нажатия (0 — без проверки). */
+  moveM: number;
+  /** Держать прыжок столько тиков после нажатия (парение). */
+  holdJump: number;
+  /** План спасения над пустотой: новое спасение его не перебивает. */
+  rescue: boolean;
 }
 
 /** Память бота — простые данные (JSON), её держит хост. */
@@ -94,11 +100,19 @@ export interface BotState {
   lonely: { id: UnitId; since: number }[];
   /** Шаг от края (Р9): до какого тика и куда — узел с запасом до кромки. */
   edgeUntil: number; edgeX: number; edgeZ: number;
-  /** задача 2: с какого тика Архимаг держит готовую ульту. */
+  /** С какого тика заряд ульты полон (Р5: Архимаг ждёт верного). */
   ultSince: number;
+  /** Держать прыжок до этого тика (парение по плану). */
+  jumpHoldUntil: number;
+  /** Своя позиция прошлого тика: скачок дальше teleportM (перестановка на старте боя) — память сброшена. */
+  selfX: number; selfZ: number;
 }
 
-/** Мир для решений бота. humans и claims даёт хост: бот иначе не знает, кто человек и куда идут другие боты. */
+/**
+ * Мир для решений бота. humans и claims даёт хост: бот иначе не знает, кто человек и куда идут другие боты. Хост шагает
+ * ботов по очереди и считает claims каждого по уже обновлённым состояниям ботов этого тика (claimsFor): иначе два бота,
+ * думающие на одном тике, пробивают квоту (Р8).
+ */
 export interface BotWorld {
   readonly nav: NavGrid;
   readonly ctx: MatchContext;
@@ -164,6 +178,7 @@ export function createBot(id: UnitId, level: BotLevel, seed: number): BotState {
     stuckTick: NEVER, stuckX: 0, stuckZ: 0, unstickUntil: NEVER, unstickX: 0, unstickZ: 0, strafe: 1, strafeUntil: NEVER, slowTick: NEVER, jumpReq: false,
     yawVel: 0, pitchVel: 0, errYaw: 0, errPitch: 0, errYawGoal: 0, errPitchGoal: 0, driftAt: NEVER, newTargetUntil: NEVER, plan: null,
     trail: [], trailTick: NEVER, pauseUntil: NEVER, lookYaw: 0, victim: NOBODY, streak: 0, lonely: [], edgeUntil: NEVER, edgeX: 0, edgeZ: 0, ultSince: NEVER,
+    jumpHoldUntil: NEVER, selfX: NEVER, selfZ: NEVER,
   };
 }
 
@@ -172,7 +187,10 @@ export function botClaim(b: Readonly<BotState>): number {
   return b.mode === "rune" ? RUNE_CLAIM : b.target;
 }
 
-/** claims для бота id (Р8): сколько других ботов выбрали каждую цель. Для хоста и тестов. */
+/**
+ * claims для бота id (Р8): сколько других ботов выбрали каждую цель. Для хоста и тестов: bots — состояния этого тика,
+ * у уже шагнувших — новые (боты шагают по очереди).
+ */
 export function claimsFor(bots: readonly Readonly<BotState>[], id: UnitId): Record<number, number> {
   const out: Record<number, number> = {};
   for (const o of bots) {
@@ -305,6 +323,7 @@ function forget(b: BotState): void {
   b.pauseUntil = NEVER;
   b.edgeUntil = NEVER;
   b.jumpReq = false;
+  b.jumpHoldUntil = NEVER;
 }
 
 // ---------------------------------------------------------------- цель (Р7, Р8)
@@ -433,7 +452,7 @@ function perceive(c: Ctx, period: number): void {
   b.glimpses.push(takeGlimpse(s, me, c.world(), now - period + 1, rand));
   if (b.glimpses.length > R.glimpses) b.glimpses = b.glimpses.slice(-R.glimpses);
   const pg = perceivedGlimpse(b.glimpses, now - b.reaction);
-  if (pg && pg.tick !== b.pgTick) {
+  if (pg && pg.tick > b.pgTick) {
     b.pgTick = pg.tick;
     const keep = ticks(P.memoryS);
     for (const v of pg.seen) {
@@ -505,6 +524,7 @@ function viewOf(c: Ctx, threats: readonly Threat[]): BotView {
     now, state: s, world: c.world(), nav, ctx: w.ctx, self: me, level: b.level, trait: b.trait, params: P, band: c.band, enemies, target, threats,
     voidM: voidDistM(nav, me.move.body.pos), voidDir: voidDir(nav, me.move.body.pos), underFire,
     inTrouble: (me.hp < me.maxHp * R.lowHpFrac && underFire) || tele,
+    ultHeldS: b.ultSince === NEVER ? 0 : (now - b.ultSince) / TICK_HZ,
   };
 }
 
@@ -641,11 +661,16 @@ function think(c: Ctx, period: number, threats: readonly Threat[]): void {
   const { b, me, nav, P, kit, now, rand, band } = c;
   perceive(c, period);
   const pos = me.move.body.pos;
-  // от края (Р9): ближе 3 м к кромке и рядом враг с толчком — шаг от края; Ученик не отходит
-  if (P.edgeStepAway && voidDistM(nav, pos) < R.dangerM) {
+  const orb = orbGoal(c);
+  const rune = orb ? null : runeGoal(c);
+  // от края (Р9): ближе 3 м к кромке в бою и враг с толчком ближе pushNearM или видимый в своей дальности толчка —
+  // шаг от края; Ученик не отходит; к руне и сфере идут и у кромки (иначе топчется у моста)
+  const fighting = b.mode === "combat" || b.mode === "edge";
+  if (P.edgeStepAway && fighting && !orb && !rune && voidDistM(nav, pos) < R.dangerM) {
     const pusher = b.memory.some((m) => {
       const r = R.pushM[m.element];
-      return r > 0 && dist2(m, pos) <= r * r;
+      const d2 = dist2(m, pos);
+      return r > 0 && (d2 <= R.pushNearM * R.pushNearM || (visibleMem(b, m) && d2 <= r * r));
     });
     if (pusher) {
       // куда отходить — ближний узел с запасом dangerM (с моста — на пол, а не вбок к другой кромке)
@@ -658,8 +683,6 @@ function think(c: Ctx, period: number, threats: readonly Threat[]): void {
       }
     }
   }
-  const orb = orbGoal(c);
-  const rune = orb ? null : runeGoal(c);
   chooseTarget(c, rune && b.target === NOBODY ? band[1] : Infinity);
   const tm = memOf(b, b.target);
   let goal: Vec3 | null = null;
@@ -723,16 +746,18 @@ function think(c: Ctx, period: number, threats: readonly Threat[]): void {
     b.trail = [...b.trail, pos.x, pos.z].slice(-24);
     b.trailTick = now;
   }
-  // план кита (задача 2: условия Q/E/C/X; задача 1 — X «враг в дальности»)
+  // ульта полна с этого тика (Р5: Архимаг ждёт верного до ultWaitS)
+  const ult = me.mage!.ult;
+  if (ult.charge < ULT_CHARGE.max || ult.cast) b.ultSince = NEVER;
+  else if (b.ultSince === NEVER) b.ultSince = now;
+  // план кита (условия Q/E/C/X стихии), пока своего плана нет; спасение над пустотой — каждый тик в stepBot
   if (!b.plan) {
-    const v = viewOf(c, threats);
-    const rescue = !me.move.onGround && v.voidM < R.safeM && kit.rescue ? kit.rescue(v, rand) : null; // задача 2: спасение над пустотой
-    const plan = rescue ?? kit.decide(v, rand);
+    const plan = kit.decide(viewOf(c, threats), rand);
     if (plan) b.plan = toPlan(c, plan);
   }
 }
 
-function toPlan(c: Ctx, p: CastPlan): BotPlan {
+function toPlan(c: Ctx, p: CastPlan, rescue = false): BotPlan {
   const { P, now, rand } = c;
   const delay = p.urgent ? 0 : ticks(between(rand, P.castDelayS));
   const notBefore = now + delay;
@@ -741,6 +766,7 @@ function toPlan(c: Ctx, p: CastPlan): BotPlan {
     // в памяти — без Infinity (JSON): скорость 0 — удар без полёта
     trackShot: { speed: p.track?.speed ?? 0, gravity: p.track?.gravity ?? 0, rangeM: 0, windupS: p.track?.windupS ?? 0, instant: !((p.track?.speed ?? 0) > 0) },
     move: p.move ? { x: p.move.x, z: p.move.z } : null, jump: p.jump === true, tolDeg: p.tolDeg ?? R.castTolDeg, notBefore, until: notBefore + ticks(p.ttlS ?? R.planTtlS),
+    moveM: p.moveM ?? 0, holdJump: p.holdJumpS ? ticks(p.holdJumpS) : 0, rescue,
   };
 }
 
@@ -826,8 +852,11 @@ function safetyDir(c: Ctx): { x: number; z: number } | null {
   if (!danger) return null;
   const f = nearestSafe(nav, p, 6, 1);
   if (f < 0) {
+    // над пропастью (колонка без опоры или узла под ногами нет) voidDir ведёт к полу; на узле — от кромки
     const d = voidDir(nav, p);
-    return d && voidDistM(nav, p) >= R.safeM ? { x: -d.x, z: -d.z } : d;
+    const col = navColumn(nav, p.x, p.z);
+    const over = col < 0 || nav.colVoid[col] === 1 || columnNode(nav, p.x, p.z, p.y) < 0;
+    return d && !over ? { x: -d.x, z: -d.z } : d;
   }
   const q = nodePos(nav, f);
   return norm2(q.x - p.x, q.z - p.z);
@@ -846,8 +875,16 @@ function combatDir(c: Ctx, tm: BotMemory): { x: number; z: number } | null {
   const uz = dz / d;
   const [lo, hi] = band;
   const mid = (lo + hi) / 2;
+  // своя точка боя кита (заход для Порыва, постановка под сброс) вместо полосы: к ней, рядом — мелкий стрейф
+  const st = c.kit.stance ? c.kit.stance(viewOf(c, [])) : null;
+  if (st) {
+    const sx = st.x - p.x;
+    const sz = st.z - p.z;
+    const sd = Math.sqrt(sx * sx + sz * sz);
+    if (sd > 1) return norm2(sx / sd - uz * b.strafe * 0.3, sz / sd + ux * b.strafe * 0.3);
+    return norm2(-uz * b.strafe * 0.4 + sx * 0.5, ux * b.strafe * 0.4 + sz * 0.5);
+  }
   const radial = d < lo ? -1 : d > hi ? 1 : clampN((d - mid) / ((hi - lo) / 2), -1, 1) * 0.5;
-  // задача 2: kit.stance — своя точка боя (заход для Порыва, постановка под сброс) вместо полосы
   return norm2(ux * radial - uz * b.strafe * 0.85, uz * radial + ux * b.strafe * 0.85);
 }
 
@@ -980,6 +1017,12 @@ export function stepBot(bot: Readonly<BotState>, s: Readonly<MatchState>, w: Bot
     world: () => (tw ??= buildTickWorld(w.ctx.world, s).world),
   };
   bookkeeping(c);
+  // перестановка без смерти (старт боя): своя позиция скакнула — память, цель и путь сброшены
+  const sp = me.move.body.pos;
+  const jumped = b.selfX !== NEVER && dist2(sp, { x: b.selfX, z: b.selfZ }) > R.teleportM * R.teleportM;
+  b.selfX = sp.x;
+  b.selfZ = sp.z;
+  if (jumped) forget(b);
   if (!me.alive) {
     forget(b);
     b.rng = rng;
@@ -997,6 +1040,11 @@ export function stepBot(bot: Readonly<BotState>, s: Readonly<MatchState>, w: Bot
   // мысль
   const period = Math.max(1, Math.round(TICK_HZ / P.thinkHz));
   if ((now + b.id) % period === 0) think(c, period, noticed);
+  // спасение над пустотой (Р9): каждый тик, вытесняет любой план, кроме уже идущего спасения
+  if (!me.move.onGround && kit.rescue && !b.plan?.rescue && voidDistM(nav, p) < R.safeM) {
+    const r = kit.rescue(viewOf(c, noticed), rand);
+    if (r) b.plan = toPlan(c, r, true);
+  }
   const tm = memOf(b, b.target);
 
   // ход
@@ -1108,7 +1156,7 @@ export function stepBot(bot: Readonly<BotState>, s: Readonly<MatchState>, w: Bot
     const tu = unitById(s, tm.id);
     const range = Math.sqrt((aim.x - eye.x) * (aim.x - eye.x) + (aim.y - eye.y) * (aim.y - eye.y) + (aim.z - eye.z) * (aim.z - eye.z));
     if (tu?.alive && now >= tu.status.shieldUntil && range <= kit.primary.rangeM && angleTo(eye, yaw, pitch, aim) <= R.fireTolDeg + sigma / DEG) {
-      primary = kit.holdPrimary(me, P, null) && canSee(c.world(), eye, tu);
+      primary = kit.holdPrimary(me, P, perceived(c, tm), now) && canSee(c.world(), eye, tu);
     }
   }
 
@@ -1117,12 +1165,15 @@ export function stepBot(bot: Readonly<BotState>, s: Readonly<MatchState>, w: Bot
   if (plan) {
     if (now > plan.until) b.plan = null;
     else if (now >= plan.notBefore) {
-      const ready = plan.slot === null || (slotReady(me, plan.slot, now) && !m.held[plan.slot]);
+      const ready = (plan.slot === null || (slotReady(me, plan.slot, now) && !m.held[plan.slot])) && (!plan.jump || !me.move.jumpHeld);
       const aimed = plan.aim !== null || plan.track !== NOBODY;
       const aligned = !aimed || (look !== null && angleTo(eye, yaw, pitch, look) <= plan.tolDeg);
-      if (ready && aligned) {
+      // рывок по отложенному плану: бот с тех пор сдвинулся — приземление проверяется заново (Р9)
+      if (ready && plan.move && plan.moveM > 0 && !dashLandingOk(nav, p, plan.move, plan.moveM)) b.plan = null;
+      else if (ready && aligned) {
         if (plan.slot) btn[plan.slot] = true;
         if (plan.jump) jump = true;
+        if (plan.jump && plan.holdJump > 0) b.jumpHoldUntil = now + plan.holdJump;
         if (plan.move) dir = { x: plan.move.x, z: plan.move.z };
         b.plan = null;
       }
@@ -1135,7 +1186,7 @@ export function stepBot(bot: Readonly<BotState>, s: Readonly<MatchState>, w: Bot
   const dx = dir?.x ?? 0;
   const dz = dir?.z ?? 0;
   const input: MatchInput = {
-    moveX: dx * r.x + dz * r.z, moveZ: dx * f.x + dz * f.z, jump: jump && !me.move.jumpHeld, yaw, pitch,
+    moveX: dx * r.x + dz * r.z, moveZ: dx * f.x + dz * f.z, jump: (jump && !me.move.jumpHeld) || (now < b.jumpHoldUntil && me.move.jumpHeld), yaw, pitch,
     primary, q: btn.q, e: btn.e, c: btn.c, x: btn.x,
   };
   b.rng = rng;

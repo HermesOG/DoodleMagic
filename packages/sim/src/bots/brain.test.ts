@@ -45,12 +45,13 @@ function duel(a: "fire" | "air" | "earth" | "water", b: "fire" | "air" | "earth"
 function run(g: GameState, bots: BotState[], n: number, each?: (inputs: Partial<Record<UnitId, MatchInput>>, g: GameState, bots: BotState[]) => void): { g: GameState; bots: BotState[] } {
   for (let t = 0; t < n; t++) {
     const inputs: Partial<Record<UnitId, MatchInput>> = {};
-    const prev = bots;
-    bots = bots.map((b) => {
-      const r = stepBot(b, g.match, { nav, ctx, humans: [], claims: claimsFor(prev, b.id) });
-      inputs[b.id] = r.input;
-      return r.bot;
-    });
+    // по очереди: claims — по уже обновлённым состояниям ботов этого тика (как у хоста)
+    bots = [...bots];
+    for (let k = 0; k < bots.length; k++) {
+      const r = stepBot(bots[k]!, g.match, { nav, ctx, humans: [], claims: claimsFor(bots, bots[k]!.id) });
+      inputs[bots[k]!.id] = r.input;
+      bots[k] = r.bot;
+    }
     each?.(inputs, g, bots);
     g = stepGame(g, inputs, ctx).game;
   }
