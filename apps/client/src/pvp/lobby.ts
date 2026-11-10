@@ -163,7 +163,7 @@ export function createLobby(o: LobbyOptions): Lobby {
         <p class="pvp-error bad" role="alert" hidden></p>
         <div class="actions pvp-retry" hidden>
           <button class="btn secondary pvp-again" type="button">Попробовать ещё раз</button>
-          <a class="btn secondary" href="/">На полигон</a>
+          <a class="btn secondary" href="/?mode=training">На полигон</a>
         </div>
       </form>
     </section>`;

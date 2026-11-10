@@ -178,7 +178,7 @@ function createOverlay(root: HTMLElement, rejoin: string | null): { stale: HTMLE
       <p></p>
       <div class="actions">
         <a class="btn pvp-rejoin" hidden>Зайти снова</a>
-        <a class="btn secondary" href="/">На полигон</a>
+        <a class="btn secondary" href="/?mode=training">На полигон</a>
       </div>
     </section>`;
   if (rejoin !== null) {

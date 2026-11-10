@@ -45,7 +45,7 @@ function showNotice(app: HTMLElement, title: string, text: string): void {
   p.textContent = text;
   const a = document.createElement("a");
   a.className = "btn secondary";
-  a.href = "/";
+  a.href = "/?mode=training";
   a.textContent = "На полигон";
   card.append(h, p, a);
   app.replaceChildren(card);

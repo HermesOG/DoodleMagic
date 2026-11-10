@@ -195,7 +195,8 @@ export function createModeSelect(current: Readonly<BotSetup>): { panel: HTMLElem
     guard(d) {
       const inner = d.chooseElement.bind(d);
       d.chooseElement = (e) => {
-        if (sameSetup(shown, current)) return inner(e);
+        // на полигоне скрытые настройки ботов не в счёт: та же вкладка — тот же режим
+        if (sameSetup(shown, current) || (shown.mode === "training" && current.mode === "training")) return inner(e);
         saveBotSetup(shown);
         savePrefs({ ...loadPrefs(), element: e });
         location.assign("/");
