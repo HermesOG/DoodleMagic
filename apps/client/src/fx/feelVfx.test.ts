@@ -17,11 +17,11 @@ describe("feel pass, part 2 (vfx)", () => {
     expect([FLASH_S.small, FLASH_S.medium, FLASH_S.large]).toEqual([0.06, 0.1, 0.13]);
   });
 
-  it("leaves a scorch for 8 s and quake cracks for 2.5 s on the floor (A3)", () => {
-    expect([SCORCH_S, QUAKE_AFTER_S]).toEqual([8, 2.5]);
-    expect(markDecal("scorch", O, 1.2, 4)).toMatchObject({ stage: "active", progress: 0.5, style: "scorch", sizeX: 2.4, shape: "ring" });
-    expect(markDecal("quake", O, 7, 1.25)).toMatchObject({ progress: 0.5, style: "quake", sizeX: 14 });
-    expect([markDecal("scorch", O, 1, 8), markDecal("quake", O, 7, 2.6)]).toEqual([null, null]);
+  it("leaves a scorch for 12 s and quake cracks for 6 s on the floor (A3, round 4 V10)", () => {
+    expect([SCORCH_S, QUAKE_AFTER_S]).toEqual([12, 6]);
+    expect(markDecal("scorch", O, 1.2, 6)).toMatchObject({ stage: "active", progress: 0.5, style: "scorch", sizeX: 2.4, shape: "ring" });
+    expect(markDecal("quake", O, 7, 3)).toMatchObject({ progress: 0.5, style: "quake", sizeX: 14 });
+    expect([markDecal("scorch", O, 1, 12), markDecal("quake", O, 7, 6.1)]).toEqual([null, null]);
   });
 
   it("puts the scorch on the floor under a standing target, none under a flying one", () => {

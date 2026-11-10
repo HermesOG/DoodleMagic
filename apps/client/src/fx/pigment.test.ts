@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NOBODY, createMageUnit, createMatchState, type MatchState, type Vec3, type Zone } from "@doodlemagic/sim";
 import { INK, INK_STYLE, PAPER, luminance, saturation, type RGB } from "../render/palette";
 import { styleShared } from "../render/stylePass";
+import { QUAKE_AFTER_S, SCORCH_ALPHA, SCORCH_EMBER_S, SCORCH_INK, SCORCH_S, SOOT_MARGIN_M, SOOT_S, createDecalMeshes, sootDecal } from "./decals";
 import { createFireWallMeshes, fireWallSheet } from "./fireWalls";
 import { FX_COMMON, GLAZE, GLAZE_TINT, glazeAlpha, glazeOver } from "./fxShader";
 import { BURN_ALPHA, createGlowMeshes, cullGlows } from "./glows";
@@ -11,7 +12,7 @@ import { AIR_STROKE_ALPHA, FX_COLOR, INK_STROKE_ALPHA, KIND, RIM, markSide, part
 import { CLEAR_DEG, FLAG, createParticlePool, packGravity, unpackGravity } from "./particles";
 import { BREATH_PALM_RATE, BURN_SMOKE_S, BURST_SHARE, INK_STRIKE, breathPalmTongue, burnSmoke, burstParticles, inkStrike } from "./presets";
 import { DAY_DIM, OWN_BREATH, createUltVfx, dayDimState, stepDayDim, ultDimsDay } from "./ultVfx";
-import { burnEdge, createVfx } from "./vfx";
+import { MAX_MARKS, burnEdge, createVfx } from "./vfx";
 
 /*
  * Магия-пигмент (фаза 7, задача 3; раунд 4, V1–V10): глазурь света, цвета под бумагу, кайма свой / чужой, горение
@@ -411,5 +412,39 @@ describe("R7: magic dims the day", () => {
     expect(styleShared.dayDim.value).toBeCloseTo(1, 9);
     vfx.dispose();
     expect(styleShared.dayDim.value).toBe(0);
+  });
+});
+
+describe("V10: the floor remembers the fight", () => {
+  it("scorch 12 s in #2B1D14 at 0.55 with embers for 1.5 s, quake cracks 6 s, a soot strip 10 s after a fire wall", () => {
+    expect([SCORCH_S, SCORCH_EMBER_S, SCORCH_ALPHA, QUAKE_AFTER_S, SOOT_S]).toEqual([12, 1.5, 0.55, 6, 10]);
+    expect(SCORCH_INK).toEqual([0x2b / 255, 0x1d / 255, 0x14 / 255]);
+    const box = { min: { x: -5, y: 0, z: -11 }, max: { x: 5, y: 2.5, z: -10.4 } };
+    expect(sootDecal(box, 5)).toMatchObject({ style: "soot", shape: "rect", progress: 0.5, center: { x: 0, y: 0, z: -10.7 }, sizeX: 10 + 2 * SOOT_MARGIN_M });
+    expect([sootDecal(box, -0.1), sootDecal(box, 10)]).toEqual([null, null]);
+    const m = createDecalMeshes(gbuffer, time).mesh.material;
+    expect([m.defines.SCORCH_S, m.defines.QUAKE_AFTER_S, m.defines.SCORCH_A]).toEqual(["12.0", "6.0", "0.55"]);
+    expect(m.fragmentShader).toContain("style == 10");
+    expect(MAX_MARKS).toBe(12);
+  });
+
+  it("a burnt-out fire wall leaves soot; at most 12 marks, the oldest go first", () => {
+    const { vfx, mesh, sync } = harness();
+    const wall = (id: number, x: number): Zone =>
+      ({ id, owner: OTHER, kind: "fireWall", ability: "fireWall", shape: { type: "box", box: { min: { x: x - 1, y: 0, z: -9 }, max: { x: x + 1, y: 2.5, z: -8.4 } } }, bornTick: 0, armTick: 2, endTick: 400, rehit: [] }) as Zone;
+    const s = createMatchState([createMageUnit(ME, "fire", { pos: V(), yaw: 0 })]);
+    const decals = mesh("fx-decals");
+    const soot = () => Array.from({ length: decals.count }, (_, i) => decals.geometry.getAttribute("aD2").getX(i)).filter((st) => st === 10).length;
+    s.tick = 10;
+    s.zones = Array.from({ length: 14 }, (_, i) => wall(100 + i, -13 + 2 * i));
+    sync(s, 1);
+    expect(soot()).toBe(0);
+    s.tick = 11;
+    s.zones = [];
+    sync(s, 1.1);
+    expect(soot()).toBe(12);
+    sync(s, 1.1 + SOOT_S + 0.1);
+    expect(soot()).toBe(0);
+    vfx.dispose();
   });
 });

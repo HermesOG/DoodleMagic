@@ -1,12 +1,12 @@
 import { Group, Scene, Vector3, type PerspectiveCamera } from "three";
-import { EARTH, ELEMENT_INFO, NOBODY, TICK_HZ, statusFlags, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
+import { EARTH, ELEMENT_INFO, NOBODY, TICK_HZ, statusFlags, type AABB, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
 import type { BurstPreset, Effect, FeelTier } from "../feel/effects";
 import { TIERS, breathStreaming } from "../feel/eventMap";
 import { stepSpring, type Spring } from "../hands/spring";
 import type { PresetId } from "../render/quality";
 import { HANDS_FOV, WORLD_FOV, type FxLayers, type StyleRenderer } from "../render/styleRenderer";
 import { createDebris } from "./debris";
-import { createDecalMeshes, markDecal, zoneDecal, type DecalSpec, type RootRing } from "./decals";
+import { createDecalMeshes, markDecal, sootDecal, zoneDecal, type DecalSpec, type RootRing } from "./decals";
 import { createDummyMeshes, type DummyView } from "./dummyMeshes";
 import { ELEMENT_VFX, type ElementVfxFrame } from "./elementVfx";
 import { createFireWallMeshes, fireWallSheet, type FireWallSheet } from "./fireWalls";
@@ -186,16 +186,20 @@ interface DummyAnim {
   rootsAt: number;
 }
 
-/** След удара на полу (A3): подпалина шара, трещины землетрясения. Живёт в эффектнике, не в зоне. */
+/**
+ * След магии на полу (A3, V10): подпалина шара, трещины землетрясения, копоть погасшей стены огня (box). Живёт
+ * в эффектнике, не в зоне.
+ */
 interface Mark {
-  kind: "scorch" | "quake";
+  kind: "scorch" | "quake" | "soot";
   center: Vec3;
   radius: number;
+  box?: AABB;
   born: number;
   seed: number;
 }
-/** Следов на полу одновременно — не больше: старый уступает новому. */
-const MAX_MARKS = 8;
+/** Следов на полу одновременно — не больше: старый уступает новому (V10). */
+export const MAX_MARKS = 12;
 
 /**
  * Пол под взрывом шара: попал в стоящего — его подошва; в летящего — пола рядом нет (null); иначе — точка взрыва
@@ -314,7 +318,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const anims = new Map<UnitId, DummyAnim>();
   const tracks = new Map<number, Track>();
   const terrainSeen = new Map<number, Seen<Terrain>>();
-  const ignited = new Map<number, { embers: number }>();
+  /** Горящие линии зон: накопитель углей; у стены огня — её бокс (копоть после конца, V10). */
+  const ignited = new Map<number, { embers: number; box?: AABB; seed: number }>();
   const flashes: Flash[] = [];
   const marks: Mark[] = [];
   /** Юниты прошлого кадра — где пол под взрывом. */
@@ -749,7 +754,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           sheets.push(sheet);
           let st = ignited.get(z.id);
           if (!st) {
-            st = { embers: 0 };
+            st = { embers: 0, box: sheet.box, seed: sheet.seed };
             ignited.set(z.id, st);
             emitWorld(markSide(lineFlames(line.a, line.b, 44, true, Math.random), side), nowT);
           }
@@ -766,7 +771,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         } else if (z.kind === "fireTrail" && line && tick >= z.armTick) {
           let st = ignited.get(z.id);
           if (!st) {
-            st = { embers: 0 };
+            st = { embers: 0, seed: 0 };
             ignited.set(z.id, st);
           }
           const life = 1 - Math.min(1, (tick - z.armTick) / Math.max(1, z.endTick - z.armTick));
@@ -778,7 +783,12 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           }
         }
       }
-      for (const id of ignited.keys()) if (!liveZones.has(id)) ignited.delete(id);
+      for (const [id, st] of ignited) {
+        if (liveZones.has(id)) continue;
+        // стена огня погасла — на полу остаётся полоса копоти
+        if (st.box) addMark({ kind: "soot", center: { x: 0, y: st.box.min.y, z: 0 }, radius: 0, box: st.box, born: nowT, seed: st.seed });
+        ignited.delete(id);
+      }
       walls.update(sheets);
 
       // стихии фазы 4: свои меши и логика поверх общих пулов — до декалей и разбора свечений
@@ -798,7 +808,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       // следы ударов на полу: подпалины и трещины
       for (let i = marks.length - 1; i >= 0; i--) {
         const m = marks[i]!;
-        const spec = markDecal(m.kind, m.center, m.radius, nowT - m.born);
+        const spec = m.kind === "soot" ? (m.box ? sootDecal(m.box, nowT - m.born) : null) : markDecal(m.kind, m.center, m.radius, nowT - m.born);
         if (spec) decalList.push({ spec, seed: m.seed, intensity: 1 });
         else marks.splice(i, 1);
       }
