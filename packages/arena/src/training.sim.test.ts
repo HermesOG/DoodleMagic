@@ -3,11 +3,11 @@ import {
   EYE_HEIGHT, NO_MATCH_INPUT, bodyBox, createMatch, createPlayer, createWorld, groundBelow, isFree, lineOfSight, matchContext, rightXZ, stepMatch, volumeAt,
   type MatchEvent, type Vec3,
 } from "@doodlemagic/sim";
-import { GALLERY, buildGallery } from "./gallery";
+import { SEDLOVINA, buildSedlovina } from "./sedlovina";
 import { TRAINING } from "./training";
 
 describe.each(["full", "compact"] as const)("training ground (%s)", (variant) => {
-  const arena = buildGallery(variant);
+  const arena = buildSedlovina(variant);
   const world = createWorld(arena.colliders, arena.volumes);
   const free = (p: Vec3) => {
     const box = bodyBox(createPlayer(p).body);
@@ -24,23 +24,31 @@ describe.each(["full", "compact"] as const)("training ground (%s)", (variant) =>
     }
   });
 
-  it("puts two dummies at the open gorge edge and one on the bridge, and shows at least three from the spawn", () => {
-    const g = GALLERY.gorge;
-    expect(TRAINING.dummies.filter((d) => d.pos.z < g.z0 && d.pos.z > g.z0 - 1.3 && d.pos.x > g.x0 && d.pos.x < g.x1)).toHaveLength(2);
-    expect(TRAINING.dummies.filter((d) => d.pos.z > g.z0 && d.pos.z < g.z1 && Math.abs(d.pos.x) < 1.5)).toHaveLength(1);
+  it("puts two dummies at the open edge of the well, one on a bridge of the cross, one far beyond the well, and shows all six from the spawn", () => {
+    const w = SEDLOVINA.voids.well;
+    const edge = TRAINING.dummies.filter((d) => Math.abs(d.pos.z) < w.z1 && Math.abs(d.pos.x) > w.x1 && Math.abs(d.pos.x) < w.x1 + 1.3);
+    expect(edge).toHaveLength(2);
+    expect(TRAINING.dummies.filter((d) => d.pos.z > w.z0 && d.pos.z < -SEDLOVINA.islandHalf && Math.abs(d.pos.x) < 2)).toHaveLength(1);
+    const dist = (p: Vec3) => Math.hypot(p.x - TRAINING.spawn.pos.x, p.z - TRAINING.spawn.pos.z);
+    const far = TRAINING.dummies.at(-1)!;
+    expect(far.pos.z).toBeGreaterThan(w.z1);
+    expect(dist(far.pos)).toBeGreaterThanOrEqual(20);
+    expect(dist(far.pos)).toBeLessThanOrEqual(25);
+    // голова манекена (1,5 м над подошвой) видна от глаз мага; дальний — поверх парапета половины B
     const eye = { ...TRAINING.spawn.pos, y: TRAINING.spawn.pos.y + EYE_HEIGHT };
-    expect(TRAINING.dummies.filter((d) => lineOfSight(world, eye, { ...d.pos, y: d.pos.y + 1 })).length).toBeGreaterThanOrEqual(3);
+    expect(TRAINING.dummies.filter((d) => !lineOfSight(world, eye, { ...d.pos, y: d.pos.y + 1.5 })).map((d) => d.pos)).toStrictEqual([]);
   });
 });
 
 describe("knock-off (full)", () => {
-  it("lets a fireball from the courtyard knock an edge dummy into the gorge", () => {
-    const ctx = matchContext(buildGallery("full"));
-    const target = TRAINING.dummies.find((d) => d.pos.x > 2 && d.pos.z < GALLERY.gorge.z0)!;
-    let s = createMatch({ mages: [{ element: "fire", spawn: { pos: { x: target.pos.x, y: 0, z: target.pos.z - 3.6 }, yaw: Math.PI } }], dummies: [target] });
+  it("lets a fireball from the isthmus knock an edge dummy into the well", () => {
+    const ctx = matchContext(buildSedlovina("full"));
+    const target = TRAINING.dummies.find((d) => d.pos.x > SEDLOVINA.voids.well.x1 && Math.abs(d.pos.z) < SEDLOVINA.voids.well.z1)!;
+    // маг в 3,6 м к востоку, лицом на запад, к колодцу (forwardXZ(π/2) = −x)
+    let s = createMatch({ mages: [{ element: "fire", spawn: { pos: { x: target.pos.x + 3.6, y: 0, z: target.pos.z }, yaw: Math.PI / 2 } }], dummies: [target] });
     const ev: MatchEvent[] = [];
     for (let k = 0; k < 200; k++) {
-      const r = stepMatch(s, { 1: { ...NO_MATCH_INPUT, yaw: Math.PI, pitch: Math.atan2(1 - 1.6, 3.6), q: k === 10 } }, ctx);
+      const r = stepMatch(s, { 1: { ...NO_MATCH_INPUT, yaw: Math.PI / 2, pitch: Math.atan2(1 - 1.6, 3.6), q: k === 10 } }, ctx);
       s = r.state;
       ev.push(...r.events);
     }
