@@ -4,6 +4,7 @@ import {
   ELEMENT_OF,
   FIRE,
   NOBODY,
+  PICKUPS,
   aimDir,
   eyeOf,
   forwardXZ,
@@ -127,6 +128,15 @@ export const RIFT_NEAR_TRAUMA = 0.3;
 export const RIFT_BURSTS = 5;
 /** Тост убийцы ультой (round3/01, 2.1: крупная ступень — тост). */
 const ULT_KILL_TOAST: Readonly<Partial<Record<DamageSource, string>>> = { dragonBreath: "Дыхание дракона!", tectonicRift: "Разлом!" };
+/** Чужую сферу слышно рядом и тихо: она лечит другого, не меня. */
+const ORB_OTHER_GAIN = 0.5;
+/** Чужое взятие руны слышно издалека (пол громкости после расстояния): на арене новый носитель ярости. */
+const RUNE_FAR_FLOOR = 0.5;
+/** Своя руна — вес: FOV-удар, как у выдоха Дыхания. */
+const RUNE_FOV_DEG = 4;
+/** Тосты руны: числа — из правил (PICKUPS), чтобы текст не разошёлся с уроном и зарядом. */
+const RUNE_TAKE_TOAST = `Руна ярости! +${Math.round((PICKUPS.rune.damageMul - 1) * 100)} % урона`;
+const FURY_SLAIN_TOAST = `Руна сбита! +${PICKUPS.rune.killUlt} к ульте`;
 
 /** Звук каста у слушателя: предвосхищение или выпуск (round2/03, п. 4.2). */
 const CAST_SOUND: Readonly<Record<AbilityId, SoundId>> = {
@@ -500,11 +510,31 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
     case "heal":
     case "reaction":
       return [];
-    // объекты на карте и ярость (фаза 6): отклик — задача 3, вид — по состоянию
     case "pickup":
+      return pickupEffects(ev, mine(ev.unit));
     case "fury":
-      return [];
+      // ярость снята: своя кончилась — мягкий звон вниз; носителя сбил я — треск печати и тост. Свою потерю скажет
+      // смерть, чужие — килфид (по состоянию гаснет и свечение носителя)
+      if (ev.phase === "end") return mine(ev.unit) ? [sound("furyEnd")] : [];
+      return ev.by !== NOBODY && mine(ev.by) ? [sound("furySlain"), { kind: "toast", text: FURY_SLAIN_TOAST }] : [];
   }
+}
+
+/**
+ * Объекты на карте (фаза 6; GDD 6 — «нейтральный язык», колокола). Руна — событие всей арены: объявление и появление
+ * звучат у каждого без позиции. Своё взятие — вес: у уха, руна — ещё FOV +4° и тост; чужое — из точки объекта: сфера
+ * тихо, руна — с полом громкости (слышно издалека, но по направлению). Сфера возвращается молча — её видно по печати
+ * на полу. Всплесков нет: сферы, руну и носителя рисует вид по состоянию (задача 2).
+ */
+function pickupEffects(ev: Extract<MatchEvent, { type: "pickup" }>, mine: boolean): Effect[] {
+  if (ev.kind === "orb") {
+    if (ev.phase !== "take") return [];
+    return mine ? [sound("orbTake")] : [sound("orbTake", ev.pos, ORB_OTHER_GAIN)];
+  }
+  if (ev.phase === "warn") return [sound("runeWarn")];
+  if (ev.phase === "spawn") return [sound("runeSpawn")];
+  if (!mine) return [{ kind: "sound", id: "runeTake", pos: ev.pos, gain: 1, floor: RUNE_FAR_FLOOR }];
+  return [sound("runeTake"), { kind: "fov", deg: RUNE_FOV_DEG }, { kind: "toast", text: RUNE_TAKE_TOAST }];
 }
 
 /** Куда слушателю звучит поток: ближняя к нему точка оси потока (от глаз мага на 12 м по взгляду). */

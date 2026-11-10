@@ -23,6 +23,8 @@ export const SOUND_IDS = [
   "ultWarn", "ultReady",
   // Дыхание дракона: вдох и зёрна рёва потока; Тектонический разлом: гул бегущей трещины и удар шипов
   "breathInhale", "breathRoar", "riftRumble", "riftStrike",
+  // объекты на карте (фаза 6): сфера жизни, руна ярости и сама ярость — «нейтральный язык», колокола без подписи стихии
+  "orbTake", "runeWarn", "runeSpawn", "runeTake", "furyEnd", "furySlain",
   ...AIR_SOUND_IDS, ...WATER_SOUND_IDS,
 ] as const;
 export type SoundId = (typeof SOUND_IDS)[number];

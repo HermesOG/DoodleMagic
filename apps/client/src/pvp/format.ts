@@ -1,5 +1,5 @@
 import {
-  ABILITY_NAME, ELEMENTS, ELEMENT_INFO, NOBODY, PVP, TICK_HZ, scoreLimitFor, standings, unitById,
+  ABILITY_NAME, ELEMENTS, ELEMENT_INFO, NOBODY, PICKUPS, PVP, TICK_HZ, scoreLimitFor, standings, unitById,
   type DamageSource, type Element, type GameState, type MatchEvent, type Standing, type UnitId,
 } from "@doodlemagic/sim";
 
@@ -77,8 +77,20 @@ export function respawnLine(respawnTick: number, now: number): string {
   return `Возрождение через ${Math.max(1, Math.ceil((respawnTick - now) / TICK_HZ))}`;
 }
 
-/** Строка килфида по подтверждённому событию death/fall; прочие → null. mine — я убийца или жертва. */
+/**
+ * Строка килфида по подтверждённому событию; прочие → null. death/fall — mine: я убийца или жертва. Руна (фаза 6):
+ * взятие руны — mine: я взял; носитель сбит кем-то — mine: я сбил или я носитель. Объявление, появление, сферы,
+ * конец ярости и сорвавшийся сам носитель — без строки.
+ */
 export function feedLine(ev: MatchEvent, names: ReadonlyMap<UnitId, string>, localId: UnitId): { text: string; mine: boolean } | null {
+  if (ev.type === "pickup") {
+    if (ev.kind !== "rune" || ev.phase !== "take") return null;
+    return { text: `${nameOf(names, ev.unit)} · руна ярости`, mine: ev.unit === localId };
+  }
+  if (ev.type === "fury") {
+    if (ev.phase !== "slain" || ev.by === NOBODY) return null;
+    return { text: `${nameOf(names, ev.by)} · +${PICKUPS.rune.killUlt} к ульте за носителя руны`, mine: ev.by === localId || ev.unit === localId };
+  }
   if (ev.type === "death") {
     const victim = nameOf(names, ev.target);
     const killer = names.get(ev.killer);

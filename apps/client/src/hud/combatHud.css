@@ -17,6 +17,9 @@
   /* Воздух — сиреневый темнее частиц (#c8c0f2), иначе на бумаге не читается; Вода — как её частицы */
   --ch-air: #8f84d6;
   --ch-water: #2ea8e6;
+  /* золото руны (фаза 6, GDD 6: «нейтральный язык» — золото с печатью): на подложке тушью или с ореолом туши */
+  --ch-gold: #f0c24f;
+  --ch-gold-soft: rgba(240, 194, 79, 0.7);
   --ch-head: "Cormorant SC", "Cormorant Garamond", "Forum", Georgia, "Times New Roman", serif;
   --ch-ui: "Manrope", system-ui, "Segoe UI", sans-serif;
   /* ореол бумаги вокруг туши: читается и на светлой арене, и на тёмных манекенах */
@@ -168,6 +171,53 @@
   will-change: transform, opacity;
 }
 
+/* ---------------------------------------------------------------- руна ярости: объявление для всей арены */
+/*
+ * По центру сверху под строкой матча PvP (на полигоне — та же позиция): боковым зрением, далеко от прицела. Золото на
+ * подложке тушью — читается и на светлой арене, и на тёмной. Центр — полями, не transform: transform свободен для удара.
+ * Появилась строка (из hidden) — короткая печать; «через N» последние 3 с пульсирует раз в секунду, в такт цифрам;
+ * руна легла — печать наоборот, золотая подложка и тушь.
+ */
+.ch-rune {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 46px;
+  width: max-content;
+  margin: 0 auto;
+  padding: 3px 14px 4px;
+  border: 1.5px solid var(--ch-gold-soft);
+  border-radius: 7px 10px 8px 11px / 10px 7px 11px 8px;
+  background: rgba(29, 27, 22, 0.74);
+  color: var(--ch-gold);
+  font: 700 20px/1.15 var(--ch-head);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  animation: ch-rune-in 0.22s ease-out;
+  will-change: transform, opacity;
+}
+.ch-rune.is-soon {
+  animation: ch-rune-pulse 1s ease-out infinite;
+}
+.ch-rune.is-here {
+  border-color: var(--ch-gold);
+  background: var(--ch-gold);
+  color: var(--ch-ink);
+  animation: ch-rune-here 0.36s ease-out;
+}
+@keyframes ch-rune-in {
+  from { opacity: 0; transform: scale(1.2); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ch-rune-pulse {
+  0% { transform: scale(1.12); }
+  45%, 100% { transform: none; }
+}
+@keyframes ch-rune-here {
+  0% { transform: scale(1.35); }
+  100% { transform: none; }
+}
+
 /* ---------------------------------------------------------------- счётчик полигона */
 .ch-score {
   position: absolute;
@@ -231,6 +281,24 @@
   font: 700 15px/1 var(--ch-ui);
   font-variant-numeric: tabular-nums;
   text-shadow: var(--ch-halo);
+}
+/* своя ярость: «Ярость N» золотом с ореолом туши над правым краем мазка, вровень с именем стихии; мазок — с золотым отливом */
+.ch-fury {
+  position: absolute;
+  right: 4px;
+  top: 0;
+  color: var(--ch-gold);
+  font: 700 22px/1 var(--ch-head);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 2px var(--ch-ink), 0 0 2px var(--ch-ink), 0 0 5px rgba(29, 27, 22, 0.75);
+  white-space: nowrap;
+}
+.ch-hp.is-fury::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(240, 194, 79, 0.85) 0%, rgba(240, 194, 79, 0.3) 45%, transparent 75%);
 }
 
 /* ---------------------------------------------------------------- ячейки ЛКМ Q E C X и жар */
@@ -621,6 +689,11 @@
     opacity: 0.6;
   }
   .ch-cell.is-ult-ready svg {
+    animation: none;
+  }
+  .ch-rune,
+  .ch-rune.is-soon,
+  .ch-rune.is-here {
     animation: none;
   }
 }
