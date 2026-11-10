@@ -9,8 +9,8 @@ const packed = (buttons: number): PackedInput => [7, 0.5, -0.5, 1, -0.2, buttons
 
 describe("net v3", () => {
   it("is version 3 with its own peer ids", () => {
-    expect(NET_VERSION).toBe(4);
-    expect(gamePeerId("ABCD")).toBe("doodlemagic-g4-abcd-host");
+    expect(NET_VERSION).toBe(5);
+    expect(gamePeerId("ABCD")).toBe("doodlemagic-g5-abcd-host");
   });
 
   it("packs X as bit 32 and back", () => {

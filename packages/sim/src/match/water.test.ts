@@ -191,7 +191,7 @@ describe("Water ward (E)", () => {
     expect([u(s, 1).mage!.ward!.absorbed, evs(log, "absorb").at(-1)!.e.total]).toEqual([total, total]);
 
     const back = play({ mages: [water(), shooter("fire", 0, 10)] }, 40, (k) => ({ 1: { e: k === 0 }, 2: { primary: k === 0 } }));
-    expect([evs(back.log, "absorb").length, hitsOn(back.log, 1).map(({ e }) => [e.ability, e.amount])]).toEqual([0, [["fireFists", 12]]]);
+    expect([evs(back.log, "absorb").length, hitsOn(back.log, 1).map(({ e }) => [e.ability, e.amount])]).toEqual([0, [["fireFists", 15]]]);
   });
 
   it("a shot travelling exactly sideways (velocity · forward = 0) is not met by the ward: it hits", () => {
@@ -200,7 +200,7 @@ describe("Water ward (E)", () => {
     // взгляд (0, −1): поперёк — ровно 0, не «против взгляда»; встречный (0, +1) — диск
     expect([wardFaces(w, { x: 1, z: 0 }, s.tick), wardFaces(w, { x: -1, z: 0 }, s.tick), wardFaces(w, { x: 0, z: 1 }, s.tick)]).toEqual([false, false, true]);
     const side = play({ mages: [water(), shooter("fire", -10, 0)] }, 40, (k) => ({ 1: { e: k === 0 }, 2: { primary: k === 0 } }));
-    expect([evs(side.log, "absorb").length, hitsOn(side.log, 1).map(({ e }) => [e.ability, e.amount])]).toEqual([0, [["fireFists", 12]]]);
+    expect([evs(side.log, "absorb").length, hitsOn(side.log, 1).map(({ e }) => [e.ability, e.amount])]).toEqual([0, [["fireFists", 15]]]);
   });
 
   it("anchors Water for the ward: no push, launch, tow or pull; damage, slow and the earthquake root still land", () => {
@@ -222,15 +222,15 @@ describe("Water ward (E)", () => {
     expect([speeds[50], speeds[119]]).toEqual([expect.closeTo(6.5 * 0.7, 6), expect.closeTo(6.5, 6)]);
   });
 
-  it("LMB drops it early: the Answer carries the absorbed 12 raised to 20, wets the target, counts as the ward; no extra whip", () => {
+  it("LMB drops it early: the Answer carries the absorbed 15 raised to 20, wets the target, counts as the ward; no extra whip", () => {
     const { s, log, start } = play(
       { mages: [water(), shooter("fire", 0, -10)] }, 80,
       // клик держится 6 тиков, как настоящий: удержание после Ответа не начинает лишний хлыст
       (k) => ({ 1: { e: k === 0, primary: k >= 30 && k < 36 }, 2: { primary: k === 0 } }),
     );
-    expect(evs(log, "absorb").map(({ e }) => [e.kind, e.amount])).toEqual([["fireFists", 12]]);
+    expect(evs(log, "absorb").map(({ e }) => [e.kind, e.amount])).toEqual([["fireFists", 15]]);
     expect(evs(log, "release").filter(({ e }) => e.unit === 1).map(({ t, e }) => [t, e.ability])).toEqual([[30, "waterWard"]]);
-    expect(evs(log, "ward").map(({ t, e }) => [t, e.phase, e.absorbed])).toEqual([[0, "up", 0], [30, "down", 12]]);
+    expect(evs(log, "ward").map(({ t, e }) => [t, e.phase, e.absorbed])).toEqual([[0, "up", 0], [30, "down", 15]]);
     expect([ticksOf(log, "cast", "waterWhip"), u(s, 1).status.anchoredUntil]).toEqual([[], start + 30]);
     expect(hitsOn(log, 2).map(({ e }) => [e.ability, e.amount, e.source])).toEqual([["waterWard", 20, 1]]);
     expect(statusFlags(u(s, 2), s.tick).wet).toBe(true);

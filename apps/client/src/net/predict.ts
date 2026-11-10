@@ -123,6 +123,10 @@ export function eventKey(ev: MatchEvent): string {
       return `pickup:${ev.kind}:${ev.index}:${ev.phase}:${ev.unit}`;
     case "fury":
       return `fury:${ev.unit}:${ev.phase}:${ev.by}`;
+    case "loot":
+      return `loot:${ev.unit}:${ev.victim}`;
+    case "streak":
+      return `streak:${ev.unit}:${ev.multi}:${ev.streak}`;
     default:
       return String((ev as { type: unknown }).type); // чужая версия хоста: вид без подробностей
   }

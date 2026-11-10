@@ -517,6 +517,9 @@ function mapEvent(ev: MatchEvent, view: EventView): Effect[] {
       // смерть, чужие — килфид (по состоянию гаснет и свечение носителя)
       if (ev.phase === "end") return mine(ev.unit) ? [sound("furyEnd")] : [];
       return ev.by !== NOBODY && mine(ev.by) ? [sound("furySlain"), { kind: "toast", text: FURY_SLAIN_TOAST }] : [];
+    case "loot":
+    case "streak":
+      return []; // добыча и серии (фаза 9): звук и подача — задача 5
   }
 }
 
