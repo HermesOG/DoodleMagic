@@ -273,7 +273,8 @@ export function createMusic(opts: MusicOptions): Music {
   let volume = 0.5;
   let paused = true;
   let target: MusicOut = QUIET;
-  let stings: MusicSting[] = [];
+  /** Стинги к запуску: одна очередь на всё время, звука нет — не копятся. */
+  const stings: MusicSting[] = [];
   let seed = 0;
   let motifs = makeMotifs(0);
   let seqStart = 0;
@@ -572,7 +573,11 @@ export function createMusic(opts: MusicOptions): Music {
 
   const pump = (): void => {
     const gr = build();
-    if (!gr) return;
+    if (!gr) {
+      // до первого жеста звука нет: стинги не копятся и не играют потом пачкой
+      stings.length = 0;
+      return;
+    }
     try {
       const now = gr.ctx.currentTime;
       const stop = !enabled || hidden() || gr.ctx.state !== "running";
@@ -583,11 +588,11 @@ export function createMusic(opts: MusicOptions): Music {
         if (!paused) nextBeat = now + LEAD_S;
       }
       if (paused) {
-        stings = [];
+        stings.length = 0;
         return;
       }
-      for (const s of stings) playSting(gr, s, now + LEAD_S);
-      stings = [];
+      for (let i = 0; i < stings.length; i++) playSting(gr, stings[i]!, now + LEAD_S);
+      stings.length = 0;
       if (nextBeat < now + LEAD_S) nextBeat = now + LEAD_S;
       while (nextBeat < now + LOOKAHEAD_S) {
         scheduleBeat(gr, beat, nextBeat);
@@ -604,7 +609,7 @@ export function createMusic(opts: MusicOptions): Music {
   return {
     set(out) {
       target = out;
-      if (out.stings.length > 0) stings.push(...out.stings);
+      for (let i = 0; i < out.stings.length; i++) stings.push(out.stings[i]!);
       const gr = g;
       if (gr) {
         try {

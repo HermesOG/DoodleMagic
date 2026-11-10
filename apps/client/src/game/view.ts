@@ -21,7 +21,9 @@ import "../render/canvas.css";
 import "../sandbox/sandbox.css";
 import { createAudio, unlockOnGesture } from "../audio/synth";
 import { createMusic } from "../audio/music";
-import { createMusicDirector, musicCue, musicSeed, readSituation, streakCue, type MusicCue } from "../audio/musicDirector";
+import {
+  createMusicDirector, createSeedKeeper, emptySituation, musicCue, readSituation, streakCue, type DirectorInput, type MusicCue,
+} from "../audio/musicDirector";
 import { createEyeSmooth, createMoveTracker, stepEyeSmooth, trackMovement } from "../feel/body";
 import { addFeel, addLanding, createCameraFeel, stepCameraFeel, type CameraOffset } from "../feel/camera";
 import type { Effect } from "../feel/effects";
@@ -156,19 +158,27 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   const director = createMusicDirector();
   /** В PvP драйвер знает подтверждённую игру и код комнаты; на полигоне их нет — фаза training. */
   const pvpSource = driver as Partial<{ roomCode: string; confirmedGame(): GameState }>;
+  const seedOf = createSeedKeeper();
+  // вход директора и события кадра — одни на все кадры: кадр музыки ничего не создаёт
+  const cues: MusicCue[] = [];
+  const musicIn: DirectorInput = { ...emptySituation(), nowS: 0, cues };
+  const addCue = (c: MusicCue | null): void => {
+    if (c) cues.push(c);
+  };
   const feedMusic = (frame: Frame, nowS: number): void => {
     const localId = driver.localId;
-    const cues: MusicCue[] = [];
-    const add = (c: MusicCue | null): void => {
-      if (c) cues.push(c);
-    };
-    for (const t of frame.ticks) for (const ev of t.events) add(musicCue(ev, localId, t.state));
-    for (const ev of frame.late) add(musicCue(ev, localId, frame.cur));
+    cues.length = 0;
+    for (let k = 0; k < frame.ticks.length; k++) {
+      const t = frame.ticks[k]!;
+      for (let i = 0; i < t.events.length; i++) addCue(musicCue(t.events[i]!, localId, t.state));
+    }
+    for (let i = 0; i < frame.late.length; i++) addCue(musicCue(frame.late[i]!, localId, frame.cur));
     // серии — только подтверждённые
-    for (const ev of frame.confirmed) add(streakCue(ev, localId));
+    for (let i = 0; i < frame.confirmed.length; i++) addCue(streakCue(frame.confirmed[i]!, localId));
     const game = pvpSource.confirmedGame?.() ?? null;
-    music.setSeed(musicSeed(pvpSource.roomCode ?? null, game));
-    music.set(director.step({ nowS, cues, ...readSituation(game, frame.cur, localId) }));
+    music.setSeed(seedOf(pvpSource.roomCode ?? null, game));
+    musicIn.nowS = nowS;
+    music.set(director.step(readSituation(game, frame.cur, localId, musicIn)));
   };
   if (import.meta.env.DEV) {
     // dmAudio.play("fireballBoom", 5) в консоли — только в dev-сборке

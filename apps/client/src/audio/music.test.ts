@@ -223,6 +223,21 @@ describe("music scheduler", () => {
   });
 });
 
+describe("music before the sound is unlocked", () => {
+  it("drops stings while there is no bus: they do not play later in a bunch", () => {
+    const ctx = new Ctx();
+    let bus: MusicBus | null = null;
+    const music = createMusic({ bus: () => bus, hidden: () => false, every: () => () => undefined, rand: () => 0.5 });
+    music.set(out({ bed: false, stings: ["count"] }));
+    music.set(out({ bed: false, stings: ["count", "fight"] }));
+    music.pump();
+    bus = { ctx: ctx as unknown as BaseAudioContext, out: new Node("limiter") as unknown as AudioNode };
+    music.set(out({ bed: false }));
+    music.pump();
+    expect(ctx.sources.length).toBe(0);
+  });
+});
+
 describe("music motifs", () => {
   it("4–6 notes between D4 and D5, the first on the downbeat, the same for the same seed", () => {
     const a = makeMotifs(1234);
