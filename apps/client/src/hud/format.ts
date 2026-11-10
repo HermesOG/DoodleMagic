@@ -1,4 +1,7 @@
-import { FIRE, MAGE_REGEN, ULT_CHARGE, slotCooldownTicks, type MageState, type Slot, type Unit, type UnitId, type Vec3 } from "@doodlemagic/sim";
+import {
+  FIRE, MAGE_REGEN, PICKUPS, TICK_HZ, ULT_CHARGE, hasFury, slotCooldownTicks, unitById,
+  type MageState, type MatchState, type Slot, type Unit, type UnitId, type Vec3,
+} from "@doodlemagic/sim";
 
 /** Цифра урона: целое, не меньше 1; воздушное попадание (+15 %, GDD 4.6) — со стрелкой вверх. */
 export function formatDamage(n: number, air: boolean): string {
@@ -86,4 +89,61 @@ export function hpBar(u: Unit): { frac: number; notch: number; text: string } {
   // HP бывает дробным (лечение 20/с по тикам, +15 % в воздухе): живому не показываем 0
   const hp = Math.max(0, Math.ceil(u.hp - 1e-9));
   return { frac: clamp01(u.hp / u.maxHp), notch: u.kind === "mage" ? MAGE_REGEN.capFrac : 1, text: `${hp} / ${u.maxHp}` };
+}
+
+/** Руна ярости (фаза 6): объявление — последние 10 с до появления; «в центре» — первые 3 с, пока лежит. */
+const RUNE_WARN_TICKS = PICKUPS.rune.warnS * TICK_HZ;
+const RUNE_HERE_TICKS = 3 * TICK_HZ;
+/** Имя носителя, которого нет в составе (или имён нет — полигон): род. падеж, без родовых окончаний. */
+const NAMELESS_HOLDER = "мага";
+/** Тики → целые секунды вверх. */
+const secondsUp = (ticks: number): number => Math.ceil(ticks / TICK_HZ);
+
+/**
+ * Что объявляет строка руны: soon — руны нет, до появления s секунд (вверх); here — появилась и лежит; held — ярость
+ * у чужого мага id, осталось s секунд.
+ */
+export type RuneCue = { kind: "soon"; s: number } | { kind: "here" } | { kind: "held"; id: UnitId; s: number };
+
+/**
+ * Строка руны по состоянию на тике now. Сначала сама руна — она для всей арены: до появления ≤ 10 с — soon, появилась
+ * ≤ 3 с назад и лежит — here (взятая ушла на следующую отметку, Р2). Иначе — чужой носитель (самая свежая ярость,
+ * при равенстве — меньший id); своя ярость — не здесь, а у полосы HP. Нечего сказать — null.
+ */
+export function runeCue(s: Readonly<MatchState>, localId: UnitId, now: number): RuneCue | null {
+  for (const p of s.pickups) {
+    if (p.kind !== "rune") continue;
+    const left = p.readyAt - now;
+    if (left > 0 && left <= RUNE_WARN_TICKS) return { kind: "soon", s: secondsUp(left) };
+    if (left <= 0 && -left <= RUNE_HERE_TICKS) return { kind: "here" };
+  }
+  let holder: Unit | undefined;
+  for (const u of s.units) {
+    if (u.id === localId || !u.mage || !hasFury(u, now)) continue;
+    if (!holder || u.status.furyUntil > holder.status.furyUntil) holder = u;
+  }
+  return holder ? { kind: "held", id: holder.id, s: secondsUp(holder.status.furyUntil - now) } : null;
+}
+
+/** Текст строки руны; имя носителя — из names, нет — «мага». */
+export function runeText(c: RuneCue, names?: ReadonlyMap<UnitId, string>): string {
+  if (c.kind === "soon") return `Руна ярости через ${c.s}`;
+  if (c.kind === "here") return "Руна ярости в центре";
+  return `Руна у ${names?.get(c.id) ?? NAMELESS_HOLDER} · ${c.s}`;
+}
+
+/**
+ * Строка объявления руны по состоянию: руны нет и до появления ≤ 10 с — «Руна ярости через N» (N — секунды вверх);
+ * появилась ≤ 3 с назад и лежит — «Руна ярости в центре»; лежит дольше — null; у чужого носителя — «Руна у {имя} · N»;
+ * у меня — null (своё — у полосы HP). names нет или имени нет — «мага».
+ */
+export function runeNotice(s: Readonly<MatchState>, localId: UnitId, now: number, names?: ReadonlyMap<UnitId, string>): string | null {
+  const c = runeCue(s, localId, now);
+  return c ? runeText(c, names) : null;
+}
+
+/** Своя ярость: секунды вверх, 0 — нет. */
+export function furyLeftS(s: Readonly<MatchState>, localId: UnitId, now: number): number {
+  const me = unitById(s, localId);
+  return me && hasFury(me, now) ? secondsUp(me.status.furyUntil - now) : 0;
 }

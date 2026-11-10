@@ -19,7 +19,8 @@ import { MAGE_TOP_M } from "../fx/mageMeshes";
 import "./combatHud.css";
 import { KIT_WIDGETS, type KitWidget } from "./kitWidgets";
 import {
-  NUMBER_LIFE_S, cooldownFraction, formatDamage, heatFraction, hpBar, mergeNumbers, numberAnim, ultFraction, ultPercent, type FloatingNumber,
+  NUMBER_LIFE_S, cooldownFraction, formatDamage, furyLeftS, heatFraction, hpBar, mergeNumbers, numberAnim, runeCue, runeText, ultFraction, ultPercent,
+  type FloatingNumber,
 } from "./format";
 
 /** Что HUD видит в кадре: два последних состояния и доля между ними, камера мира, часы и проверка видимости точки. */
@@ -63,6 +64,8 @@ const TOAST_S = 1.2;
 const INDICATOR_S = 1.2;
 const DENY_S = 0.15;
 const READY_FLASH_S = 0.32;
+/** Строка руны пульсирует последние столько секунд до появления (раз в секунду, в такт цифрам). */
+const RUNE_PULSE_S = 3;
 /** Виньетка урона: сила = урон / 40, гаснет 3/с (round1/03 п. 3). */
 const VIGNETTE_PER_DMG = 1 / 40;
 const VIGNETTE_DECAY_PER_S = 3;
@@ -172,8 +175,17 @@ export function createCombatHud(root: HTMLElement): CombatHud {
   const toasts: Timed[] = Array.from({ length: TOAST_POOL }, () => ({ el: div("ch-toast"), at: -Infinity }));
   for (const t of toasts) toastsBox.append(t.el);
   const score = div("ch-score");
-  const life = div("ch-life", `<div class="ch-elem"></div><div class="ch-hp"><div class="ch-hp-trail"></div><div class="ch-hp-fill"></div><i class="ch-hp-notch"></i></div><div class="ch-hp-text"></div>`);
+  // объявление руны (фаза 6): по центру сверху, под строкой матча PvP — та же позиция и на полигоне
+  const runeLine = div("ch-rune");
+  runeLine.hidden = true;
+  // своя ярость — «Ярость N» золотом над правым краем мазка HP
+  const life = div(
+    "ch-life",
+    `<div class="ch-elem"></div><div class="ch-hp"><div class="ch-hp-trail"></div><div class="ch-hp-fill"></div><i class="ch-hp-notch"></i></div><div class="ch-hp-text"></div><div class="ch-fury" hidden></div>`,
+  );
   const elemName = pick<HTMLDivElement>(life, ".ch-elem");
+  const hpBox = pick<HTMLDivElement>(life, ".ch-hp");
+  const furyLabel = pick<HTMLDivElement>(life, ".ch-fury");
   const hpTrail = pick<HTMLDivElement>(life, ".ch-hp-trail");
   const hpFill = pick<HTMLDivElement>(life, ".ch-hp-fill");
   const hpNotch = pick<HTMLElement>(life, ".ch-hp-notch");
@@ -202,7 +214,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     cellsBox.append(c);
   }
   const ultPct = pick<HTMLDivElement>(cells.x.root, ".ch-pct");
-  hud.append(vignette, barsLayer, numbersLayer, cross, toastsBox, score, life, kit);
+  hud.append(vignette, barsLayer, numbersLayer, cross, runeLine, toastsBox, score, life, kit);
   root.append(hud);
 
   const numberEls = Array.from({ length: NUMBER_POOL }, () => {
@@ -348,6 +360,25 @@ export function createCombatHud(root: HTMLElement): CombatHud {
     setText(hpText, bar.text);
     const st = me.mage?.stats;
     if (st) setText(score, `Урон ${Math.round(st.damage)} · Убийства ${st.kills} · Сбросы ${st.falls}`);
+  };
+
+  /**
+   * Руна ярости (фаза 6) — по cur (у игрока предсказанный), имена — из кадра. Строка сверху: «через N» последние 3 с
+   * пульсирует (is-soon), появление бьёт печатью (is-here); без анимаций по настройке ОС — CSS. Своя ярость — у полосы HP.
+   */
+  const updateRune = (view: HudView): void => {
+    const now = view.cur.tick;
+    const cue = runeCue(view.cur, view.localId, now);
+    setHidden(runeLine, cue === null);
+    if (cue) {
+      setText(runeLine, runeText(cue, view.names));
+      runeLine.classList.toggle("is-soon", cue.kind === "soon" && cue.s <= RUNE_PULSE_S);
+      runeLine.classList.toggle("is-here", cue.kind === "here");
+    }
+    const fury = furyLeftS(view.cur, view.localId, now);
+    setHidden(furyLabel, fury <= 0);
+    if (fury > 0) setText(furyLabel, `Ярость ${fury}`);
+    hpBox.classList.toggle("is-fury", fury > 0);
   };
 
   const updateBars = (view: HudView): void => {
@@ -506,6 +537,7 @@ export function createCombatHud(root: HTMLElement): CombatHud {
         updateKit(me, now, view.nowS);
         updateLife(me);
       }
+      updateRune(view);
       updateBars(view);
       updateNumbers(view);
       updateCross(view, dt);
