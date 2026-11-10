@@ -44,6 +44,11 @@ describe("pickup and fury feel: the same for every element of mine", () => {
       expect(theirs[0]?.kind === "sound" ? theirs[0].floor : 0).toBeGreaterThanOrEqual(0.4);
     });
 
+    it(`${el}: an orb's sourceless heal is not Water's lifesteal — no palms, no heal chime, no motes`, () => {
+      expect(fx({ type: "heal", target: ME, source: NOBODY, amount: 35, pos: V(0, 1, 0) })).toEqual([]);
+      expect(fx({ type: "heal", target: OTHER, source: NOBODY, amount: 35, pos: V(6, 1, -8) })).toEqual([]);
+    });
+
     it(`${el}: the fury status itself says nothing; my fury ends with a soft falling chime`, () => {
       expect(fx({ type: "status", target: ME, status: "fury", ticks: 720, source: ME })).toEqual([]);
       expect(fx(fury(ME, "end"))).toEqual([snd("furyEnd")]);

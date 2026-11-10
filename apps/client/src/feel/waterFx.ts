@@ -183,6 +183,8 @@ function waterEffectsWith(healMem: HealChime, ev: MatchEvent, view: EventView, _
       }
       return [burst("grabSplash", ev.pos, UP, 0.5)];
     case "heal":
+      // лечение без источника — сфера жизни на карте (фаза 6): её звон и искры — у объектов карты, не у Воды
+      if (ev.source === NOBODY) return null;
       // своё лечение — искры сходятся к ладоням (каждый импульс) и мягкий звон (первый и раз в секунду); чужое — искры у тела
       if (mine(ev.target)) {
         const palm: Effect = { kind: "palm", hand: "both", element: "water", preset: "charge" };

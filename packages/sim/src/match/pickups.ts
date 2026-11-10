@@ -73,7 +73,7 @@ function nextRuneMark(mark: number, now: number): number {
 
 /**
  * Шаг объектов (stepMatch, после stepTerrain, до stepStatuses): по индексу — руна на readyAt − 600 → pickup/warn;
- * на readyAt → pickup/spawn; лежит — касание (Р3) → подбор и pickup/take. Сфера: healUnit(+35), readyAt = now + 900.
+ * на readyAt → pickup/spawn; лежит — касание (Р3) → подбор и pickup/take. Сфера: healUnit(+35, источник NOBODY), readyAt = now + 900.
  * Руна: furyUntil = now + 720, событие status fury (ticks 720, source — сам маг), readyAt — следующая отметка (Р2).
  */
 export function stepPickups(s: MatchState, t: TickCtx): void {
@@ -86,7 +86,8 @@ export function stepPickups(s: MatchState, t: TickCtx): void {
     if (!u) return;
     t.ev.push({ type: "pickup", kind: p.kind, index, phase: "take", unit: u.id, pos: copy(p.pos) });
     if (p.kind === "orb") {
-      healUnit(s, t, u.id, PICKUPS.orb.heal, u.id);
+      // лечит карта, а не маг: источника нет, и Вода не принимает это за свой «Круговорот»
+      healUnit(s, t, u.id, PICKUPS.orb.heal, NOBODY);
       p.readyAt = now + ORB_RESPAWN_TICKS;
     } else {
       // новая руна в ярости обновляет её до полных 12 с (Р4)

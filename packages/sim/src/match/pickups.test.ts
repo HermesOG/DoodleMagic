@@ -117,7 +117,7 @@ describe("health orbs (Р1, Р3)", () => {
   it("a mage at 50 HP walks in: heal +35 and take, the orb is gone; 900 ticks later it spawns and lies again", () => {
     let r = steps(first(at(pick(ORB)), 50), 1);
     expect(pickupLog(r.log)).toEqual([[0, "orb", ORB, "take", 1]]);
-    expect(ofType(r.log, "heal").map(({ e }) => [e.target, e.source, e.amount])).toEqual([[1, 1, 35]]);
+    expect(ofType(r.log, "heal").map(({ e }) => [e.target, e.source, e.amount])).toEqual([[1, NOBODY, 35]]);
     expect(ofType(r.log, "pickup")[0]!.e.pos).toEqual(pick(ORB).pos);
     expect([u(r.s, 1).hp >= 85, r.s.pickups[ORB]!.readyAt, pickupPresent(r.s.pickups[ORB]!, 1)]).toEqual([true, 900, false]);
     place(r.s, 1, AWAY);
