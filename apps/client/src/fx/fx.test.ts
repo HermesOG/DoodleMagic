@@ -22,7 +22,7 @@ const pose: DummyPose = { pos: { x: 0, y: 0, z: 0 }, yaw: 0, leanX: 0, leanZ: 0,
 const O = { x: 0, y: 1, z: 0 };
 
 describe("fx pure parts", () => {
-  it("wraps the particle ring; every burst ≤ 150; fire is additive light, earth dust is paper-coloured", () => {
+  it("wraps the particle ring; every burst ≤ 150; fire has light, earth dust is dense dust", () => {
     expect(allocateRing(4, 10, 8)).toEqual({ head: 2, ranges: [{ start: 4, count: 6 }, { start: 0, count: 2 }] });
     expect(allocateRing(3, 10, 25).ranges.reduce((a, r) => a + r.count, 0)).toBe(10);
     for (const id of BURST_PRESETS) expect(burstParticles(id, O, O, 1, rng()).length).toBeLessThanOrEqual(150);
@@ -88,8 +88,8 @@ describe("fx budgets and mapping", () => {
     expect(burstParticles("fireballBoom", O, O, 10, rng()).length).toBe(150);
   });
 
-  it("colours magic saturated and earth dust as paper; fire rises, stone chips fall hard", () => {
-    expect(FX_COLOR.dust).toEqual(PAPER);
+  it("colours magic saturated and earth dust darker than paper; fire rises, stone chips fall hard", () => {
+    expect(luminance(FX_COLOR.dust)).toBeLessThanOrEqual(luminance(PAPER) - 0.2);
     for (const c of [FX_COLOR.fire, FX_COLOR.jade, FX_COLOR.ember]) expect(saturation(c)).toBeGreaterThanOrEqual(0.6);
     expect(luminance(FX_COLOR.core)).toBeGreaterThan(0.85);
     expect(burstParticles("burnLick", O, O, 1, rng()).every((p) => p.gravity <= 0 && p.life >= 0.3 && p.life <= 0.6)).toBe(true);

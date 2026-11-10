@@ -3,7 +3,7 @@ import { AIR, forwardXZ, rightXZ, type Unit, type UnitId, type Vec3, type Zone }
 import { createInkMaterial } from "../render/gbuffer";
 import { INK } from "../render/palette";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
-import { FX_COLOR, KIND, UP, spawn, type Kind, type ParticleSpec, type Rng } from "./particleKit";
+import { FX_COLOR, UP, markSide, particle, sideOf, spawn, type ParticleSpec, type Rng } from "./particleKit";
 import { AIR_STREAM } from "./presets.air";
 
 /*
@@ -94,11 +94,6 @@ export function ribbonChain(pos: Vec3, yaw: number, side: 1 | -1, state: RibbonS
   return out;
 }
 
-const spec = (kind: Kind, pos: Vec3, vel: Vec3, life: number, size0: number, size1: number, rng: Rng): ParticleSpec => {
-  const k = KIND[kind];
-  return { pos, vel, gravity: k.gravity, life, size0, size1, color: k.color(rng), alpha: k.alpha(rng) };
-};
-
 /** Темп частиц Смерча, в секунду: кольцо роста, столб ветра (≤ 60), пыль по краю, пламя огненного смерча. */
 export const VORTEX_RATE = { grow: 90, column: 60, rim: 16, flame: 40 } as const;
 
@@ -125,7 +120,7 @@ export function vortexParticles(z: Zone, tick: number, nowS: number, n: { grow: 
     for (let i = 0; i < n.grow; i++) {
       const r = R * (0.35 + 0.65 * k) * (0.85 + 0.15 * rng());
       const w = swirl(r, rng() * Math.PI * 2, 0.05, 6, 0.5, 0.3 + rng() * 0.5);
-      out.push(spec(i % 3 === 0 ? "dust" : "wind", w.pos, w.vel, 0.3 + rng() * 0.15, 0.08 + rng() * 0.05, 0.3 + rng() * 0.2, rng));
+      out.push(particle(i % 3 === 0 ? "dust" : "wind", w.pos, w.vel, 0.3 + rng() * 0.15, 0.08 + rng() * 0.05, 0.3 + rng() * 0.2, rng));
     }
     return out;
   }
@@ -134,17 +129,17 @@ export function vortexParticles(z: Zone, tick: number, nowS: number, n: { grow: 
     const h = rng() * 3.6;
     const r = AIR.tornado.coreRadiusM * (0.3 + 0.7 * rng()) * (0.7 + h / 8);
     const w = swirl(r, nowS * 6 + rng() * Math.PI * 2, h, 5 + rng() * 2, 0, 2 + rng());
-    out.push(spec("wind", w.pos, w.vel, 0.45 + rng() * 0.2, 0.06 + rng() * 0.05, 0.25 + rng() * 0.2, rng));
+    out.push(particle("wind", w.pos, w.vel, 0.45 + rng() * 0.2, 0.06 + rng() * 0.05, 0.25 + rng() * 0.2, rng));
   }
   for (let i = 0; i < n.rim; i++) {
     const w = swirl(R * (0.85 + 0.15 * rng()), rng() * Math.PI * 2, 0.05, 3, 1.2, 0.2);
-    out.push(spec("dust", w.pos, w.vel, 0.6 + rng() * 0.3, 0.15 + rng() * 0.1, 0.4 + rng() * 0.2, rng));
+    out.push(particle("dust", w.pos, w.vel, 0.6 + rng() * 0.3, 0.15 + rng() * 0.1, 0.4 + rng() * 0.2, rng));
   }
   if (fire)
     for (let i = 0; i < n.flame; i++) {
       const h = rng() * 3;
       const w = swirl(AIR.tornado.coreRadiusM * (0.2 + 0.8 * rng()), nowS * 6 + rng() * Math.PI * 2, h, 4, 0, 2.5 + rng() * 1.5);
-      out.push(spec(i % 4 === 0 ? "glow" : "flame", w.pos, w.vel, 0.35 + rng() * 0.2, 0.2 + rng() * 0.15, 0.45 + rng() * 0.25, rng));
+      out.push(particle(i % 4 === 0 ? "glow" : "flame", w.pos, w.vel, 0.35 + rng() * 0.2, 0.2 + rng() * 0.15, 0.45 + rng() * 0.25, rng));
     }
   return out;
 }
@@ -314,7 +309,7 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
           const c = Math.floor(k);
           glideAcc.set(m.id, k - c);
           const tip = chain[RIBBON_SEG]!;
-          for (let i = 0; i < c; i++) f.emit([spec("wind", { ...tip }, { x: (rng() - 0.5) * 0.6, y: 0.4, z: (rng() - 0.5) * 0.6 }, 0.4, 0.06, 0.25, rng)]);
+          for (let i = 0; i < c; i++) f.emit([particle("wind", { ...tip }, { x: (rng() - 0.5) * 0.6, y: 0.4, z: (rng() - 0.5) * 0.6 }, 0.4, 0.06, 0.25, rng)]);
         }
       }
     }
@@ -349,8 +344,9 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
       a.column -= due.column;
       a.rim -= due.rim;
       a.flame -= due.flame;
+      // пламя огненного смерча — с каймой своего или чужого (V3)
       const specs = vortexParticles(z, f.tick, f.nowS, due, rng);
-      if (specs.length > 0) f.emit(specs);
+      if (specs.length > 0) f.emit(z.kind === "fireTornado" ? markSide(specs, sideOf(z.owner, f.localId)) : specs);
       if (f.tick < z.armTick) continue;
       // столб ядра: свечение без света; огненный — свет огня
       const c = z.shape.center;
@@ -395,7 +391,7 @@ export const createAirVfx: ElementVfxFactory = (): ElementVfx => {
         for (let i = 0; i < n; i++) {
           const t = rng();
           out.push(
-            spec(
+            particle(
               "wind",
               { x: w.last.x + dx * t + (rng() - 0.5) * 0.5, y: w.last.y + 0.3 + rng() * 1.3, z: w.last.z + dz * t + (rng() - 0.5) * 0.5 },
               { x: (-d.dirX * 1.5) + (rng() - 0.5) * 0.4, y: 0.1, z: (-d.dirZ * 1.5) + (rng() - 0.5) * 0.4 },

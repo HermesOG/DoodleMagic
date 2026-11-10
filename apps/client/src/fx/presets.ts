@@ -2,7 +2,7 @@ import type { Element, ProjectileKind, Vec3 } from "@doodlemagic/sim";
 import type { BurstPreset } from "../feel/effects";
 import { AIR_BURSTS, AIR_PALM, AIR_TRAILS } from "./presets.air";
 import { WATER_BURSTS, WATER_PALM, WATER_TRAILS } from "./presets.water";
-import { FX_COLOR, L, UP, clamp01, emit, hex, mixRGB, randomUnit, spawn, lerp, type Layer, type PalmLayers, type ParticleSpec, type TrailFn } from "./particleKit";
+import { FX_COLOR, L, UP, clamp01, emit, hex, mixRGB, normalizeOr, particle, randomUnit, spawn, lerp, type Layer, type PalmLayers, type ParticleSpec, type TrailFn } from "./particleKit";
 import { luminance } from "../render/palette";
 import type { PresetId } from "../render/quality";
 
@@ -41,8 +41,8 @@ export function poolCaps(p: PresetId): { world: number; palm: number } {
 }
 
 /**
- * Всплески по пресетам (числа — на scale = 1). Огонь — вверх, рвано, 0,3–0,6 с, свет; Земля — осколки вниз
- * с g ≥ 9 и пыль цвета бумаги (GDD 6, round1/05). dir — нормаль удара или направление броска.
+ * Всплески по пресетам (числа — на scale = 1). Огонь — вверх, рвано, 0,3–0,6 с, свет; Земля — осколки тушью вниз
+ * с g ≥ 9 и пыль темнее бумаги (GDD 6, раунд 4 V6). dir — нормаль удара или направление броска.
  */
 const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
   fistFlash: [L("core", 3, "sphere", [0.2, 0.6], [0.06, 0.1], [0.3, 0.45], [0.55, 0.8]), L("ember", 6, "cone", [3, 6], [0.1, 0.2], [0.05, 0.08], [0.02, 0.03], { cone: 0.6 })],
@@ -76,9 +76,10 @@ const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
     L("core", 6, "up", [0.5, 1.5], [0.15, 0.3], [0.9, 1.3], [1.8, 2.4], { r0: 2 }),
     L("ember", 16, "up", [4, 8], [0.3, 0.6], [0.05, 0.08], [0.02, 0.03], { r0: 2.5, gravity: 6 }),
   ],
+  // горение (V5): языки рождаются на краю силуэта (точку даёт vfx, burnEdge) и растут вверх 0,25 → 0,45 м
   burnLick: [
-    L("flame", 5, "up", [0.6, 1.4], [0.3, 0.5], [0.16, 0.24], [0.04, 0.08], { r0: 0.25 }),
-    L("glow", 2, "up", [0.4, 0.8], [0.3, 0.45], [0.3, 0.4], [0.15, 0.2], { r0: 0.2 }),
+    L("flame", 5, "up", [0.6, 1.4], [0.3, 0.5], [0.22, 0.28], [0.36, 0.45], { r0: 0.06, cone: 0.35 }),
+    L("glow", 2, "up", [0.4, 0.8], [0.3, 0.45], [0.25, 0.32], [0.12, 0.18], { r0: 0.06 }),
   ],
   stoneCrumble: [
     L("chip", 8, "sphere", [1, 3], [0.5, 0.8], [0.06, 0.1], [0.04, 0.06], { up: 1 }),
@@ -132,7 +133,7 @@ const BURSTS: Readonly<Record<BurstPreset, readonly Layer[]>> = {
     L("ember", 4, "up", [0.5, 1.5], [0.15, 0.3], [0.04, 0.06], [0.02, 0.02], { r0: 0.1, gravity: 4 }),
   ],
   // попадание камнем (round3/01, H3): Земля не светится — вместо света белая бумажная вспышка, 0,08 с, 0,6 → 1,4 м
-  paperFlash: [L("dust", 1, "sphere", [0, 0], [0.08, 0.08], [0.6, 0.6], [1.4, 1.4], { gravity: 0 })],
+  paperFlash: [L("paper", 1, "sphere", [0, 0], [0.08, 0.08], [0.6, 0.6], [1.4, 1.4], { gravity: 0 })],
   // тяжёлое приземление чужого мага (M2): пыль из-под ног
   landDust: [L("dust", 10, "ring", [0.6, 1.4], [0.5, 0.8], [0.2, 0.3], [0.5, 0.8], { r0: 0.2, r1: 0.5, up: 0.4 })],
   // Дыхание дракона (фаза 5): выдох — пламя узким конусом по взгляду; вспышка потока на цели — малая, ≤ 3 раз/с
@@ -272,7 +273,7 @@ const TRAIL = {
 
 /**
  * Частицы следа снаряда на отрезке a → b (их число задаёт вызывающий по пройденному пути).
- * Огонь роняет языки пламени, угли и дым; камень — пыль цвета бумаги; прочие виды — след своей стихии (TrailFn).
+ * Огонь роняет языки пламени, угли и дым; камень — пыль; прочие виды — след своей стихии (TrailFn).
  */
 export function trailParticles(kind: ProjectileKind, a: Vec3, b: Vec3, n: number, rng: () => number): ParticleSpec[] {
   if (kind !== "fireFists" && kind !== "fireball" && kind !== "stoneShot") return ELEMENT_TRAILS[kind]?.(a, b, n, rng) ?? [];
@@ -354,6 +355,62 @@ export function idlePalmParticle(element: Element, pos: Vec3, rng: () => number)
 export function pebbleParticle(pos: Vec3, phase: number, rng: () => number): ParticleSpec {
   const at = { x: pos.x + Math.cos(phase) * PEBBLE_R, y: pos.y + 0.02 + Math.sin(phase * 2) * 0.008, z: pos.z + Math.sin(phase) * PEBBLE_R };
   return spawn(PEBBLE, at, UP, rng);
+}
+
+/** Дымок горящего (V5): раз в BURN_SMOKE_S с макушки. */
+const BURN_SMOKE = L("smoke", 1, "up", [0.3, 0.7], [0.7, 1.0], [0.14, 0.2], [0.45, 0.6], { cone: 0.3 });
+export const BURN_SMOKE_S = 0.3;
+export function burnSmoke(top: Vec3, rng: () => number): ParticleSpec {
+  return spawn(BURN_SMOKE, top, UP, rng);
+}
+
+/**
+ * Удар тушью (V7): попадание средней ступени — 4 тёмных штриха длиной 0,6 м за 0,1 с, крупной — 6 штрихов 1,1 м
+ * за 0,14 с, от точки удара во все стороны поперёк взгляда; в центре — вспышка цвета стихии (1 / 2). Не больше 12.
+ */
+export const INK_STRIKE = {
+  medium: { strokes: 4, lenM: 0.6, lifeS: 0.1, flashes: 1, flashM: 0.6 },
+  large: { strokes: 6, lenM: 1.1, lifeS: 0.14, flashes: 2, flashM: 1 },
+} as const;
+/** Вспышка удара тушью — цветом стихии бьющего (Земля — нефрит её искр). */
+const STRIKE_FLASH: Readonly<Record<Element, readonly [number, number, number]>> = { fire: FX_COLOR.fire, earth: FX_COLOR.jade, air: FX_COLOR.air, water: FX_COLOR.water };
+
+export function inkStrike(at: Vec3, eye: Vec3, tier: "medium" | "large", element: Element | null, rng: () => number): ParticleSpec[] {
+  const s = INK_STRIKE[tier];
+  // базис поперёк взгляда: штрихи разлетаются по экрану; на 0,3 м ближе к камере — перед телом цели, а не в нём
+  const f = normalizeOr({ x: at.x - eye.x, y: at.y - eye.y, z: at.z - eye.z }, { x: 0, y: 0, z: -1 });
+  const r = normalizeOr({ x: -f.z, y: 0, z: f.x }, { x: 1, y: 0, z: 0 });
+  const u = { x: r.y * f.z - r.z * f.y, y: r.z * f.x - r.x * f.z, z: r.x * f.y - r.y * f.x };
+  const c = { x: at.x - f.x * 0.3, y: at.y - f.y * 0.3, z: at.z - f.z * 0.3 };
+  const out: ParticleSpec[] = [];
+  const turn = rng() * Math.PI * 2;
+  for (let i = 0; i < s.strokes; i++) {
+    const phi = turn + ((i + (rng() - 0.5) * 0.7) / s.strokes) * Math.PI * 2;
+    const d = { x: r.x * Math.cos(phi) + u.x * Math.sin(phi), y: r.y * Math.cos(phi) + u.y * Math.sin(phi), z: r.z * Math.cos(phi) + u.z * Math.sin(phi) };
+    const len = s.lenM * (0.8 + 0.4 * rng());
+    const sp = (len * 0.35) / s.lifeS;
+    out.push(particle("ink", { x: c.x + d.x * len * 0.3, y: c.y + d.y * len * 0.3, z: c.z + d.z * len * 0.3 }, { x: d.x * sp, y: d.y * sp, z: d.z * sp }, s.lifeS, len * 0.45, len, rng));
+  }
+  for (let i = 0; i < s.flashes; i++) {
+    const p = particle("core", { ...c }, { x: 0, y: 0, z: 0 }, s.lifeS * 0.8, s.flashM * (0.5 + 0.2 * i), s.flashM * (1 - 0.25 * i), rng, 0);
+    if (element) p.color = STRIKE_FLASH[element];
+    out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Своё Дыхание изнутри (V4): языки от ладоней к нижним углам кадра — в пространстве камеры рук, 0,08 → 0,3 м,
+ * BREATH_PALM_RATE в секунду на обе руки. side +1 — правая ладонь, −1 — левая; size — множитель размера пресета.
+ */
+export const BREATH_PALM_RATE = 40;
+const BREATH_PALM = L("flame", 1, "cone", [1.2, 1.8], [0.18, 0.28], [0.07, 0.09], [0.26, 0.32], { cone: 0.3, gravity: 0 });
+export function breathPalmTongue(palm: Vec3, side: 1 | -1, size: number, rng: () => number): ParticleSpec {
+  const p = spawn(BREATH_PALM, palm, normalizeOr({ x: 0.55 * side, y: -0.45, z: -0.7 }, UP), rng);
+  p.size0 *= size;
+  p.size1 *= size;
+  p.own = true;
+  return p;
 }
 
 /** Пыль из-под ног отброшенного по полу (K3): одна частица у подошвы. */

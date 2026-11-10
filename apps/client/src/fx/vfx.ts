@@ -1,12 +1,12 @@
 import { Group, Scene, Vector3, type PerspectiveCamera } from "three";
-import { EARTH, ELEMENT_INFO, TICK_HZ, statusFlags, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
+import { EARTH, ELEMENT_INFO, NOBODY, TICK_HZ, statusFlags, type AABB, type Element, type MatchState, type Projectile, type Terrain, type Unit, type UnitId, type Vec3, type Zone } from "@doodlemagic/sim";
 import type { BurstPreset, Effect, FeelTier } from "../feel/effects";
-import { TIERS } from "../feel/eventMap";
+import { TIERS, breathStreaming } from "../feel/eventMap";
 import { stepSpring, type Spring } from "../hands/spring";
 import type { PresetId } from "../render/quality";
 import { HANDS_FOV, WORLD_FOV, type FxLayers, type StyleRenderer } from "../render/styleRenderer";
 import { createDebris } from "./debris";
-import { createDecalMeshes, markDecal, zoneDecal, type DecalSpec, type RootRing } from "./decals";
+import { createDecalMeshes, markDecal, sootDecal, zoneDecal, type DecalSpec, type RootRing } from "./decals";
 import { createDummyMeshes, type DummyView } from "./dummyMeshes";
 import { ELEMENT_VFX, type ElementVfxFrame } from "./elementVfx";
 import { createFireWallMeshes, fireWallSheet, type FireWallSheet } from "./fireWalls";
@@ -16,13 +16,14 @@ import { SNAP_M, handToWorldView, lerpById, muzzleBlend, renderTick } from "./in
 import { createMageMeshes, mageHands, mageLineScale, type MagePose } from "./mageMeshes";
 import { createParticlePool } from "./particles";
 import { createPickupVfx } from "./pickupVfx";
+import { markSide, sideOf } from "./particleKit";
 import {
-  BURST_SHARE, FX_COLOR, IDLE_PALM_RATE, KNOCK_DUST_RATE, MAGIC_LIGHTS, PEBBLE_RATE, burstParticles, idlePalmParticle, knockDust, lineFlames, palmParticles,
-  pebbleParticle, poolCaps, thinParticles, trailParticles, type ParticleSpec,
+  BREATH_PALM_RATE, BURN_SMOKE_S, BURST_SHARE, FX_COLOR, IDLE_PALM_RATE, KNOCK_DUST_RATE, MAGIC_LIGHTS, PEBBLE_RATE, breathPalmTongue, burnSmoke, burstParticles,
+  idlePalmParticle, inkStrike, knockDust, lineFlames, palmParticles, pebbleParticle, poolCaps, thinParticles, trailParticles, type ParticleSpec,
 } from "./presets";
 import { PROJECTILE_LOOK, createProjectileMeshes, type ProjectileDraw } from "./projectileMeshes";
 import { createTerrainMeshes, createVeinMeshes, terrainVisualBox, veinFaces, type VeinFace } from "./terrainMeshes";
-import { createUltVfx } from "./ultVfx";
+import { OWN_BREATH, createUltVfx } from "./ultVfx";
 
 /** Что видит эффектник за кадр. Ладони — в пространстве камеры рук (как их ставят руки). */
 export interface VfxView {
@@ -111,6 +112,34 @@ const HAND_GLOW: Readonly<Record<Element, { color: readonly [number, number, num
 const KNOCK_DUST_MPS = 2;
 /** «Корни» Земли: толчок начался (канал kb вырос с почти нуля) — кольцо пыли у ног на столько секунд. */
 const ROOTS_FLASH_S = 0.45;
+/**
+ * Горение по контуру (V5): языки рождаются на краю силуэта, как его видит камера, — с боков (плечи и бока, 0,35–0,45 м
+ * от оси, высота 1,2–1,9 м) и с макушки; тёплый ореол haloBurn красит белую кромку врага в радиусе BURN_RIM_M
+ * (+ на метр расстояния — кромка вдали шире).
+ */
+const BURN_RIM_M = 1.5;
+const BURN_RIM_PER_M = 0.012;
+const BURN_TOP_SHARE = 0.25;
+
+/**
+ * Точка языка горения на краю силуэта юнита с подошвой feet, видимого из eye: вбок поперёк взгляда (плечи и бока) или
+ * на макушке; на 0,1 м ближе к камере, чем ось тела, — язык выглядывает из-за силуэта, а не ложится на него.
+ */
+export function burnEdge(feet: Vec3, eye: Vec3, rng: () => number): Vec3 {
+  const dx = feet.x - eye.x;
+  const dz = feet.z - eye.z;
+  const l = Math.hypot(dx, dz) || 1;
+  const fx = dx / l;
+  const fz = dz / l;
+  if (rng() < BURN_TOP_SHARE) {
+    const k = (rng() - 0.5) * 0.3;
+    return { x: feet.x - fz * k - fx * 0.1, y: feet.y + 1.85 + rng() * 0.1, z: feet.z + fx * k - fz * 0.1 };
+  }
+  const side = rng() < 0.5 ? -1 : 1;
+  const r = side * (0.35 + rng() * 0.1);
+  return { x: feet.x - fz * r - fx * 0.1, y: feet.y + 1.2 + rng() * 0.7, z: feet.z + fx * r - fz * 0.1 };
+}
+
 /** Свечение рук уступает свет мира снарядам, стенам и вспышкам, но не горению (prio 1). */
 const HAND_PRIO = 0.6;
 const REST_PALM = { x: 0.26, y: -0.25, z: -0.62 } as const;
@@ -138,6 +167,7 @@ interface DummyAnim {
   squash: Spring;
   flashUntil: number;
   lastBurnS: number;
+  lastSmokeS: number;
   landTick: number;
   seen: boolean;
   /** Мага: фаза шага, сглаженная скорость, сколько секунд в воздухе, прошлая точка подошвы. */
@@ -156,16 +186,20 @@ interface DummyAnim {
   rootsAt: number;
 }
 
-/** След удара на полу (A3): подпалина шара, трещины землетрясения. Живёт в эффектнике, не в зоне. */
+/**
+ * След магии на полу (A3, V10): подпалина шара, трещины землетрясения, копоть погасшей стены огня (box). Живёт
+ * в эффектнике, не в зоне.
+ */
 interface Mark {
-  kind: "scorch" | "quake";
+  kind: "scorch" | "quake" | "soot";
   center: Vec3;
   radius: number;
+  box?: AABB;
   born: number;
   seed: number;
 }
-/** Следов на полу одновременно — не больше: старый уступает новому. */
-const MAX_MARKS = 8;
+/** Следов на полу одновременно — не больше: старый уступает новому (V10). */
+export const MAX_MARKS = 12;
 
 /**
  * Пол под взрывом шара: попал в стоящего — его подошва; в летящего — пола рядом нет (null); иначе — точка взрыва
@@ -196,7 +230,12 @@ interface Track {
   acc: number;
   hand: "left" | "right" | "both";
   seen: boolean;
+  owner: UnitId;
 }
+/** Всплеск удара ближе этого к последней точке снаряда — его удар: кайма по хозяину снаряда (V3). */
+const BURST_OWNER_M = 2;
+/** Всплески удара снаряда: хозяин — по снаряду; у прочих хозяин неизвестен (каймы нет), если его не дал эффект. */
+const IMPACT_BURSTS: ReadonlySet<BurstPreset> = new Set<BurstPreset>(["fistImpact", "fireballBoom", "stoneImpact", "grabSplash", "answerSplash"]);
 
 interface Seen<T> {
   item: T;
@@ -242,6 +281,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     if (epoch === null) epoch = nowS;
     return nowS - epoch;
   };
+  let presetNow = preset;
   let caps = poolCaps(preset);
   let lights = MAGIC_LIGHTS[preset];
   let share = BURST_SHARE[preset];
@@ -280,7 +320,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const anims = new Map<UnitId, DummyAnim>();
   const tracks = new Map<number, Track>();
   const terrainSeen = new Map<number, Seen<Terrain>>();
-  const ignited = new Map<number, { embers: number }>();
+  /** Горящие линии зон: накопитель углей; у стены огня — её бокс (копоть после конца, V10). */
+  const ignited = new Map<number, { embers: number; box?: AABB; seed: number }>();
   const flashes: Flash[] = [];
   const marks: Mark[] = [];
   /** Юниты прошлого кадра — где пол под взрывом. */
@@ -295,12 +336,34 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   let localElement: Element | null = null;
   /** Стихия у своих ладоней (A5): накопители частиц и камешков, замах своего мага. */
   let localWindup = false;
+  /** Своё Дыхание идёт (V4): языки от ладоней к нижним углам кадра, накопитель и чья ладонь следующая. */
+  let localBreath = false;
+  let breathAcc = 0;
+  let breathSide: 1 | -1 = 1;
+  /** Точка последнего попадания по цели (событие number) — откуда бьёт удар тушью (V7). */
+  const hitAt = new Map<UnitId, { pos: Vec3; nowS: number }>();
   let idleAcc = 0;
   let pebbleAcc = 0;
   let lastNowS: number | null = null;
   const tmp = new Vector3();
   const eye = new Vector3();
 
+  /** Свой маг прошлого кадра — чья магия (кайма V3). */
+  let localId: UnitId = NOBODY;
+  /** Хозяин всплеска в точке pos: снаряд, чья последняя точка ближе BURST_OWNER_M; нет такого — неизвестен. */
+  const burstOwner = (pos: Vec3): UnitId => {
+    let best = BURST_OWNER_M;
+    let owner: UnitId = NOBODY;
+    for (const tr of tracks.values()) {
+      if (!tr.last) continue;
+      const d = Math.hypot(tr.last.x - pos.x, tr.last.y - pos.y, tr.last.z - pos.z);
+      if (d < best) {
+        best = d;
+        owner = tr.owner;
+      }
+    }
+    return owner;
+  };
   /** Мировой пул с долей всплесков пресета (BURST_SHARE). */
   const emitWorld = (specs: readonly ParticleSpec[], t: number): void => worldPool.emit(thinParticles(specs, share), t);
 
@@ -309,7 +372,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     if (!a) {
       a = {
         sx: { x: 0, v: 0 }, sz: { x: 0, v: 0 }, kick: { x: 0, v: 0 }, squash: { x: 0, v: 0 },
-        flashUntil: -1, lastBurnS: -1, landTick: -1, seen: true, stride: 0, speed: 0, airS: 0, last: null,
+        flashUntil: -1, lastBurnS: -1, lastSmokeS: -1, landTick: -1, seen: true, stride: 0, speed: 0, airS: 0, last: null,
         flashAt: -1, freezeUntil: -1, frozenSet: false, frozen: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 },
         dust: 0, kbPrev: 0, rootsAt: -10,
       };
@@ -368,7 +431,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       for (const el of elements) el.apply?.(e, nowS);
       switch (e.kind) {
         case "burst": {
-          emitWorld(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), t);
+          emitWorld(markSide(burstParticles(e.preset, e.pos, e.dir, e.scale, Math.random), sideOf(e.owner ?? (IMPACT_BURSTS.has(e.preset) ? burstOwner(e.pos) : NOBODY), localId)), t);
           const l = BURST_LIGHT[e.preset];
           if (l) flashes.push({ ...l, pos: { ...e.pos }, born: t, light: l.light * Math.min(1.5, Math.max(0.7, e.scale)) });
           if (e.preset === "fireballBoom") {
@@ -381,8 +444,12 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         }
         case "palm": {
           const hands: ("left" | "right")[] = e.hand === "both" ? ["left", "right"] : [e.hand === "auto" ? hand : e.hand];
-          for (const h of hands) palmPool.emit(palmParticles(e.element, e.preset, palms[h], Math.random), t);
+          for (const h of hands) palmPool.emit(markSide(palmParticles(e.element, e.preset, palms[h], Math.random), "own"), t);
           lastPalmHand = hands[hands.length - 1]!;
+          break;
+        }
+        case "number": {
+          hitAt.set(e.target, { pos: { ...e.pos }, nowS });
           break;
         }
         case "flash": {
@@ -398,7 +465,11 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             const h = hitFreeze(e.amount, localElement);
             a.flashUntil = Math.max(a.flashUntil, nowS + h.flashS);
             if (h.freezeS > 0) a.freezeUntil = Math.max(a.freezeUntil, nowS + h.freezeS);
+            // удар тушью (V7): средняя и крупная ступень — тёмные штрихи от точки попадания (≤ 12, мимо доли пресета)
+            const hp = hitAt.get(e.target);
+            if (h.tier !== "small" && hp && hp.nowS === nowS) worldPool.emit(inkStrike(hp.pos, eye, h.tier === "large" ? "large" : "medium", localElement, Math.random), t);
           }
+          hitAt.delete(e.target);
           const l = Math.hypot(e.dir.x, e.dir.z);
           const dx = l > 1e-6 ? e.dir.x / l : 0;
           const dz = l > 1e-6 ? e.dir.z / l : -1;
@@ -418,6 +489,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     sync(v) {
       const nowT = rel(v.nowS);
       time.value = nowT;
+      localId = v.localId;
       lastUnits = v.cur.units;
       const dt = lastNowS === null ? 0 : Math.min(0.1, Math.max(0, v.nowS - lastNowS));
       lastNowS = v.nowS;
@@ -437,6 +509,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       for (const a of anims.values()) a.seen = false;
       localElement = null;
       localWindup = false;
+      localBreath = false;
       const unitsOf = (s: MatchState) => s.units.map((u) => ({ id: u.id, pos: u.move.body.pos, u }));
       const prevUnits = new Map<UnitId, Unit>();
       for (const u of v.prev.units) prevUnits.set(u.id, u);
@@ -454,6 +527,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         if (u.id === v.localId) {
           localElement = u.mage?.element ?? null;
           localWindup = !!u.mage?.windup;
+          const cast = u.mage?.ult.cast;
+          localBreath = !!cast && cast.ability === "dragonBreath" && breathStreaming(cast, tick);
         }
         // свой маг — руки от первого лица, его фигуры нет
         if (mage && (u.id === v.localId || mageViews.length >= MAX_MAGES)) continue;
@@ -578,13 +653,18 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         const rootsK = (v.nowS - a.rootsAt) / ROOTS_FLASH_S;
         if (rootsK >= 0 && rootsK < 1) roots.push({ center: { x: pos.x, y: pos.y, z: pos.z }, radius: 0.5 + 0.35 * rootsK });
         if (flags.burning) {
+          // горение по контуру (V5): языки с краёв силуэта, дымок с макушки, тёплая кромка ореола
           if (v.nowS - a.lastBurnS > 0.08) {
             a.lastBurnS = v.nowS;
-            const at = { x: pos.x + (Math.random() - 0.5) * 0.4, y: pos.y + 0.5 + Math.random() * 1.1, z: pos.z + (Math.random() - 0.5) * 0.3 };
-            emitWorld(burstParticles("burnLick", at, UP, 1, Math.random), nowT);
+            emitWorld(burstParticles("burnLick", burnEdge(pos, eye, Math.random), UP, 1, Math.random), nowT);
+          }
+          if (v.nowS - a.lastSmokeS > BURN_SMOKE_S) {
+            a.lastSmokeS = v.nowS;
+            emitWorld([burnSmoke({ x: pos.x, y: pos.y + 1.95, z: pos.z }, Math.random)], nowT);
           }
           const flicker = 0.75 + 0.25 * Math.sin(v.nowS * 23 + u.id) * Math.sin(v.nowS * 9.1);
-          glowList.push({ pos: { x: pos.x, y: pos.y + 1, z: pos.z }, color: FX_COLOR.fire, halo: 0, light: 2.4, intensity: 0.7 * flicker, core: 0, prio: 1 });
+          const away = Math.hypot(pos.x - eye.x, pos.y + 1 - eye.y, pos.z - eye.z);
+          glowList.push({ pos: { x: pos.x, y: pos.y + 1, z: pos.z }, color: FX_COLOR.fire, halo: 0, light: 2.4, intensity: 0.7 * flicker, core: 0, rim: BURN_RIM_M + BURN_RIM_PER_M * away, prio: 1 });
         }
       }
       for (const [id, a] of anims) if (!a.seen && v.nowS > a.flashUntil + 1) anims.delete(id);
@@ -608,6 +688,16 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           }
         }
       } else idleAcc = pebbleAcc = 0;
+      // своё Дыхание изнутри (V4): языки от ладоней к нижним углам кадра, попеременно с рук; на «Низком» — меньше
+      if (localBreath) {
+        breathAcc += dt * BREATH_PALM_RATE;
+        const size = presetNow === "low" ? OWN_BREATH.lowSize : 1;
+        while (breathAcc >= 1) {
+          breathAcc -= 1;
+          palmPool.emit([breathPalmTongue(breathSide > 0 ? palms.right : palms.left, breathSide, size, Math.random)], nowT);
+          breathSide = breathSide > 0 ? -1 : 1;
+        }
+      } else breathAcc = 0;
       const vh = viewportH();
       dummies.update(views, vh, WORLD_FOV);
       mages.update(mageViews, mageLineScale(vh, WORLD_FOV), { x: eye.x, y: eye.y, z: eye.z });
@@ -619,7 +709,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         const ageS = Math.max(0, (tick - pr.bornTick) / TICK_HZ);
         let tr = tracks.get(pr.id);
         if (!tr) {
-          tr = { last: null, acc: 0, hand: pr.ability === "fireball" ? "both" : lastPalmHand, seen: true };
+          tr = { last: null, acc: 0, hand: pr.ability === "fireball" ? "both" : lastPalmHand, seen: true, owner: pr.owner };
           tracks.set(pr.id, tr);
         }
         tr.seen = true;
@@ -641,7 +731,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
             const n = Math.floor(tr.acc / look.trailEveryM);
             if (n > 0) {
               tr.acc -= n * look.trailEveryM;
-              emitWorld(trailParticles(pr.ability, tr.last, pos, Math.min(n, 16), Math.random), nowT);
+              emitWorld(markSide(trailParticles(pr.ability, tr.last, pos, Math.min(n, 16), Math.random), sideOf(pr.owner, v.localId)), nowT);
             }
           }
         }
@@ -659,21 +749,22 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         liveZones.add(z.id);
         const spec = zoneDecal(z, tick, v.localId);
         if (spec) decalList.push({ spec, seed: (z.id * 0.731) % 17, intensity: 1 });
-        const sheet = fireWallSheet(z, tick);
+        const sheet = fireWallSheet(z, tick, v.localId);
         const line = lineOfBox(z);
+        const side = sideOf(z.owner, v.localId);
         if (sheet && line) {
           sheets.push(sheet);
           let st = ignited.get(z.id);
           if (!st) {
-            st = { embers: 0 };
+            st = { embers: 0, box: sheet.box, seed: sheet.seed };
             ignited.set(z.id, st);
-            emitWorld(lineFlames(line.a, line.b, 44, true, Math.random), nowT);
+            emitWorld(markSide(lineFlames(line.a, line.b, 44, true, Math.random), side), nowT);
           }
           st.embers += dt * 34 * sheet.fade;
           const n = Math.floor(st.embers);
           if (n > 0) {
             st.embers -= n;
-            emitWorld(lineFlames(line.a, line.b, n, false, Math.random), nowT);
+            emitWorld(markSide(lineFlames(line.a, line.b, n, false, Math.random), side), nowT);
           }
           for (const f of [0.25, 0.75]) {
             const p = { x: line.a.x + (line.b.x - line.a.x) * f, y: line.a.y + 1.2, z: line.a.z + (line.b.z - line.a.z) * f };
@@ -682,7 +773,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
         } else if (z.kind === "fireTrail" && line && tick >= z.armTick) {
           let st = ignited.get(z.id);
           if (!st) {
-            st = { embers: 0 };
+            st = { embers: 0, seed: 0 };
             ignited.set(z.id, st);
           }
           const life = 1 - Math.min(1, (tick - z.armTick) / Math.max(1, z.endTick - z.armTick));
@@ -690,11 +781,16 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           const n = Math.floor(st.embers);
           if (n > 0) {
             st.embers -= n;
-            emitWorld(lineFlames(line.a, line.b, n, false, Math.random), nowT);
+            emitWorld(markSide(lineFlames(line.a, line.b, n, false, Math.random), side), nowT);
           }
         }
       }
-      for (const id of ignited.keys()) if (!liveZones.has(id)) ignited.delete(id);
+      for (const [id, st] of ignited) {
+        if (liveZones.has(id)) continue;
+        // стена огня погасла — на полу остаётся полоса копоти
+        if (st.box) addMark({ kind: "soot", center: { x: 0, y: st.box.min.y, z: 0 }, radius: 0, box: st.box, born: nowT, seed: st.seed });
+        ignited.delete(id);
+      }
       walls.update(sheets);
 
       // стихии фазы 4: свои меши и логика поверх общих пулов — до декалей и разбора свечений
@@ -714,7 +810,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
       // следы ударов на полу: подпалины и трещины
       for (let i = marks.length - 1; i >= 0; i--) {
         const m = marks[i]!;
-        const spec = markDecal(m.kind, m.center, m.radius, nowT - m.born);
+        const spec = m.kind === "soot" ? (m.box ? sootDecal(m.box, nowT - m.born) : null) : markDecal(m.kind, m.center, m.radius, nowT - m.born);
         if (spec) decalList.push({ spec, seed: m.seed, intensity: 1 });
         else marks.splice(i, 1);
       }
@@ -766,7 +862,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
           if (lit < lights) lit++;
           else light = 0;
         }
-        if (light <= 0 && g.halo <= 0) continue;
+        if (light <= 0 && g.halo <= 0 && !(g.rim && g.rim > 0)) continue;
         out.push({ ...g, light });
       }
       glows.update(out);
@@ -774,6 +870,7 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
     },
 
     setPreset(p) {
+      presetNow = p;
       caps = poolCaps(p);
       lights = MAGIC_LIGHTS[p];
       share = BURST_SHARE[p];

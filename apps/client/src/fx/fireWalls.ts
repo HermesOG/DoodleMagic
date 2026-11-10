@@ -1,7 +1,8 @@
 import { DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, PlaneGeometry, Vector3, type ShaderMaterial } from "three";
-import { TICK_HZ, type AABB, type Zone } from "@doodlemagic/sim";
+import { NOBODY, TICK_HZ, type AABB, type UnitId, type Zone } from "@doodlemagic/sim";
+import { glslFloat } from "../render/stylePass";
 import { FX_ORDER, createFxMaterial, type FxGBuffer, type TimeUniform } from "./fxShader";
-import { FX_COLOR } from "./presets";
+import { FX_COLOR, RIM, sideOf } from "./particleKit";
 
 /** Лист пламени поднимается за столько секунд после взвода и опадает за столько до конца зоны. */
 export const FIRE_WALL_RISE_S = 0.18;
@@ -14,27 +15,30 @@ export interface FireWallSheet {
   /** 0…1 — плотность (гаснет к концу). */
   fade: number;
   seed: number;
+  /** Чья стена для каймы (V3): своя, чужая; null — свой маг неизвестен, каймы нет. */
+  side: "own" | "foe" | null;
 }
 
-/** Лист стены огня на тике nowTick: только у взведённой зоны fireWall с формой «бокс». */
-export function fireWallSheet(z: Zone, nowTick: number): FireWallSheet | null {
+/** Лист стены огня на тике nowTick: только у взведённой зоны fireWall с формой «бокс». localId — свой маг. */
+export function fireWallSheet(z: Zone, nowTick: number, localId: UnitId = NOBODY): FireWallSheet | null {
   if (z.kind !== "fireWall" || z.shape.type !== "box" || nowTick < z.armTick || nowTick >= z.endTick) return null;
   const sinceArm = (nowTick - z.armTick) / TICK_HZ;
   const toEnd = (z.endTick - nowTick) / TICK_HZ;
   const up = Math.min(1, sinceArm / FIRE_WALL_RISE_S);
   const down = Math.min(1, toEnd / FIRE_WALL_FALL_S);
-  return { box: z.shape.box, rise: (1 - (1 - up) ** 2) * (0.35 + 0.65 * down), fade: down, seed: (z.id * 0.37) % 13 };
+  return { box: z.shape.box, rise: (1 - (1 - up) ** 2) * (0.35 + 0.65 * down), fade: down, seed: (z.id * 0.37) % 13, side: sideOf(z.owner, localId) };
 }
 
 /**
  * Стена огня — один двусторонний лист пламени по середине бокса зоны вдоль длинной оси: шум течёт вверх,
  * плотность почти 1 у основания (закрывает обзор), выше — рваные языки, по краям языков — дымка, концы обгрызены.
- * Лист выше стены на 25 %: там лижут языки.
+ * Лист выше стены на 25 %: там лижут языки. По краю языков — кайма (V3): чужая тёмная зубчатая, своя гладкая
+ * средним тоном.
  */
 const WALL_VERT = /* glsl */ `
 attribute vec4 aW0; // середина основания (x, y, z), семя
 attribute vec4 aW1; // размер x, высота, размер z, подъём
-attribute vec4 aW2; // плотность
+attribute vec4 aW2; // плотность, кайма (0 — нет, 1 — своя, 2 — чужая)
 varying vec2 vUV;
 varying vec4 vInfo;
 varying vec2 vAlong;
@@ -46,7 +50,7 @@ void main() {
   // координата по длинной оси от середины и половина длины: модуль берёт фрагментный шейдер
   vAlong = vec2(position.x * len, len * 0.5);
   vUV = vec2(dot(w, axis), w.y - aW0.y);
-  vInfo = vec4(h, aW2.x, aW0.w, aW1.y * aW1.w);
+  vInfo = vec4(h, aW2.x, aW0.w, aW2.y);
   gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
 }
 `;
@@ -56,6 +60,9 @@ uniform float uTime;
 uniform vec3 uFire;
 uniform vec3 uCore;
 uniform vec3 uEmber;
+uniform vec3 uShade;
+uniform vec3 uRimOwn;
+uniform vec3 uRimFoe;
 varying vec2 vUV;
 varying vec4 vInfo;
 varying vec2 vAlong;
@@ -77,14 +84,25 @@ void main() {
   flame -= (1.0 - smoothstep(0.0, 0.9, toEnd + (n2 - 0.5) * 0.5)) * 1.1;
   float dens = smoothstep(0.0, 0.22, flame);
   float smoke = smoothstep(-0.3, -0.04, flame) * (1.0 - dens) * 0.28;
-  if (dens + smoke <= 0.002) discard;
+  // кайма по краю языков: чужая — шум втрое чаще и тёмная тушь, своя — гладкая полоса средним тоном
+  float side = vInfo.w;
+  float rim = 0.0;
+  if (side > 0.5) {
+    float jag = side > 1.5 ? (fxNoise(vec2(vUV.x * 2.4 + seed, y * 2.1 - t * 5.1)) - 0.5) * 0.14 : 0.0;
+    rim = smoothstep(-0.02, 0.03, flame + jag) * (1.0 - smoothstep(0.08, 0.15, flame - jag)) * (side > 1.5 ? RIM_FOE_A : RIM_OWN_A);
+  }
+  if (dens + smoke + rim <= 0.002) discard;
   float heat = clamp(flame, 0.0, 1.0);
-  vec3 col = mix(uEmber, uFire, smoothstep(0.05, 0.45, heat));
+  // угли на концах языков → оранжевая тень → светлое тело → ядро у основания (V6)
+  vec3 col = mix(uEmber, uShade, smoothstep(0.0, 0.18, heat));
+  col = mix(col, uFire, smoothstep(0.18, 0.5, heat));
   col = mix(col, uCore, smoothstep(0.6, 1.05, heat));
   float a = dens * 0.95 * fade * fxDense(vis);
   float sa = smoke * fade * fxDense(vis);
   vec3 glow = col * heat * 0.45 * fade * vis;
-  gl_FragColor = vec4(col * a + glow + vec3(0.22, 0.21, 0.2) * sa, a + sa * (1.0 - a));
+  float ra = rim * fade * fxDense(vis);
+  vec3 rc = side > 1.5 ? uRimFoe : uRimOwn;
+  gl_FragColor = vec4(rc * ra + (col * a + glow + vec3(0.22, 0.21, 0.2) * sa) * (1.0 - ra), ra + (a + sa * (1.0 - a)) * (1.0 - ra));
 }
 `;
 
@@ -112,7 +130,11 @@ export function createFireWallMeshes(gbuffer: FxGBuffer, time: TimeUniform, max 
     vertexShader: WALL_VERT,
     fragmentShader: WALL_FRAG,
     gbuffer,
-    uniforms: { uTime: time, uFire: { value: v3(FX_COLOR.fire) }, uCore: { value: v3(FX_COLOR.core) }, uEmber: { value: v3(FX_COLOR.ember) } },
+    uniforms: {
+      uTime: time, uFire: { value: v3(FX_COLOR.fire) }, uCore: { value: v3(FX_COLOR.core) }, uEmber: { value: v3(FX_COLOR.ember) }, uShade: { value: v3(FX_COLOR.fireShade) },
+      uRimOwn: { value: v3(RIM.own.fire) }, uRimFoe: { value: v3(RIM.foe.fire) },
+    },
+    defines: { RIM_OWN_A: glslFloat(RIM.own.alpha), RIM_FOE_A: glslFloat(RIM.foe.alpha) },
   });
   const mesh = new InstancedMesh(geometry, material, max);
   mesh.name = "fx-fire-walls";
@@ -129,7 +151,7 @@ export function createFireWallMeshes(gbuffer: FxGBuffer, time: TimeUniform, max 
         const b = s.box;
         a0.setXYZW(i, (b.min.x + b.max.x) / 2, b.min.y, (b.min.z + b.max.z) / 2, s.seed);
         a1.setXYZW(i, b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z, s.rise);
-        a2.setXYZW(i, s.fade, 0, 0, 0);
+        a2.setXYZW(i, s.fade, s.side === "own" ? 1 : s.side === "foe" ? 2 : 0, 0, 0);
       }
       for (const a of [a0, a1, a2]) {
         a.clearUpdateRanges();

@@ -1,5 +1,6 @@
 import { DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, PlaneGeometry, Vector3, type ShaderMaterial } from "three";
-import { EARTH, NOBODY, type UnitId, type Vec3, type Zone, type ZoneKind } from "@doodlemagic/sim";
+import { EARTH, NOBODY, type AABB, type UnitId, type Vec3, type Zone, type ZoneKind } from "@doodlemagic/sim";
+import { hex } from "../render/palette";
 import { glslFloat } from "../render/stylePass";
 import { FX_ORDER, createFxMaterial, type FxGBuffer, type TimeUniform } from "./fxShader";
 import { FX_COLOR } from "./presets";
@@ -13,7 +14,7 @@ export interface DecalSpec {
   stage: "telegraph" | "active";
   progress: number;
   shape: "rect" | "ring" | "segment";
-  style: "sparks" | "cracks" | "quake" | "embers" | "tornado" | "fireTornado" | "spring" | "scorch" | "rift";
+  style: "sparks" | "cracks" | "quake" | "embers" | "tornado" | "fireTornado" | "spring" | "scorch" | "rift" | "soot";
   center: Vec3;
   sizeX: number;
   sizeZ: number;
@@ -79,15 +80,41 @@ export function zoneDecal(z: Zone, nowTick: number, localId: UnitId = NOBODY): D
   }
 }
 
-/** Подпалина шара на полу живёт столько секунд, след землетрясения — столько (round3/01, A3). */
-export const SCORCH_S = 8;
-export const QUAKE_AFTER_S = 2.5;
+/**
+ * Следы магии на полу (раунд 4, V10): мир помнит бой. Подпалина шара — 12 с тушью #2B1D14 (α 0,55), первые 1,5 с
+ * по краю тлеют угли; трещины землетрясения — 6 с; полоса копоти после стены огня — 10 с.
+ */
+export const SCORCH_S = 12;
+export const SCORCH_EMBER_S = 1.5;
+export const SCORCH_INK = hex(0x2b1d14);
+export const SCORCH_ALPHA = 0.55;
+export const QUAKE_AFTER_S = 6;
+export const SOOT_S = 10;
+/** Полоса копоти шире стены на столько с каждой стороны, м; её плотность. */
+export const SOOT_MARGIN_M = 0.3;
+export const SOOT_ALPHA = 0.45;
 
 /** След удара на полу — не зона: подпалина шара или трещины землетрясения. age — секунды с удара; null — уже погас. */
 export function markDecal(kind: "scorch" | "quake", center: Vec3, radius: number, age: number): DecalSpec | null {
   const life = kind === "scorch" ? SCORCH_S : QUAKE_AFTER_S;
   if (age < 0 || age >= life) return null;
   return { stage: "active", progress: age / life, shape: "ring", style: kind, center, sizeX: 2 * radius, sizeZ: 2 * radius, angle: 0, enemy: false };
+}
+
+/** Копоть погасшей стены огня: полоса по боксу стены (box — его основание и размеры). age — секунды с конца стены. */
+export function sootDecal(box: AABB, age: number): DecalSpec | null {
+  if (age < 0 || age >= SOOT_S) return null;
+  return {
+    stage: "active",
+    progress: age / SOOT_S,
+    shape: "rect",
+    style: "soot",
+    center: { x: (box.min.x + box.max.x) / 2, y: box.min.y, z: (box.min.z + box.max.z) / 2 },
+    sizeX: box.max.x - box.min.x + 2 * SOOT_MARGIN_M,
+    sizeZ: box.max.z - box.min.z + 2 * SOOT_MARGIN_M,
+    angle: 0,
+    enemy: false,
+  };
 }
 
 /** Внутренний стиль декали «обездвижен»: нефритовое кольцо у ног (не зона, а статус юнита). */
@@ -97,7 +124,7 @@ export interface RootRing {
 }
 
 /** Номер узора в шейдере; 4 — кольцо обездвиженного (не зона). */
-const STYLE_ID: Readonly<Record<DecalSpec["style"], number>> = { sparks: 0, cracks: 1, quake: 2, embers: 3, scorch: 5, tornado: 6, fireTornado: 7, spring: 8, rift: 9 };
+const STYLE_ID: Readonly<Record<DecalSpec["style"], number>> = { sparks: 0, cracks: 1, quake: 2, embers: 3, scorch: 5, tornado: 6, fireTornado: 7, spring: 8, rift: 9, soot: 10 };
 const SHAPE_ID = { rect: 0, ring: 1, segment: 2 } as const;
 const STYLE_ROOT = 4;
 
@@ -219,7 +246,8 @@ void main() {
     }
     add += uJade * (1.0 - smoothstep(0.5, 1.0, r)) * (0.06 + 0.22 * prog) * pulse;
   } else if (style == 2 && !tele) {
-    // после удара землетрясения (A3): волна-кольцо 1 → R за 0,35 с, за ней трещины тушью; гаснут к 2,5 с
+    // после удара землетрясения (A3): волна-кольцо 1 → R за 0,35 с, за ней трещины тушью; нефрит в них гаснет к 0,9 с,
+    // сами трещины лежат до 6 с (V10)
     float rr = length(l);
     float R = hs.x;
     float ts = prog * QUAKE_AFTER_S;
@@ -237,7 +265,7 @@ void main() {
         float cell = fxCells(l * 0.9 + seed);
         float crack = (1.0 - smoothstep(0.015, 0.055, cell)) * swept * keep;
         a = max(a, crack * 0.75 * fade);
-        add += uJade * (1.0 - smoothstep(0.0, 0.03, cell)) * swept * keep * (1.0 - smoothstep(0.1, 0.35, prog)) * 0.9;
+        add += uJade * (1.0 - smoothstep(0.0, 0.03, cell)) * swept * keep * (1.0 - smoothstep(0.25, 0.9, ts)) * 0.9;
       }
     }
   } else if (style == 2) {
@@ -274,15 +302,26 @@ void main() {
       ink = vec3(0.12, 0.1, 0.09);
     }
   } else if (style == 5) {
-    // подпалина шара (A3): рваное пятно тушью, первые секунды в нём тлеют угли; к концу 8 с бледнеет
+    // подпалина шара (A3, V10): рваное пятно тушью, первые 1,5 с по краю тлеют угли; к концу 12 с бледнеет
     float r = length(l) / hs.x + (fxNoise(l * 1.6 + seed) - 0.5) * 0.45;
     float body = 1.0 - smoothstep(0.45, 1.0, r);
     float fade = 1.0 - smoothstep(0.65, 1.0, prog);
     float n = fxNoise(l * 4.0 + seed * 7.0);
-    a = body * (0.4 + 0.25 * n) * fade;
-    float hot = 1.0 - smoothstep(0.0, 0.2, prog);
-    add += mix(uEmber, uFire, n) * smoothstep(0.55, 0.8, n) * body * hot * (0.8 + 0.2 * sin(t * 13.0 + seed));
-    ink = vec3(0.07, 0.055, 0.045);
+    a = body * SCORCH_A * (0.8 + 0.4 * n) * fade;
+    float hot = 1.0 - smoothstep(0.0, SCORCH_EMBER_S, prog * SCORCH_S);
+    float rim = smoothstep(0.35, 0.7, r) * (1.0 - smoothstep(0.8, 1.05, r));
+    add += mix(uEmber, uFire, n) * smoothstep(0.45, 0.75, n) * rim * hot * (0.8 + 0.2 * sin(t * 13.0 + seed)) * 1.4;
+    ink = SCORCH_INK;
+  } else if (style == 10) {
+    // копоть стены огня (V10): полоса сажи по линии погасшей стены, рваные края и штрихи вдоль, к концу 10 с бледнеет
+    bool alongX = hs.x >= hs.y;
+    vec2 st = alongX ? l : l.yx;
+    vec2 hh = alongX ? hs : hs.yx;
+    float n = fxNoise(st * vec2(1.3, 3.0) + seed);
+    float body = (1.0 - smoothstep(0.86, 1.0, abs(st.x) / hh.x + (n - 0.5) * 0.18)) * (1.0 - smoothstep(hh.y * 0.55, hh.y, abs(st.y) + (n - 0.5) * 0.35));
+    float streak = fxNoise(vec2(st.x * 4.0, st.y * 0.8) + seed * 3.0);
+    a = body * SOOT_A * (0.65 + 0.55 * streak) * (1.0 - smoothstep(0.6, 1.0, prog));
+    ink = vec3(0.09, 0.075, 0.06);
   } else if (style >= 6 && style <= 8) {
     // Смерч, огненный смерч и Родник: свой след на полу; телеграф — кромка растёт к взводу
     float rr = length(l);
@@ -386,6 +425,11 @@ export function createDecalMeshes(gbuffer: FxGBuffer, time: TimeUniform, max = 3
     defines: {
       ROOT_FRAC: glslFloat(EARTH.earthquake.rootRadiusM / EARTH.earthquake.radiusM),
       QUAKE_AFTER_S: glslFloat(QUAKE_AFTER_S),
+      SCORCH_S: glslFloat(SCORCH_S),
+      SCORCH_EMBER_S: glslFloat(SCORCH_EMBER_S),
+      SCORCH_A: glslFloat(SCORCH_ALPHA),
+      SCORCH_INK: `vec3(${SCORCH_INK.map((c) => glslFloat(Math.round(c * 1e4) / 1e4)).join(", ")})`,
+      SOOT_A: glslFloat(SOOT_ALPHA),
       RIFT_SPIKES_S: glslFloat(EARTH.tectonicRift.spikesS),
     },
     uniforms: {

@@ -4,7 +4,7 @@ import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVf
 import { FX_ORDER, createFxMaterial } from "./fxShader";
 import { lerpById, muzzleBlend } from "./interp";
 import { mageHands } from "./mageMeshes";
-import { FX_COLOR, UP, spawn, type ParticleSpec } from "./particleKit";
+import { FX_COLOR, UP, sideOf, spawn, type ParticleSpec } from "./particleKit";
 import { WATER_STREAM } from "./presets.water";
 
 /*
@@ -413,6 +413,9 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
     f.glow({ pos: { x: (c.a.x + c.b.x) / 2, y: c.a.y + c.height / 2, z: (c.a.z + c.b.z) / 2 }, color: FX_COLOR.water, halo: 0, light: 6, intensity: 0.35 * c.intensity, core: 0 }, 2);
     const rising = c.rise < 1;
     const rng = Math.random;
+    // брызги волны — с каймой своей или чужой (V3)
+    const side = sideOf(z.owner, f.localId);
+    const from = out.length;
     const run = rising ? 0 : WATER.tsunami.speed;
     // брызги с верха — по ходу и вверх; на росте — прямо вверх
     const sprayDir = rising ? UP : { x: c.dir.x * 0.8, y: 0.6, z: c.dir.z * 0.8 };
@@ -432,6 +435,10 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
       p.vel.x += c.dir.x * run;
       p.vel.z += c.dir.z * run;
       out.push(p);
+    }
+    for (let i = from; i < out.length; i++) {
+      if (side === "own") out[i]!.own = true;
+      else if (side === "foe") out[i]!.foe = true;
     }
   };
   const strip = (pts: readonly Vec3[], width: number, intensity: number, seed: number): void => {
@@ -515,7 +522,13 @@ export const createWaterVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx
         strip(pts, 0.05 * (0.6 + 0.4 * k), k, 3.1);
         if (!arc.sprayed) {
           arc.sprayed = true;
-          for (let j = 0; j < 14; j++) out.push(spawn(WATER_STREAM.spray, pts[1 + Math.floor(rng() * (pts.length - 1))]!, UP, rng));
+          const side = arc.owner === null ? null : sideOf(arc.owner, f.localId);
+          for (let j = 0; j < 14; j++) {
+            const p = spawn(WATER_STREAM.spray, pts[1 + Math.floor(rng() * (pts.length - 1))]!, UP, rng);
+            if (side === "own") p.own = true;
+            else if (side === "foe") p.foe = true;
+            out.push(p);
+          }
         }
         f.glow({ pos: arc.to, color: FX_COLOR.water, halo: 0.5 * k, light: 2.5, intensity: 0.8 * k, core: 0.2 * k }, 3);
       }
