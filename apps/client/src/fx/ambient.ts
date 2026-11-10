@@ -115,7 +115,7 @@ void main() {
     size = vec2(SPARK_SIZE);
   } else {
     // штрих потока: летит вверх по объёму до высоты подъёма
-    float ph = fract(aR.x + uTime * STROKE_SPEED / aA.w);
+    float ph = fract(aR.x + uTime * STROKE_SPEED / max(aA.w, 0.5));
     c = aA.xyz + vec3((aR.y - 0.5) * 2.0 * aB.x, ph * aA.w, (aR.z - 0.5) * 2.0 * aB.y);
     vAlpha = STROKE_ALPHA * sin(ph * 3.14159);
     vCol = STROKE_COLOR;
