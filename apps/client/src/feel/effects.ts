@@ -12,6 +12,8 @@ export const BURST_PRESETS = [
   "deathFire", "deathEarth", "respawnPuff", "fizzle", "paperFlash", "landDust",
   // ульты Огня и Земли (фаза 5): выдох Дыхания, вспышка потока на цели, трещина Разлома и удар шипов
   "breathFlare", "breathHit", "riftCrack", "riftBurst",
+  // объекты на карте (фаза 6): сфера и руна появились и взяты, искры за носителем ярости — вид по состоянию (pickupVfx)
+  "orbSpawn", "orbTake", "runeSpawn", "runeTake", "furyMote",
   ...AIR_BURST_PRESETS, ...WATER_BURST_PRESETS,
 ] as const;
 export type BurstPreset = (typeof BURST_PRESETS)[number];

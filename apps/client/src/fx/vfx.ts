@@ -15,6 +15,7 @@ import { createGlowMeshes, cullGlows, type Glow } from "./glows";
 import { SNAP_M, handToWorldView, lerpById, muzzleBlend, renderTick } from "./interp";
 import { createMageMeshes, mageHands, mageLineScale, type MagePose } from "./mageMeshes";
 import { createParticlePool } from "./particles";
+import { createPickupVfx } from "./pickupVfx";
 import {
   BURST_SHARE, FX_COLOR, IDLE_PALM_RATE, KNOCK_DUST_RATE, MAGIC_LIGHTS, PEBBLE_RATE, burstParticles, idlePalmParticle, knockDust, lineFlames, palmParticles,
   pebbleParticle, poolCaps, thinParticles, trailParticles, type ParticleSpec,
@@ -231,7 +232,8 @@ function lineOfBox(z: Zone): { a: Vec3; b: Vec3 } | null {
  * манекенов и чужих магов с ореолом, ядра снарядов и обломки. Бюджет: G-буфер +8 вызовов (манекены 2, маги 2,
  * рельеф 1, ядра 2, обломки 1), проход света +5 (стены огня, декали, частицы, ореолы, прожилки), ладони +1;
  * пустые пулы не рисуются. Свечение рук магов — в общем меше ореолов, без своего вызова. Ульты Огня и Земли (ultVfx) —
- * +1 конус Дыхания в проходе света и +1 шипы Разлома в G-буфере, только пока они идут.
+ * +1 конус Дыхания в проходе света и +1 шипы Разлома в G-буфере, только пока они идут. Объекты на карте (pickupVfx,
+ * фаза 6) — +2 в проходе света: тела сфер и руны, печати на полу; свечение носителя ярости — в общем меше ореолов.
  */
 export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): Vfx {
   const time: TimeUniform = { value: 0 };
@@ -256,8 +258,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const terrain = createTerrainMeshes(24);
   const cores = createProjectileMeshes(48);
   const debris = createDebris();
-  // эффектники стихий фазы 4 (Воздух, Вода) и ульт Огня и Земли (фаза 5) — тем же интерфейсом
-  const elements = [...ELEMENT_VFX, createUltVfx].map((make) => make({ gbuffer, time }));
+  // эффектники стихий фазы 4 (Воздух, Вода), ульт Огня и Земли (фаза 5) и объектов на карте (фаза 6) — тем же интерфейсом
+  const elements = [...ELEMENT_VFX, createUltVfx, createPickupVfx].map((make) => make({ gbuffer, time }));
   // стартовый пресет — и эффектникам стихий (дешёвый шум конуса на «Низком» и «Среднем»), не только по смене
   for (const el of elements) el.setPreset?.(preset);
 
