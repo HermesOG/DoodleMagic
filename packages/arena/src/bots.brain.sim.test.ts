@@ -39,16 +39,22 @@ function game(mages: { element: Element; at?: Vec3; yaw?: number }[]): { g: Game
   return { g, ids };
 }
 
-/** Тик: боты думают по состоянию до шага (claims — по их памяти до шага), затем stepGame. */
+/**
+ * Тик: боты думают по очереди по состоянию до шага (claims — по уже обновлённым состояниям ботов этого тика, как у
+ * хоста), затем stepGame.
+ */
 function tick(sim: Sim, log?: Log, each?: (inputs: Partial<Record<UnitId, MatchInput>>, before: GameState) => void): MatchEvent[] {
   const inputs: Partial<Record<UnitId, MatchInput>> = {};
   const before = sim.g;
   const t0 = clock();
-  sim.bots = sim.bots.map((b) => {
-    const r = stepBot(b, before.match, { nav, ctx, humans: sim.humans, claims: claimsFor(sim.bots, b.id) });
+  const bots = [...sim.bots];
+  for (let k = 0; k < bots.length; k++) {
+    const b = bots[k]!;
+    const r = stepBot(b, before.match, { nav, ctx, humans: sim.humans, claims: claimsFor(bots, b.id) });
     inputs[b.id] = r.input;
-    return r.bot;
-  });
+    bots[k] = r.bot;
+  }
+  sim.bots = bots;
   sim.botMs += clock() - t0;
   sim.botTicks += sim.bots.length;
   each?.(inputs, before);
@@ -188,6 +194,19 @@ describe("bot brain on the gallery", () => {
     report(`3 min: hits ${hits.join("/")}, deaths ${deaths}, falls ${falls.length}, uncredited ${uncredited.length}, ${(s.botMs / s.botTicks).toFixed(4)} ms per bot-tick`);
     expect(uncredited).toEqual([]);
     for (const h of hits) expect(h).toBeGreaterThan(0);
+  }, LONG);
+
+  it("edge: 4 Mage bots start on the bridges and the rune platform and fight 60 s — no uncredited falls", () => {
+    // кромка со всех сторон: мосты 3 м и площадка руны 4 × 4 м над ущельем
+    const spots: Vec3[] = [{ x: 0, y: 0, z: -3.5 }, { x: 0, y: 0, z: 3.5 }, { x: 1, y: 0, z: 1 }, { x: -1, y: 0, z: -1 }];
+    const { g, ids } = game(ELEMENTS.map((element, k) => ({ element, at: spots[k]!, yaw: k * 1.7 })));
+    const s = sim(g, ids.map((id, k) => createBot(id, "mage", 4321 + k)));
+    const log: Log = [];
+    for (let t = 0; t < 60 * 60; t++) tick(s, log);
+    const falls = log.filter(({ e }) => e.type === "fall");
+    const uncredited = falls.filter(({ e }) => e.type === "fall" && e.credit === NOBODY);
+    report(`bridges 60 s: falls ${falls.length}, uncredited ${uncredited.length}`);
+    expect(uncredited).toEqual([]);
   }, LONG);
 
   it.each([["novice", 1], ["mage", 2]] as const)("quota: three %s bots and a human mid-yard — at most %i on the human, and a lonely human gets a bot", (level, quota) => {

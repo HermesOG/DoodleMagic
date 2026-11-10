@@ -28,12 +28,12 @@ export interface BotKit {
   /** Прибавка к оценке цели у кромки (Р7: Воздуху, Воде, Огню +2, Земле +1). */
   readonly edgeBonus: number;
   /** Держать ЛКМ сверх общего правила (видна, в дальности, взгляд у точки): у Огня — пока жар ниже предела уровня. */
-  holdPrimary(self: Readonly<Unit>, params: Readonly<BotParams>, target: Perceived | null): boolean;
+  holdPrimary(self: Readonly<Unit>, params: Readonly<BotParams>, target: Perceived | null, now: number): boolean;
   /** Решение на мысли: план Q/E/C/X или null. Зовётся, пока нет своего плана. */
   decide(v: BotView, rand: () => number): CastPlan | null;
   /** задача 2: куда встать в бою вместо середины полосы (заход для Порыва, постановка под сброс); null — по полосе. */
-  stance?(v: BotView, rand: () => number): Vec3 | null;
-  /** задача 2: над пустотой или сброшенный — спасение (рывок к полу, Взмах, второй прыжок); null — править полёт. */
+  stance?(v: BotView): Vec3 | null;
+  /** задача 2: над пустотой в полёте (мозг зовёт каждый тик) — спасение (рывок к полу, Взмах, второй прыжок); null — править полёт. */
   rescue?(v: BotView, rand: () => number): CastPlan | null;
 }
 

@@ -107,6 +107,10 @@ export interface CastPlan {
   readonly move?: { readonly x: number; readonly z: number } | null;
   /** Нажать и прыжок на тике нажатия. */
   readonly jump?: boolean;
+  /** Держать прыжок столько секунд после нажатия (парение Воздуха). */
+  readonly holdJumpS?: number;
+  /** Длина рывка по move, м: на тике нажатия мозг заново проверяет приземление (Р9); нет — без проверки (спасение). */
+  readonly moveM?: number;
   /** Допуск взгляда, градусы (по умолчанию BOT_RULES.castTolDeg). */
   readonly tolDeg?: number;
   /** Сколько план живёт после задержки, с (по умолчанию BOT_RULES.planTtlS). */
@@ -142,6 +146,8 @@ export interface BotView {
   readonly underFire: boolean;
   /** «В беде» (Р4): HP < 35 % под огнём или телеграф по боту. */
   readonly inTrouble: boolean;
+  /** Сколько секунд заряд ульты полон (Р5: Архимаг ждёт верного до ultWaitS); 0 — не полон. */
+  readonly ultHeldS: number;
 }
 
 const COS_VIEW = Math.cos((BOT_RULES.viewHalfDeg * Math.PI) / 180);
@@ -202,14 +208,17 @@ export function takeGlimpse(s: Readonly<MatchState>, me: Readonly<Unit>, world: 
       });
       continue;
     }
-    let loud = m.ult.cast !== null || (me.lastHitBy === v.id && me.lastHitTick >= since);
+    let loud = m.ult.cast !== null;
     if (!loud && d <= R.hearM) {
       loud = m.windup !== null || m.dash !== null;
       if (!loud) for (const q of s.projectiles) if (q.owner === v.id && q.bornTick >= since) loud = true;
     }
-    if (!loud) continue;
-    const nx = (rand() * 2 - 1) * R.hearNoiseM;
-    const nz = (rand() * 2 - 1) * R.hearNoiseM;
+    // попадание по боту — где угодно, но дальше слуха только направление: ошибка точки растёт с дальностью (Р2)
+    const hitBy = !loud && me.lastHitBy === v.id && me.lastHitTick >= since;
+    if (!loud && !hitBy) continue;
+    const noise = hitBy && d > R.hearM ? Math.max(R.hearNoiseM, R.hitNoisePerM * d) : R.hearNoiseM;
+    const nx = (rand() * 2 - 1) * noise;
+    const nz = (rand() * 2 - 1) * noise;
     heard.push({ id: v.id, x: p.x + nx, y: p.y, z: p.z + nz });
   }
   return { tick: now, seen, heard };
