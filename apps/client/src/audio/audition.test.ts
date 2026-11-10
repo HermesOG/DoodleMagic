@@ -24,6 +24,7 @@ describe("audition tools", () => {
       setVolume: (v: number) => calls.push(["volume", v]),
       setMuted: (m: boolean) => calls.push(["mute", m]),
       stats: () => ({ unlocked: true, voices: 0, volume: 1, muted: false }),
+      musicBus: () => null,
     } satisfies GameAudio;
     const target: { dmAudio?: unknown } = {};
     const api = installAudioConsole(audio, target);

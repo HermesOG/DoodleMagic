@@ -72,6 +72,11 @@ export interface GameAudio {
   setVolume(v: number): void;
   setMuted(m: boolean): void;
   stats(): AudioStats;
+  /**
+   * Шина боевой музыки (фаза 9): контекст и вход прямо в лимитер, мимо мастера и компрессора — эффекты не «качают»
+   * музыку, а автоподъём компрессора её не поднимает. Глушится вместе со звуком (setMuted). До unlock() — null.
+   */
+  musicBus(): { ctx: AudioContext; out: AudioNode } | null;
 }
 
 export interface AudioOptions {
@@ -265,6 +270,8 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
   /** Вход реверба (его выход — в мастер); null — браузер не умеет ConvolverNode. */
   let reverbIn: AudioNode | null = null;
   let kit: VoiceKit | null = null;
+  /** Вход шины музыки в лимитер; null — до unlock(). */
+  let musicIn: GainNode | null = null;
   let volume = DEFAULT_VOLUME;
   let muted = false;
   const listener = { pos: { x: 0, y: 0, z: 0 }, yaw: 0 };
@@ -274,6 +281,7 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
 
   const applyMaster = () => {
     if (ctx && master) master.gain.setTargetAtTime(muted ? 0 : volume, ctx.currentTime, VOLUME_TC_S);
+    if (ctx && musicIn) musicIn.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, VOLUME_TC_S);
   };
   const wake = (c: AudioContext) => {
     const state: string = c.state; // "interrupted" — iOS: звонок, Siri; в типах DOM его может не быть
@@ -314,11 +322,17 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
         const m = c.createGain();
         m.gain.value = muted ? 0 : volume;
         m.connect(comp);
+        // шина музыки — своя, сразу в лимитер
+        const mus = c.createGain();
+        mus.gain.value = muted ? 0 : 1;
+        mus.connect(limiter);
         kit = createVoiceKit(c, rand);
         master = m;
+        musicIn = mus;
       } catch {
         kit = null;
         master = null;
+        musicIn = null;
         contextClass = null; // узлы не собрались: живём без звука
         try {
           c.close().catch(() => {});
@@ -431,6 +445,10 @@ export function createAudio(opts: AudioOptions = {}): GameAudio {
 
     stats() {
       return { unlocked: ctx !== null, voices: ctx ? voices.active(ctx.currentTime) : 0, volume, muted };
+    },
+
+    musicBus() {
+      return ctx && musicIn ? { ctx, out: musicIn } : null;
     },
   };
 }

@@ -95,3 +95,34 @@ describe("hud.setMenuText", () => {
     expect([title.textContent, lead.textContent]).toEqual(["Комната ABCD", "Матч начинает хост."]);
   });
 });
+
+describe("hud sound and music", () => {
+  const slide = (selector: string, value: string): void => {
+    const input = root.querySelector(selector);
+    input.value = value;
+    input.dispatchEvent(new Event("input"));
+  };
+
+  it("starts from the settings and reports the sound volume, the music switch and the music volume", () => {
+    expect(root.querySelector(".sb-sfx").value).toBe("0.7");
+    expect(root.querySelector(".sb-music-on").checked).toBe(true);
+    expect(root.querySelector(".sb-music").value).toBe("0.5");
+    const sfx = vi.fn();
+    const on = vi.fn();
+    const vol = vi.fn();
+    hud.onSfxVolume(sfx);
+    hud.onMusicOn(on);
+    hud.onMusicVolume(vol);
+    slide(".sb-sfx", "0.25");
+    slide(".sb-music", "2");
+    expect(sfx).toHaveBeenCalledWith(0.25);
+    expect(vol).toHaveBeenCalledWith(1);
+    expect(root.querySelector(".sb-sfx-out").textContent).toBe("25 %");
+    const box = root.querySelector(".sb-music-on");
+    box.checked = false;
+    box.dispatchEvent(new Event("change"));
+    expect(on).toHaveBeenCalledWith(false);
+    // выключенная музыка — ползунок её громкости неактивен
+    expect((root.querySelector(".sb-music") as unknown as { disabled: boolean }).disabled).toBe(true);
+  });
+});

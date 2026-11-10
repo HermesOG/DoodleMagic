@@ -20,6 +20,8 @@ import {
 import "../render/canvas.css";
 import "../sandbox/sandbox.css";
 import { createAudio, unlockOnGesture } from "../audio/synth";
+import { createMusic } from "../audio/music";
+import { createMusicDirector, musicCue, musicSeed, readSituation, streakCue, type MusicCue } from "../audio/musicDirector";
 import { createEyeSmooth, createMoveTracker, stepEyeSmooth, trackMovement } from "../feel/body";
 import { addFeel, addLanding, createCameraFeel, stepCameraFeel, type CameraOffset } from "../feel/camera";
 import type { Effect } from "../feel/effects";
@@ -43,6 +45,7 @@ import { createInput, type InputDevice } from "../sandbox/input";
 import { createGuard, sinkOf } from "../sandbox/route";
 import { loadSettings, saveSettings } from "../sandbox/settings";
 import type { Driver, Frame } from "./driver";
+import type { GameState } from "@doodlemagic/sim";
 
 export interface GameViewOptions {
   root: HTMLElement;
@@ -144,6 +147,28 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   // звук: контекст создаёт первый жест (клик «Играть», выбор стихии, любая клавиша); без Web Audio — тишина, не сбой
   const audio = createAudio();
   unlockOnGesture(audio);
+  // боевая музыка (фаза 9): своя шина в лимитер, директор решает по своим событиям и подтверждённому состоянию игры
+  audio.setVolume(settings.sfxVolume);
+  const music = createMusic({ bus: () => audio.musicBus() });
+  music.setEnabled(settings.musicOn);
+  music.setVolume(settings.musicVolume);
+  const director = createMusicDirector();
+  /** В PvP драйвер знает подтверждённую игру и код комнаты; на полигоне их нет — фаза training. */
+  const pvpSource = driver as Partial<{ roomCode: string; confirmedGame(): GameState }>;
+  const feedMusic = (frame: Frame, nowS: number): void => {
+    const localId = driver.localId;
+    const cues: MusicCue[] = [];
+    const add = (c: MusicCue | null): void => {
+      if (c) cues.push(c);
+    };
+    for (const t of frame.ticks) for (const ev of t.events) add(musicCue(ev, localId, t.state));
+    for (const ev of frame.late) add(musicCue(ev, localId, frame.cur));
+    // серии — только подтверждённые
+    for (const ev of frame.confirmed) add(streakCue(ev, localId));
+    const game = pvpSource.confirmedGame?.() ?? null;
+    music.setSeed(musicSeed(pvpSource.roomCode ?? null, game));
+    music.set(director.step({ nowS, cues, ...readSituation(game, frame.cur, localId) }));
+  };
   if (import.meta.env.DEV) {
     // dmAudio.play("fireballBoom", 5) в консоли — только в dev-сборке
     void import("../audio/audition").then((m) => m.installAudioConsole(audio)).catch(() => undefined);
@@ -259,6 +284,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   const halt = (): void => {
     stopped = true;
     cancelAnimationFrame(raf);
+    music.dispose();
     if (document.pointerLockElement) document.exitPointerLock();
   };
 
@@ -313,6 +339,21 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   hud.onCameraMotion((x) => {
     prefs.cameraMotion = x;
     savePrefs(prefs);
+  });
+  hud.onSfxVolume((x) => {
+    settings.sfxVolume = x;
+    saveSettings(settings);
+    audio.setVolume(x);
+  });
+  hud.onMusicOn((on) => {
+    settings.musicOn = on;
+    saveSettings(settings);
+    music.setEnabled(on);
+  });
+  hud.onMusicVolume((x) => {
+    settings.musicVolume = x;
+    saveSettings(settings);
+    music.setVolume(x);
   });
 
   const cam = renderer.camera;
@@ -465,6 +506,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
     const onFrame = o.onFrame;
     if (onFrame) guard.run("mode", () => onFrame(frame, nowS), undefined);
     guard.run("audio", () => audio.setListener(cam.position, look.yaw), undefined);
+    guard.run("music", () => feedMusic(frame, nowS), undefined);
 
     renderer.render(scene, mittens.scene, vfx.fx);
 
