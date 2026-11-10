@@ -4,7 +4,7 @@ import { HINT, MENU_LEAD, MENU_TITLE, controlRows } from "./hud";
 describe("pause menu copy", () => {
   it("names the training ground and invites to try every ability", () => {
     expect(MENU_TITLE).toBe("DoodleMagic · полигон");
-    expect(MENU_LEAD).toBe("Галерея над ущельем. Шесть манекенов ждут — попробуй каждую способность.");
+    expect(MENU_LEAD).toBe("Монастырь на седловине. Шесть манекенов ждут — попробуй каждую способность.");
     expect(HINT).toBe("ЛКМ — атака · Q E C — приёмы · пробел — прыжок · Esc — меню");
   });
 

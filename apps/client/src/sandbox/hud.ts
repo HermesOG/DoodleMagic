@@ -4,7 +4,7 @@ import { SENS_MAX, SENS_MIN } from "./controls";
 import type { QualityChoice, Settings } from "./settings";
 
 export const MENU_TITLE = "DoodleMagic · полигон";
-export const MENU_LEAD = "Галерея над ущельем. Шесть манекенов ждут — попробуй каждую способность.";
+export const MENU_LEAD = "Монастырь на седловине. Шесть манекенов ждут — попробуй каждую способность.";
 export const HINT = "ЛКМ — атака · Q E C — приёмы · пробел — прыжок · Esc — меню";
 /** Chrome не даёт захватить мышь около секунды после выхода по Esc. */
 export const LOCK_REFUSED_HINT = "Подождите секунду и кликните ещё раз";
