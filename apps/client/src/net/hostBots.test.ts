@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_PEER, createHostCore, rarestElement, type HostCore } from "./hostCore";
 import { BOT_PING } from "./protocol";
 import type { SnapshotMsg } from "./snapshot";
-import { testPvpContext } from "./testArena";
+import { input, testPvpContext } from "./testArena";
 
 /** Боты в ядре хоста (фаза 8): тот же stepGame, ввод — от stepBot. Арена — испытания сети (пол и пропасть). */
 const ctx = testPvpContext();
@@ -81,6 +81,28 @@ describe("hostCore: bots", () => {
     expect(h.game.match.units.some((u) => u.id === last)).toBe(false);
   });
 
+  it("a human joining a full room mid-fight: the evicted bot is nobody's target from the next tick on", () => {
+    const h = createHostCore(ctx, { seed: 5 });
+    h.join(LOCAL_PEER, "Искра", "earth", 0);
+    for (let k = 0; k < PVP.maxPlayers - 1; k++) h.addBot(ELEMENTS[k % ELEMENTS.length]!, "mage");
+    const last = h.bots().at(-1)!.id;
+    h.start();
+    // бой идёт, пока кто-то из ботов не выберет последнего (не дольше 40 с)
+    let k = 0;
+    for (; k < PVP.countdownS * 60 + 40 * 60; k++) {
+      h.tick(null, k * MS_PER_TICK);
+      if (h.game.phase === "live" && h.bots().some((b) => b.claim === last)) break;
+    }
+    expect(h.game.phase).toBe("live");
+    expect(h.bots().some((b) => b.claim === last)).toBe(true);
+    expect(h.join("p1", "Валун", "earth", k * MS_PER_TICK).ok).toBe(true);
+    expect(h.bots().map((b) => b.id)).not.toContain(last);
+    for (let j = 1; j <= 120; j++) {
+      h.tick(null, (k + j) * MS_PER_TICK);
+      expect(h.bots().filter((b) => b.claim === last)).toEqual([]);
+    }
+  });
+
   it("the same seed gives the same game after 300 ticks", () => {
     const make = (): HostCore => {
       const h = createHostCore(ctx, { seed: 42 });
@@ -103,7 +125,11 @@ describe("hostCore: bots", () => {
     let most = 0;
     let seen = 0;
     for (let k = 0; k < PVP.countdownS * 60 + 30 * 60; k++) {
-      h.tick(null, k * MS_PER_TICK);
+      // человек идёт в середину двора (−10, 0): на точке появления без ввода его не видно и не слышно, а три бота
+      // заняты друг другом — «сводник» берёт только свободного бота (Р8), бродилка к точкам появления не ходит
+      const p = posOf(h, me.id);
+      const there = Math.hypot(p.x + 10, p.z) < 2;
+      h.tick(input({ yaw: Math.atan2(p.x + 10, p.z), moveZ: there ? 0 : 1 }), k * MS_PER_TICK);
       const n = h.bots().filter((b) => b.claim === me.id).length;
       most = Math.max(most, n);
       if (n > 0) seen++;
