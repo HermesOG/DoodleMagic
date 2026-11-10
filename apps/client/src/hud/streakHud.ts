@@ -64,8 +64,12 @@ const lifeS = (s: Shown): number => (s.kind === "final" ? FINAL_HOLD_S : STAMP.h
 export const showing = (s: Shown | null, nowS: number): boolean => s !== null && nowS - s.at >= 0 && nowS - s.at < lifeS(s);
 /** Объявление серии сменяет любое прежнее сразу, без очереди. */
 export const showStreak = (a: Announcement, nowS: number): Shown => ({ kind: "streak", a, at: nowS });
-/** «Последняя минута!» крупно — только если строка свободна; идёт серия — null (минуту скажет таймер наверху). */
+/** «Последняя минута!» крупно — только если строка свободна; идёт серия — null (подождёт, finalDue). */
 export const showFinal = (cur: Shown | null, nowS: number): Shown | null => (showing(cur, nowS) ? null : { kind: "final", a: LAST_MINUTE, at: nowS });
+/** Строка занята серией — «Последняя минута!» ждёт, пока она освободится, но не дольше этого. */
+export const FINAL_WAIT_S = 2;
+/** Пора ли показать отложенную с askedAt «Последнюю минуту»: строка свободна или ждали FINAL_WAIT_S. */
+export const finalDue = (cur: Shown | null, askedAt: number, nowS: number): boolean => !showing(cur, nowS) || nowS - askedAt >= FINAL_WAIT_S;
 
 /** Кадр печати по возрасту: масштаб, поворот (градусы), прозрачность, доля мазка 0…1; погасла — null. calm — без движения. */
 export function stampAnim(s: Shown, nowS: number, calm = false): { scale: number; rotDeg: number; alpha: number; stroke: number } | null {
@@ -86,8 +90,8 @@ const easeOut = (u: number): number => 1 - (1 - u) * (1 - u);
 export interface StreakHud {
   /** Своё объявление очка (сменяет прежнее). */
   announce(a: Announcement, nowS: number): void;
-  /** «Последняя минута!» крупно; false — строка занята серией, ничего не показано. */
-  lastMinute(nowS: number): boolean;
+  /** «Последняя минута!» крупно; строка занята серией — когда освободится, но не позже чем через FINAL_WAIT_S. */
+  lastMinute(nowS: number): void;
   update(nowS: number): void;
   setVisible(on: boolean): void;
   dispose(): void;
@@ -120,6 +124,8 @@ export function createStreakHud(root: HTMLElement): StreakHud {
 
   const calm = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   let shown: Shown | null = null;
+  /** Когда попросили «Последнюю минуту», пока строка была занята; NaN — не ждёт. */
+  let finalAsked = Number.NaN;
   /** Последние записанные значения: в DOM пишем только перемены. */
   let lastTransform = "";
   let lastOpacity = "";
@@ -149,9 +155,13 @@ export function createStreakHud(root: HTMLElement): StreakHud {
     lastMinute(nowS) {
       const s = showFinal(shown, nowS);
       if (s) fill(s);
-      return s !== null;
+      else finalAsked = nowS;
     },
     update(nowS) {
+      if (!Number.isNaN(finalAsked) && finalDue(shown, finalAsked, nowS)) {
+        finalAsked = Number.NaN;
+        fill({ kind: "final", a: LAST_MINUTE, at: nowS });
+      }
       const f = shown ? stampAnim(shown, nowS, calm?.matches ?? false) : null;
       if (!f) {
         write(lastTransform, "0", lastStroke);

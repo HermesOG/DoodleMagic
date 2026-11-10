@@ -25,7 +25,7 @@ export type BurstPreset = (typeof BURST_PRESETS)[number];
  * «Последняя минута!» — гонг 220 Гц; последние 10 с — деревянный щелчок, последние 3 с — выше.
  */
 export const STREAK_SOUND_IDS = [
-  "streakBell", "streakDouble", "streakTriple", "streakRampage", "streakDrums", "streakGong", "streakStorm", "streakFar", "streakBroke",
+  "streakBell", "streakBellHigh", "streakDouble", "streakTriple", "streakRampage", "streakDrums", "streakGong", "streakStorm", "streakFar", "streakBroke",
   "lootRise", "lastMinute", "clockTick", "clockTickLast",
 ] as const;
 export const SOUND_IDS = [

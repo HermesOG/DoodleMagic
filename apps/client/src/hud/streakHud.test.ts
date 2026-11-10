@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { LOOT_LOOK, lootAnim } from "./format";
 import {
-  LAST_MINUTE, STAMP, STREAK_MARK_FROM, announcement, multiText, showFinal, showStreak, showing, stampAnim, streakMark, streakStep,
+  FINAL_WAIT_S, LAST_MINUTE, STAMP, STREAK_MARK_FROM, announcement, finalDue, multiText, showFinal, showStreak, showing, stampAnim, streakMark,
+  streakStep,
 } from "./streakHud";
 
 describe("kill streak announcements (phase 9, Р5)", () => {
@@ -31,6 +32,11 @@ describe("kill streak announcements (phase 9, Р5)", () => {
     expect([LAST_MINUTE.px, LAST_MINUTE.stamp, showing(fin, 12.99), showing(fin, 13.01)]).toEqual([44, null, true, false]);
     // серия перебивает и «Последнюю минуту»
     expect(showStreak(announcement(2, 2)!, 12).kind).toBe("streak");
+    // строка была занята: «Последняя минута!» ждёт, пока освободится (серия с 10 гаснет к 11,4), но не дольше 2 с
+    expect(FINAL_WAIT_S).toBe(2);
+    expect([finalDue(first, 10.5, 11), finalDue(first, 10.5, 11.41)]).toEqual([false, true]);
+    const busy = showStreak(announcement(2, 2)!, 12.2);
+    expect([finalDue(busy, 10.5, 12.4), finalDue(busy, 10.5, 12.5)]).toEqual([false, true]);
   });
 
   it("stamps in: scale 1.8 → 0.94 → 1 in 140 ms, tilt −6° → −2°, the stroke draws in 200 ms after 80 ms, fades out over 0.3 s", () => {

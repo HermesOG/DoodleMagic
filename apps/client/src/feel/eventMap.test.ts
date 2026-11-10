@@ -180,10 +180,10 @@ describe("effectsFor: streaks and loot (phase 9, task 5)", () => {
     expect(ids(fx(streak(ME, 2, 2)))).toEqual(["streakDouble"]);
     expect(ids(fx(streak(ME, 3, 3)))).toEqual(["streakTriple", "streakDrums"]);
     expect(ids(fx(streak(ME, 4, 4)))).toEqual(["streakTriple", "streakRampage"]);
-    expect(ids(fx(streak(ME, 1, 3)))).toEqual(["streakBell", "streakDrums"]);
-    expect(ids(fx(streak(ME, 1, 5)))).toEqual(["streakBell", "streakGong"]);
-    expect(ids(fx(streak(ME, 1, 7)))).toEqual(["streakBell", "streakStorm"]);
-    expect(ids(fx(streak(ME, 1, 10)))).toEqual(["streakBell", "streakStorm"]);
+    expect(ids(fx(streak(ME, 1, 3)))).toEqual(["streakBell", "streakBellHigh", "streakDrums"]);
+    expect(ids(fx(streak(ME, 1, 5)))).toEqual(["streakBell", "streakBellHigh", "streakGong"]);
+    expect(ids(fx(streak(ME, 1, 7)))).toEqual(["streakBell", "streakBellHigh", "streakStorm"]);
+    expect(ids(fx(streak(ME, 1, 10)))).toEqual(["streakBell", "streakBellHigh", "streakStorm"]);
     // все звуки серии — у уха
     for (const e of fx(streak(ME, 3, 5))) expect(e).toMatchObject({ kind: "sound", pos: null });
   });

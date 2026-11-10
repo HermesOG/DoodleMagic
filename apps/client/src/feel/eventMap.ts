@@ -575,7 +575,7 @@ function streakEffects(ev: Extract<MatchEvent, { type: "streak" }>, mine: boolea
   if (ev.multi >= 4) out.push(sound("streakRampage"));
   const step = STREAK_SOUND[ev.streak];
   if (step) {
-    if (ev.multi < 2) out.push(sound("streakBell"));
+    if (ev.multi < 2) out.push(sound("streakBell"), sound("streakBellHigh"));
     out.push(sound(step));
   }
   if (ev.broke !== NOBODY) out.push({ kind: "toast", text: BROKE_TEXT }, sound("streakBroke"));

@@ -1,5 +1,5 @@
 import {
-  ABILITY_NAME, ELEMENTS, ELEMENT_INFO, NOBODY, PICKUPS, PVP, TICK_HZ, scoreLimitFor, standings, unitById,
+  ABILITY_NAME, ELEMENTS, ELEMENT_INFO, NOBODY, PICKUPS, PVP, TICK_HZ, scoreLimitFor, scoreOf, standings, unitById,
   type DamageSource, type Element, type GameState, type MatchEvent, type Standing, type UnitId,
 } from "@doodlemagic/sim";
 import { STREAK_LOUD_FROM, STREAK_MARK_FROM, multiText, streakStep } from "../hud/streakHud";
@@ -86,15 +86,7 @@ export function topParts(
  * у кого лимит − 1 очко, пока это правда; новый маг на матч-пойнте — двойной удар барабана.
  */
 export const ARC = { finalS: PVP.finalS, clicksS: 10, highS: 3 } as const;
-/** Что дуга уже сказала: за какой бой (phaseEnd) прозвучала последняя минута, секунда часов, кто на матч-пойнте. */
-export interface ArcMemory {
-  finalFor: number;
-  sec: number;
-  matchPoint: string;
-}
-export const ARC_START: ArcMemory = { finalFor: Number.NaN, sec: Number.NaN, matchPoint: "" };
 export interface ArcStep {
-  memory: ArcMemory;
   /** Часы красные: последняя минута боя или внезапная смерть. */
   final: boolean;
   /** Сейчас объявить «Последняя минута!» (один раз за бой). */
@@ -103,35 +95,57 @@ export interface ArcStep {
   click: "tick" | "last" | null;
   /** На матч-пойнт вышел новый маг (барабан). */
   matchPoint: boolean;
-  /** Маги на матч-пойнте, по id. */
+  /** Маги на матч-пойнте, по id (массив памяти: меняется на месте). */
+  ids: readonly UnitId[];
+}
+/**
+ * Что дуга уже сказала: за какой бой (phaseEnd) прозвучала последняя минута, секунда часов; по какой игре считан
+ * матч-пойнт, кто на нём и ключ «id,id». Меняется на месте, ответ шага (step) — один объект на всё время: без мусора в кадре.
+ */
+export interface ArcMemory {
+  finalFor: number;
+  sec: number;
+  game: GameState | null;
   ids: UnitId[];
+  matchPoint: string;
+  step: ArcStep;
 }
-/** Маги с лимит − 1 очком (в бою), по id. */
-export function matchPointIds(g: GameState): UnitId[] {
-  if (g.phase !== "live" || g.scoreLimit < 2) return [];
-  return standings(g)
-    .filter((s) => s.score === g.scoreLimit - 1)
-    .map((s) => s.id)
-    .sort((a, b) => a - b);
+export function createArc(): ArcMemory {
+  const ids: UnitId[] = [];
+  return { finalFor: Number.NaN, sec: Number.NaN, game: null, ids, matchPoint: "", step: { final: false, lastMinute: false, click: null, matchPoint: false, ids } };
 }
-/** Шаг дуги по подтверждённой игре g на тике часов now (у игрока — предсказанный, как часы в строке). */
+const byId = (a: UnitId, b: UnitId): number => a - b;
+/** Маги с лимит − 1 очком (в бою), по id — в out (на месте). */
+export function matchPointIds(g: GameState, out: UnitId[] = []): UnitId[] {
+  out.length = 0;
+  if (g.phase !== "live" || g.scoreLimit < 2) return out;
+  for (const u of g.match.units) if (u.mage && scoreOf(u) === g.scoreLimit - 1) out.push(u.id);
+  return out.sort(byId);
+}
+/**
+ * Шаг дуги по подтверждённой игре g на тике часов now (у игрока — предсказанный, как часы в строке). Матч-пойнт
+ * пересчитывается только с новой игрой (снапшотом). Память m и ответ m.step меняются на месте.
+ */
 export function stepArc(m: ArcMemory, g: GameState, now: number): ArcStep {
   const live = g.phase === "live";
   const left = g.phaseEnd - now;
   const inFinal = left > 0 && left <= ARC.finalS * TICK_HZ;
-  const lastMinute = live && !g.suddenDeath && inFinal && m.finalFor !== g.phaseEnd;
+  const s = m.step;
+  s.lastMinute = live && !g.suddenDeath && inFinal && m.finalFor !== g.phaseEnd;
+  if (s.lastMinute) m.finalFor = g.phaseEnd;
   const sec = live && left > 0 ? Math.ceil(left / TICK_HZ) : Number.NaN;
-  const click = sec !== m.sec && sec >= 1 && sec <= ARC.clicksS ? (sec <= ARC.highS ? "last" : "tick") : null;
-  const ids = matchPointIds(g);
-  const key = ids.join(",");
-  return {
-    memory: { finalFor: lastMinute ? g.phaseEnd : m.finalFor, sec, matchPoint: key },
-    final: live && (g.suddenDeath || inFinal),
-    lastMinute,
-    click,
-    matchPoint: key !== "" && key !== m.matchPoint,
-    ids,
-  };
+  s.click = sec !== m.sec && sec >= 1 && sec <= ARC.clicksS ? (sec <= ARC.highS ? "last" : "tick") : null;
+  m.sec = sec;
+  s.final = live && (g.suddenDeath || inFinal);
+  s.matchPoint = false;
+  if (g !== m.game) {
+    m.game = g;
+    matchPointIds(g, m.ids);
+    const key = m.ids.length === 0 ? "" : m.ids.join(",");
+    s.matchPoint = key !== "" && key !== m.matchPoint;
+    m.matchPoint = key;
+  }
+  return s;
 }
 /** Печать матч-пойнта в строке сверху: своему — «Одно очко до победы», о чужих — «Матч-пойнт: Имя»; никого — null. */
 export function matchPointText(ids: readonly UnitId[], localId: UnitId, names: ReadonlyMap<UnitId, string>): string | null {
@@ -185,8 +199,9 @@ export function feedLine(ev: MatchEvent, names: ReadonlyMap<UnitId, string>, loc
   return null;
 }
 
-/** Приписка экрана смерти о серии убийцы (Р5): с 3 очков — «· его серия: N» (уже с этим очком, по g). */
+/** Приписка экрана смерти о серии убийцы (Р5): в бою, с 3 очков — «· его серия: N» (уже с этим очком, по g). */
 function streakTail(g: GameState, id: UnitId): string {
+  if (g.phase !== "live") return "";
   const n = unitById(g.match, id)?.mage?.stats.streak ?? 0;
   return n >= STREAK_MARK_FROM ? ` · его серия: ${n}` : "";
 }

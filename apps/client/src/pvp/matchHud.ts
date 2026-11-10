@@ -3,9 +3,9 @@ import type { Frame } from "../game/driver";
 import type { GameView } from "../game/view";
 import type { SoundId } from "../feel/effects";
 import {
-  ARC_START, ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, matchPointText, resultsHint, resultsTitle, respawnLine, scoreRows, stepArc,
-  streakFeedLines, topParts, withKnownNames,
-  type ArcMemory, type ScoreRow,
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, matchPointText, resultsHint, resultsTitle, respawnLine, scoreRows, stepArc,
+  streakFeedLines, topParts, withKnownNames, createArc,
+  type ScoreRow,
 } from "./format";
 import type { PvpDriver } from "./hostDriver";
 import "./pvp.css";
@@ -189,8 +189,11 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   let topFor: GameState | null = null;
   let topSec = Number.NaN;
   let topNames: ReadonlyMap<UnitId, string> | null = null;
-  /** Дуга матча (T7): что уже прозвучало; печать матч-пойнта — последняя записанная. */
-  let arc: ArcMemory = ARC_START;
+  /** Дуга матча (T7): что уже прозвучало (меняется на месте); по какой игре, составу и секунде она считана. */
+  const arc = createArc();
+  let arcFor: GameState | null = null;
+  let arcSec = Number.NaN;
+  let arcNames: ReadonlyMap<UnitId, string> | null = null;
   let matchPointShown = "";
   /** Имена всех магов за сессию (для таблицы и итогов: вышедший победитель — по имени); пересчёт — со сменой состава. */
   let known: ReadonlyMap<UnitId, string> = new Map();
@@ -282,8 +285,14 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
    * строке серий, если она свободна) и гонг — и без музыки; щелчки последних 10 с; печать матч-пойнта и барабан.
    */
   const renderArc = (c: GameState, now: number, names: ReadonlyMap<UnitId, string>, nowS: number): void => {
+    // дуга меняется со снапшотом, составом или секундой часов — между ними не считаем (как строка сверху)
+    const sec = Math.ceil((c.phaseEnd - now) / TICK_HZ);
+    if (c === arcFor && sec === arcSec && names === arcNames) return;
+    const fresh = c !== arcFor || names !== arcNames;
+    arcFor = c;
+    arcSec = sec;
+    arcNames = names;
     const a = stepArc(arc, c, now);
-    arc = a.memory;
     topClock.classList.toggle("is-final", a.final);
     if (a.lastMinute) {
       stamp(topClock, [{ transform: "scale(1.4)" }, { transform: "scale(1)" }], 180);
@@ -291,7 +300,8 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       sound("lastMinute");
     }
     if (a.click) sound(a.click === "last" ? "clockTickLast" : "clockTick");
-    const mp = matchPointText(a.ids, driver.localId, names) ?? "";
+    // текст печати — только с новой игрой или составом
+    const mp = fresh ? (matchPointText(a.ids, driver.localId, names) ?? "") : matchPointShown;
     if (mp !== matchPointShown) {
       matchPointShown = mp;
       setText(topMatchPoint, mp);
@@ -325,9 +335,9 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       // килфид и причина смерти — только по событиям хоста
       let fresh = false;
       for (const ev of f.confirmed) {
-        // серии — строками другим, только в бою и внезапной смерти (Р5)
+        // серии — строками другим, не в разминке и отсчёте (Р5); решающее очко переводит игру в итоги — его строка остаётся
         if (ev.type === "streak") {
-          if (c.phase !== "live") continue;
+          if (c.phase === "warmup" || c.phase === "countdown") continue;
           const lines = streakFeedLines(ev, names, id);
           for (const l of lines) feed.unshift({ text: l.text, mine: l.mine, stamp: l.stamp, at: nowS });
           if (lines.length > 0) fresh = true;

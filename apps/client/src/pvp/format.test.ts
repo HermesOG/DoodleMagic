@@ -4,9 +4,8 @@ import {
   type DamageSource, type Element, type GameState, type MatchEvent, type UnitId,
 } from "@doodlemagic/sim";
 import {
-  ARC, ARC_START, ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, formatClock, matchPointText, resultsHint, resultsTitle, respawnLine,
-  scoreRows, stepArc, streakFeedLines, topLine, topParts, withKnownNames,
-  type ArcMemory,
+  ARC, ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, formatClock, matchPointText, resultsHint, resultsTitle, respawnLine,
+  createArc, matchPointIds, scoreRows, stepArc, streakFeedLines, topLine, topParts, withKnownNames,
 } from "./format";
 
 const NAMES: ReadonlyMap<UnitId, string> = new Map([
@@ -280,6 +279,8 @@ describe("streaks in the kill feed and on the death screen (phase 9, Р5)", () =
     g.match.units[0]!.mage!.stats.streak = 5;
     expect(deathLine({ type: "death", target: 2, killer: 1, ability: "fireball", pos }, g, NAMES)).toBe("Тебя победил Искра 42 · Огненный шар · у него 64 HP · его серия: 5");
     expect(deathLine({ type: "fall", target: 2, credit: 1, pos }, g, NAMES)).toBe("Тебя сбросил Искра 42 · его серия: 5");
+    // только в бою: решающее очко уже в итогах — без приписки
+    expect(deathLine({ type: "fall", target: 2, credit: 1, pos }, { ...g, phase: "results" }, NAMES)).toBe("Тебя сбросил Искра 42");
     g.match.units[0]!.mage!.stats.streak = 2;
     expect(deathLine({ type: "fall", target: 2, credit: 1, pos }, g, NAMES)).toBe("Тебя сбросил Искра 42");
   });
@@ -292,50 +293,55 @@ describe("match arc (phase 9, T7)", () => {
     game("live", [1, 2, 3].map((id) => ({ id, kills: scores[id] ?? 0 })), { phaseEnd: END, scoreLimit: 10, ...patch });
   /** Часы «сейчас» за left секунд до конца. */
   const nowAt = (left: number): number => END - Math.round(left * 60);
-  /** Шаги дуги по секундам до конца одного боя. */
+  /** Шаги дуги по секундам до конца одного боя (ответ шага — один объект на всё время: копируем). */
+  const m = createArc();
   const run = (lefts: number[]) => {
-    let m: ArcMemory = ARC_START;
     const g = fight();
-    return lefts.map((l) => {
-      const st = stepArc(m, g, nowAt(l));
-      m = st.memory;
-      return st;
-    });
+    return lefts.map((l) => ({ ...stepArc(m, g, nowAt(l)) }));
   };
 
   it("announces «Последняя минута!» once per fight at 6:00 and reddens the clock till the end and in sudden death", () => {
     const steps = run([61, 60.5, 60, 59, 30, 12]);
+    // память и ответ меняются на месте — без мусора в кадре
+    expect(stepArc(m, fight(), nowAt(11))).toBe(m.step);
     expect(steps.map((s) => s.lastMinute)).toEqual([false, false, true, false, false, false]);
     expect(steps.map((s) => s.final)).toEqual([false, false, true, true, true, true]);
     expect(ARC.finalS).toBe(60);
     // внезапная смерть: часы красные, второй раз не объявляем; новый бой — снова
-    const sd = stepArc(steps.at(-1)!.memory, fight({}, { suddenDeath: true, phaseEnd: END + 3600 }), nowAt(50) + 3600);
+    const sd = stepArc(m, fight({}, { suddenDeath: true, phaseEnd: END + 3600 }), nowAt(50) + 3600);
     expect([sd.final, sd.lastMinute]).toEqual([true, false]);
-    expect(stepArc(steps.at(-1)!.memory, fight({}, { phaseEnd: END + 30000 }), nowAt(59) + 30000).lastMinute).toBe(true);
+    expect(stepArc(m, fight({}, { phaseEnd: END + 30000 }), nowAt(59) + 30000).lastMinute).toBe(true);
     // разминка и итоги — ничего
     for (const phase of ["warmup", "results"] as const) {
-      const st = stepArc(ARC_START, game(phase, [{ id: 1 }], { phaseEnd: 1000 + 30 * 60 }), 1000);
+      const st = stepArc(createArc(), game(phase, [{ id: 1 }], { phaseEnd: 1000 + 30 * 60 }), 1000);
       expect([st.final, st.lastMinute, st.click, st.matchPoint]).toEqual([false, false, null, false]);
     }
   });
 
   it("clicks once a second in the last 10 s, higher in the last 3 s, never twice in one second", () => {
+    m.sec = Number.NaN;
     const steps = run([11, 10.5, 10, 9.9, 9.5, 4, 3, 2.9, 2, 1, 0.5, 0]);
     // часы «0:11» молчат, «0:10» — первый щелчок; «0:03» и дальше — высокий; на 0:00 — тишина
     expect(steps.map((s) => s.click)).toEqual([null, null, "tick", null, null, "tick", "last", null, "last", "last", null, null]);
   });
 
   it("shows the match point while it is true and drums when a new mage reaches it", () => {
-    let m: ArcMemory = ARC_START;
-    const at = (scores: Partial<Record<UnitId, number>>) => {
-      const st = stepArc(m, fight(scores), nowAt(200));
-      m = st.memory;
-      return [st.ids, st.matchPoint];
+    const arc = createArc();
+    const at = (g: GameState) => {
+      const st = stepArc(arc, g, nowAt(200));
+      return [[...st.ids], st.matchPoint];
     };
-    expect(at({ 1: 8 })).toEqual([[], false]);
-    expect(at({ 1: 9 })).toEqual([[1], true]);
-    expect(at({ 1: 9 })).toEqual([[1], false]);
-    expect(at({ 1: 9, 3: 9 })).toEqual([[1, 3], true]);
+    expect(at(fight({ 1: 8 }))).toEqual([[], false]);
+    const one = fight({ 1: 9 });
+    expect(at(one)).toEqual([[1], true]);
+    // та же игра (снапшот) — не пересчитываем; новая с тем же матч-пойнтом — без барабана
+    expect(at(one)).toEqual([[1], false]);
+    expect(at(fight({ 1: 9 }))).toEqual([[1], false]);
+    expect(at(fight({ 3: 9, 1: 9 }))).toEqual([[1, 3], true]);
+    // на месте: тот же массив
+    const out: number[] = [7];
+    expect(matchPointIds(fight({ 2: 9 }), out)).toBe(out);
+    expect(out).toEqual([2]);
     expect(matchPointText([1, 3], 3, NAMES)).toBe("Одно очко до победы · Матч-пойнт: Искра 42");
     expect(matchPointText([1], 3, NAMES)).toBe("Матч-пойнт: Искра 42");
     expect(matchPointText([], 3, NAMES)).toBeNull();

@@ -19,6 +19,9 @@ const A6 = 1760;
 /** Гонг серии — ре3, тоника боевой музыки. */
 const D3 = 146.8;
 
+/** Храмовый колокол на f: партиалы 1 / 2 / 2,76 / 5,4, выше — тише и короче; delay — от начала рецепта. */
+const bell = (f: number, delay: number, gain: number): Layer[] =>
+  BELL.map((k, i) => tone("sine", f * k, f * k, (0.75 - delay) * [1, 0.7, 0.5, 0.3][i]!, gain * [1, 0.45, 0.3, 0.15][i]!, { delay, attack: 0.002 }));
 /** Удар тайко: синус вниз с перегрузом (слышно на ноутбуке) — не удар Земли: высота выше и короче. */
 const drum = (delay: number, gain: number): Layer => tone("sine", 92, 50, 0.22, gain, { delay, attack: 0.003, sweep: 0.5, drive: 1.6 });
 /** Шлепок по коже барабана: короткий шум bandpass 700 → 300 Гц. */
@@ -34,16 +37,10 @@ const woodClick = (f: number): Recipe => ({
 });
 
 export const STREAK_RECIPES: Readonly<Record<StreakSoundId, Recipe>> = {
-  // колокол объявления: ля5 с партиалами 2 и 2,76, ми6 — через 90 мс (ноты «kill», но колоколом)
-  streakBell: {
-    reverb: REVERB_SEND.large,
-    layers: [
-      tone("sine", A5, A5, 0.75, 0.28, { attack: 0.002 }),
-      tone("sine", A5 * BELL[1], A5 * BELL[1], 0.5, 0.12, { attack: 0.002 }),
-      tone("sine", A5 * BELL[2], A5 * BELL[2], 0.35, 0.08, { attack: 0.002 }),
-      tone("sine", E6, E6, 0.65, 0.22, { delay: 0.09, attack: 0.002 }),
-    ],
-  },
+  // колокол объявления (ноты «kill», но колоколом): ля5 всеми партиалами 1 / 2 / 2,76 / 5,4 и ми6 через 90 мс —
+  // своим рецептом (streakBellHigh): в рецепте не больше 4 слоёв
+  streakBell: { reverb: REVERB_SEND.large, layers: bell(A5, 0, 0.26) },
+  streakBellHigh: { reverb: REVERB_SEND.large, layers: bell(E6, 0.09, 0.2) },
   // ×2: колокол ля5 и через 90 мс до-диез6 с ми6 — мажорный «шаг вверх»
   streakDouble: {
     reverb: REVERB_SEND.large,
@@ -130,7 +127,8 @@ export const STREAK_RECIPES: Readonly<Record<StreakSoundId, Recipe>> = {
 };
 
 export const STREAK_SOUND_LABELS: Readonly<Record<StreakSoundId, string>> = {
-  streakBell: "Серия: колокол объявления",
+  streakBell: "Серия: колокол объявления (ля5)",
+  streakBellHigh: "Серия: колокол объявления (ми6)",
   streakDouble: "Серия: двойное",
   streakTriple: "Серия: тройное",
   streakRampage: "Серия: разгром (гонг и барабан)",

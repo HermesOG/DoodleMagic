@@ -420,8 +420,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   };
 
   /**
-   * Серии и добыча (фаза 9, Р5) — только по подтверждённым событиям: в PvP — в бою и внезапной смерти, на полигоне —
-   * всегда. Своё — не раньше 120 мс (колокол) и 250 мс (добыча) после звука своего убийства, который звучит по
+   * Серии и добыча (фаза 9, Р5) — только по подтверждённым событиям: в PvP — не в разминке и отсчёте (бой, внезапная
+   * смерть и решающее очко, после которого уже итоги), на полигоне — всегда. Своё — не раньше 120 мс (колокол) и 250 мс (добыча) после звука своего убийства, который звучит по
    * предсказанию: killAt — когда он прозвучал; в PvP подтверждение обычно приходит позже, и ждать уже нечего.
    */
   let killAt = -Infinity;
@@ -450,7 +450,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   /** Подтверждённые события кадра: серии и добыча — в подачу (сразу или в очередь), остальное здесь не нужно. */
   const presentConfirmed = (frame: Frame, nowS: number): void => {
     const game = pvpSource.confirmedGame?.() ?? null;
-    if (!game || game.phase === "live") {
+    // фаза — уже после тика: решающее очко переводит игру в итоги, его серия и добыча всё равно подаются
+    if (!game || (game.phase !== "warmup" && game.phase !== "countdown")) {
       const state = game?.match ?? frame.cur;
       for (const ev of frame.confirmed) {
         if (ev.type !== "streak" && ev.type !== "loot") continue;
