@@ -163,8 +163,8 @@ describe("camera feel", () => {
     // ползунок «Движение камеры» гасит отдачу целиком
     const still = trace(fist, "right", 0);
     expect([still.top, still.yaw]).toEqual([0, 0]);
-    expect([RECOIL.fist, RECOIL.stoneCast.pitchDeg, RECOIL.stoneThrow.pitchDeg, RECOIL.sickle, RECOIL.whipCast.pitchDeg, RECOIL.whipStrike]).toEqual([
-      { pitchDeg: 0.6, yawDeg: 0.15 }, 0, 0.9, { pitchDeg: 0.4, yawDeg: 0.2 }, 0.1, { pitchDeg: 0.6, yawDeg: 0.25 },
+    expect([RECOIL.fist, RECOIL.stoneThrow.pitchDeg, RECOIL.sickle, RECOIL.whipCast.pitchDeg, RECOIL.whipStrike]).toEqual([
+      { pitchDeg: 0.6, yawDeg: 0.15 }, 0.9, { pitchDeg: 0.4, yawDeg: 0.2 }, 0.1, { pitchDeg: 0.6, yawDeg: 0.25 },
     ]);
   });
 

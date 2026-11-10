@@ -363,33 +363,33 @@ export const RECIPES: Record<SoundId, Recipe> = {
   },
   // «вжух» отбрасывания (K3): bandpass 1,2 → 0,4 кГц, 0,3 с
   knockWhoosh: { layers: [noise("bandpass", 1200, 400, 0.3, 0.6, { q: 2, attack: 0.05 })] },
-  // ── Свист мимо уха (фаза 9, L12): чужой снаряд прошёл рядом. Нарастает к сближению и уходит вниз (допплер);
-  // подпись — в полосе стихии стрелка ──
+  // ── Свист мимо уха (фаза 9, L12): чужой снаряд прошёл рядом. Звук ставится, когда снаряд уже миновал ухо, поэтому
+  // атака короткая (12–15 мс) и дальше только спад вниз (допплер); подпись — в полосе стихии стрелка ──
   // кулак и шар: треск 3 → 2 кГц и спад полосы 3 → 1,2 кГц, 180 мс
   whizzFire: {
     vary: 0.06,
     layers: [
-      noise("highpass", 3000, 2000, 0.18, 0.5, { q: 0, ceiling: 7000, attack: 0.04, clicks: 5, ...SIG }),
-      noise("bandpass", 3000, 1200, 0.18, 0.45, { q: 2, attack: 0.04 }),
+      noise("highpass", 3000, 2000, 0.18, 0.5, { q: 0, ceiling: 7000, attack: 0.012, clicks: 5, ...SIG }),
+      noise("bandpass", 3000, 1200, 0.18, 0.45, { q: 2, attack: 0.012 }),
     ],
   },
   // камень: «вумм» — lowpass 500 → 180 Гц и низ 110 → 60 Гц под ним, 200 мс
   whizzStone: {
     vary: 0.05,
     layers: [
-      noise("lowpass", 500, 180, 0.2, 0.6, { q: 3, attack: 0.06 }),
-      tone("sine", 110, 60, 0.2, 0.5, { attack: 0.06, drive: 1.5, ...SIG }),
+      noise("lowpass", 500, 180, 0.2, 0.6, { q: 3, attack: 0.015 }),
+      tone("sine", 110, 60, 0.2, 0.5, { attack: 0.015, drive: 1.5, ...SIG }),
     ],
   },
   // серп: свист 3,5 → 1,5 кГц, 150 мс
   whizzSickle: {
     vary: 0.06,
-    layers: [noise("bandpass", 3500, 1500, 0.15, 0.6, { q: 5, attack: 0.04, ...SIG })],
+    layers: [noise("bandpass", 3500, 1500, 0.15, 0.6, { q: 5, attack: 0.012, ...SIG })],
   },
   // снаряды Воды (Хват, Ответ): плеск 1,2 → 0,5 кГц, 160 мс
   whizzWater: {
     vary: 0.06,
-    layers: [noise("bandpass", 1200, 500, 0.16, 0.6, { q: 1.5, attack: 0.04, clicks: 3, ...SIG })],
+    layers: [noise("bandpass", 1200, 500, 0.16, 0.6, { q: 1.5, attack: 0.012, clicks: 3, ...SIG })],
   },
   // ── Воздух и Вода — своими таблицами (airRecipes.ts, waterRecipes.ts) ──
   ...AIR_RECIPES,
