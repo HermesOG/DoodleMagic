@@ -1045,3 +1045,106 @@ describe("sedlovina layout", () => {
     expect(close).toStrictEqual([]);
   });
 });
+
+// ---------------------------------------------------------------- декор (Р5)
+
+/** Чернила декора: знамёна, окна фонарей, венцы (кровля) и цоколи с линиями (тушь). */
+const DECOR = new Set(["clothA", "clothB", "lantern", "roof", "edge"]);
+/** Ниже этой высоты над ярусом декор — на уровне тела: только вплотную к своей постройке. */
+const HEAD_CLEAR = 2.2;
+
+describe.each(variants)("sedlovina decor (%s)", (_name, a) => {
+  it("adds no colliders: banners, lantern windows, crowns and plinths are drawing only", () => {
+    expect(a.colliders).toHaveLength(a.variant === "full" ? 133 : 75);
+  });
+
+  it("hangs 4 banners per half on the 7 m corpus: 0.9 × 2.8 m, ≤ 5 cm off the wall, hem ≥ 1.8 m; A indigo, B ochre", () => {
+    for (const [material, side] of [
+      ["clothA", -1],
+      ["clothB", 1],
+    ] as const) {
+      const cloth = a.render.filter((r) => r.material === material).map((r) => r.box);
+      expect(cloth).toHaveLength(4);
+      for (const c of cloth) {
+        expect(c.max.x - c.min.x).toBeCloseTo(0.9, 6);
+        expect(c.max.y - c.min.y).toBeCloseTo(2.8, 6);
+        expect(c.min.y).toBeGreaterThanOrEqual(1.8);
+        expect(Math.sign(c.min.z + c.max.z)).toBe(side);
+        const gap = side < 0 ? c.min.z + 22 : 22 - c.max.z;
+        expect(gap).toBeGreaterThanOrEqual(0);
+        expect(gap).toBeLessThanOrEqual(0.05);
+        const wall = a.colliders.filter(
+          (k) => k.tag === "shell" && k.box.max.y >= 7 - 1e-9 && k.box.min.x <= c.min.x && k.box.max.x >= c.max.x && Math.abs(Math.abs(side < 0 ? k.box.max.z : k.box.min.z) - 22) < 1e-9,
+        );
+        expect(wall).toHaveLength(1);
+        expect(c.max.y).toBeLessThanOrEqual(wall[0]!.box.max.y);
+        expect(a.colliders.some((k) => boxesOverlap(k.box, c))).toBe(false);
+      }
+    }
+  });
+
+  it("draws every lantern as a post with one window of lantern ink inside its 2.6 m collider, above head height", () => {
+    const posts = a.colliders.filter((c) => c.tag === "lantern").map((c) => c.box);
+    expect(posts).toHaveLength(a.variant === "full" ? 14 : 8);
+    const windows = a.render.filter((r) => r.material === "lantern").map((r) => r.box);
+    expect(windows).toHaveLength(posts.length);
+    for (const p of posts) {
+      const w = windows.filter((q) => boxInBox(p, q));
+      expect(w).toHaveLength(1);
+      expect(w[0]!.min.y - p.min.y).toBeGreaterThanOrEqual(1.6);
+    }
+  });
+
+  it("keeps decor against its building: ≤ 0.3 m out of a collider, ≤ 5 cm at body height — never across a passage", () => {
+    const stray: string[] = [];
+    for (const r of a.render) {
+      if (!DECOR.has(r.material) || !boxInBox(a.bounds, r.box)) continue;
+      // над плато, помостом или висячим мостом — от яруса, иначе от пола двора
+      const onTier = a.colliders.some((c) => Math.abs(c.box.max.y - TIER) < 1e-9 && r.box.min.y >= TIER - 1e-9 && footprintsOverlap(c.box, r.box));
+      const level = onTier ? TIER : 0;
+      const reach = r.box.min.y < level + HEAD_CLEAR ? 0.05 : 0.3;
+      const hugs = a.colliders.some(
+        (c) =>
+          r.box.min.x >= c.box.min.x - reach - 1e-9 &&
+          r.box.max.x <= c.box.max.x + reach + 1e-9 &&
+          r.box.min.z >= c.box.min.z - reach - 1e-9 &&
+          r.box.max.z <= c.box.max.z + reach + 1e-9,
+      );
+      if (!hugs) stray.push(`${r.material} ${JSON.stringify(r.box)}`);
+    }
+    expect(stray).toStrictEqual([]);
+  });
+
+  it("keeps every spawn zone clear of decor", () => {
+    const pad = PLAYER_HALF_W + 0.3;
+    for (const s of a.spawns) {
+      const zone = box(s.pos.x - pad, s.pos.y, s.pos.z - pad, s.pos.x + pad, s.pos.y + 2.6, s.pos.z + pad);
+      expect(a.render.filter((r) => DECOR.has(r.material) && boxesOverlap(zone, r.box)).map((r) => r.material)).toStrictEqual([]);
+    }
+  });
+
+  it("crowns buildings above 3 m with a 0.3 m roof band overhanging 0.25 m and gives them a 0.3 m plinth", () => {
+    const same = (p: AABB, q: AABB) => JSON.stringify(p) === JSON.stringify(q);
+    const lanterns = a.colliders.filter((c) => c.tag === "lantern");
+    const crowns = a.render.filter(
+      (r) =>
+        r.material === "roof" &&
+        Math.abs(r.box.max.y - r.box.min.y - 0.3) < 1e-9 &&
+        r.box.max.y >= 4 - 1e-9 &&
+        !a.colliders.some((c) => same(c.box, r.box)) &&
+        !lanterns.some((c) => footprintsOverlap(c.box, r.box)),
+    );
+    const plinths = a.render.filter((r) => r.material === "edge" && r.box.min.y === 0 && Math.abs(r.box.max.y - 0.3) < 1e-9);
+    // корпус (3 или 5 отрезков), зал, кладовая, 2 контрфорса и пилон — на каждой половине; в полном ещё контрфорс сада
+    const perHalf = a.variant === "full" ? 4 + 5 + 1 : 3 + 5;
+    expect(crowns).toHaveLength(2 * perHalf);
+    expect(plinths).toHaveLength(2 * perHalf);
+    // вынос: венец шире своей постройки ровно на 0,25 м хотя бы с одной стороны
+    for (const c of crowns) {
+      const under = a.colliders.find((k) => Math.abs(k.box.max.y - c.box.max.y) < 1e-9 && boxInBox(box(c.box.min.x - 1e-9, -99, c.box.min.z - 1e-9, c.box.max.x + 1e-9, 99, c.box.max.z + 1e-9), k.box));
+      expect(under, JSON.stringify(c.box)).toBeDefined();
+      const out = Math.max(under!.box.min.x - c.box.min.x, c.box.max.x - under!.box.max.x, under!.box.min.z - c.box.min.z, c.box.max.z - under!.box.max.z);
+      expect(out).toBeCloseTo(0.25, 6);
+    }
+  });
+});

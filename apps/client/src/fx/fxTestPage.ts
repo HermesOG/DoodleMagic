@@ -24,6 +24,7 @@ import { createInkMaterial } from "../render/gbuffer";
 import { INK, SUN_DIR } from "../render/palette";
 import { createAutoQuality, isPresetId } from "../render/quality";
 import { StyleRenderer } from "../render/styleRenderer";
+import { createAmbient } from "./ambient";
 import { createVfx } from "./vfx";
 
 const b = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, material: Material = "stone"): RenderBox => ({
@@ -386,6 +387,9 @@ export function mountFxTest(root: HTMLElement): () => void {
   (window as unknown as { __fxTest?: { renderer: StyleRenderer } }).__fxTest = { renderer };
   const world = new Scene();
   world.add(buildArenaMeshes(FX_BOXES), vfx.worldGroup);
+  // частицы окружения: искры над точкой «руны» и штрихи над «потоком» сцены пробы
+  const ambient = createAmbient(renderer.gbuffer, { rune: { x: 4, y: 0.5, z: -9 }, updrafts: [{ box: { min: { x: -6, y: 0, z: -9 }, max: { x: -4, y: 1, z: -7 } }, lift: 5.3 }] }, renderer.preset.id);
+  vfx.fx.world.add(ambient.mesh);
   const overlay = handProbe();
   const unwatchSize = renderer.watchSize();
   const auto = isPresetId(fixed) ? null : createAutoQuality();
@@ -459,6 +463,7 @@ export function mountFxTest(root: HTMLElement): () => void {
     if (next) {
       renderer.setPreset(next);
       vfx.setPreset(next);
+      ambient.setPreset(next);
     }
     corner.textContent =
       `FPS ${meter.fps.toFixed(0)} · ${meter.frameMs.toFixed(1)} мс\n` +

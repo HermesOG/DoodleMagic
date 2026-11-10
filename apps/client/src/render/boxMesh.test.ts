@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AABB, RenderBox } from "@doodlemagic/sim";
-import { buildBoxArrays, groupByInk } from "./boxMesh";
+import { buildBoxArrays, buildSwayArrays, groupByInk } from "./boxMesh";
 import { INK } from "./palette";
 
 const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): AABB => ({
@@ -88,5 +88,21 @@ describe("groupByInk", () => {
     const keys = [...groupByInk(render).keys()];
     expect(keys).toEqual([...keys].sort((a, b) => a - b));
     expect(keys).toEqual([INK.stone, INK.floor, INK.roof, INK.grass, INK.edge, INK.gold]);
+  });
+});
+
+describe("buildSwayArrays", () => {
+  const b = { min: { x: 1, y: 0, z: -2 }, max: { x: 2, y: 0.5, z: -1 } };
+  it("weights the free edge 1 and the fixed edge 0, vertex for vertex with buildBoxArrays; the box centre rides along", () => {
+    const pos = buildBoxArrays([b]).positions;
+    for (const hanging of [false, true]) {
+      const s = buildSwayArrays([b], hanging);
+      expect(s).toHaveLength(24 * 3);
+      for (let v = 0; v < 24; v++) {
+        const top = pos[v * 3 + 1] === b.max.y;
+        expect(s[v * 3]).toBe(top !== hanging ? 1 : 0);
+        expect([s[v * 3 + 1], s[v * 3 + 2]]).toStrictEqual([1.5, -1.5]);
+      }
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { Euler, Matrix3, Matrix4, Quaternion, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
-import { GBUFFER_VERT, cofactorNormal } from "./gbuffer";
+import { GBUFFER_VERT, SWAY, cofactorNormal, createInkMaterial, worldSun } from "./gbuffer";
+import { styleShared } from "./stylePass";
 
 const deg = (a: Vector3, b: Vector3) => (Math.acos(Math.min(1, Math.max(-1, a.dot(b)))) * 180) / Math.PI;
 const model = (scale: Vector3, rot = new Euler(0.45, -0.2, 0.12)) =>
@@ -52,5 +53,28 @@ describe("G-buffer tone normal", () => {
     expect(GBUFFER_VERT).not.toMatch(/mat3\(modelMatrix\)\s*\*\s*normal/);
     expect(GBUFFER_VERT).toContain("worldNormal(mat3(modelMatrix), normal)");
     expect(GBUFFER_VERT).toContain("worldNormal(mat3(modelViewMatrix), normal)");
+  });
+});
+
+describe("G-buffer sway (Р8)", () => {
+  it("sways only grass and cloth: their own define, attribute and the shared style time; other inks keep the old path", () => {
+    const plain = createInkMaterial(1);
+    expect(plain.defines).toStrictEqual({});
+    expect(plain.uniforms.uTime).toBeUndefined();
+    const grass = createInkMaterial(4, worldSun, { sway: "grass" });
+    const cloth = createInkMaterial(13, worldSun, { sway: "cloth" });
+    expect(grass.defines.SWAY).toBe("");
+    expect(grass.defines.SWAY_CLOTH).toBeUndefined();
+    expect(cloth.defines.SWAY_CLOTH).toBe("");
+    expect(grass.uniforms.uTime).toBe(styleShared.time);
+    expect(cloth.uniforms.uTime).toBe(styleShared.time);
+    expect(GBUFFER_VERT).toContain("attribute vec3 aSway;");
+  });
+
+  it("makes cloth slower and smaller than grass (grass 6 cm, 1.7 rad/s, gusts at 3 m/s)", () => {
+    expect(SWAY.grass).toStrictEqual({ amp: 0.06, rate: 1.7 });
+    expect(SWAY.gust).toBe(3);
+    expect(SWAY.cloth.amp).toBeLessThan(SWAY.grass.amp);
+    expect(SWAY.cloth.rate).toBeLessThan(SWAY.grass.rate);
   });
 });

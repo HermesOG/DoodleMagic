@@ -30,6 +30,7 @@ import type { Effect } from "../feel/effects";
 import { elementFrameEffects } from "../feel/elementFx";
 import { ULT_KILL_TOASTS, afterKillS, effectsFor } from "../feel/eventMap";
 import { createWhizzFrame } from "../feel/whizz";
+import { ambientSpots, createAmbient } from "../fx/ambient";
 import { createVfx } from "../fx/vfx";
 import { createGestures, isFistGesture, startGesture, stepGestures } from "../hands/gestures";
 import { createMittens } from "../hands/mittens";
@@ -153,6 +154,8 @@ export function mountGameView(o: GameViewOptions): GameView | null {
   const vfx = createVfx(renderer.gbuffer, renderer.preset.id);
   const scene = new Scene();
   scene.add(buildArenaMeshes(arena.render), vfx.worldGroup);
+  const ambient = createAmbient(renderer.gbuffer, ambientSpots(arena), renderer.preset.id);
+  vfx.fx.world.add(ambient.mesh);
   const mittens = createMittens();
   const combat = createCombatHud(root);
   const streak = createStreakHud(root);
@@ -223,6 +226,7 @@ export function mountGameView(o: GameViewOptions): GameView | null {
 
   const setPreset = (p: PresetId): void => {
     renderer.setPreset(p);
+    ambient.setPreset(p);
     guard.run(
       "vfx",
       () => {

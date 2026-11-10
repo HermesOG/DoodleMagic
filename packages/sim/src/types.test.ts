@@ -13,7 +13,7 @@ import {
 
 describe("contracts", () => {
   it("lists the arena materials", () => {
-    expect(MATERIALS).toEqual(["stone", "floor", "roof", "grass", "edge", "gold"]);
+    expect(MATERIALS).toEqual(["stone", "floor", "roof", "grass", "edge", "gold", "clothA", "clothB", "lantern"]);
   });
 
   it("keeps the movement constants consistent", () => {
