@@ -6,3 +6,4 @@ export * from "./raycast";
 export * from "./body";
 export * from "./player";
 export * from "./match";
+export * from "./bots";
