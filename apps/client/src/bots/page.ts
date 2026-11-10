@@ -1,4 +1,4 @@
-import { buildGallery } from "@doodlemagic/arena";
+import { buildSedlovina } from "@doodlemagic/arena";
 import { pvpContext } from "@doodlemagic/sim";
 import { mountGameView } from "../game/view";
 import { loadPrefs } from "../hud/prefs";
@@ -12,12 +12,12 @@ import { botElements, botsLead, createModeSelect, saveBotSetup, type BotSetup } 
 const OWN_NAME = "Ты";
 
 /**
- * «Бой с ботами» на «/» (Р14, Р15 фазы 8): «Галерея» с точками появления (pvpContext), правила «Свалки», свой маг и
+ * «Бой с ботами» на «/» (Р14, Р15 фазы 8): «Седловина» с точками появления (pvpContext), правила «Свалки», свой маг и
  * setup.count ботов. Ядро хоста без сети (createLocalHost), общий игровой вид и интерфейс матча PvP. Бой стоит, пока
  * мышь свободна (меню, экран стихий); первое «Играть» в разминке начинает отсчёт 3-2-1.
  */
 export function mountBots(root: HTMLElement, setup: BotSetup): void {
-  const arena = buildGallery("full");
+  const arena = buildSedlovina("full");
   const ctx = pvpContext(arena);
   const element = loadPrefs().element;
   const host = createLocalHost(ctx, { seed: Math.floor(Math.random() * 2 ** 31) });
