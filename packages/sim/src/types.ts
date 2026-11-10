@@ -53,7 +53,7 @@ export type RayKind = "move" | "shot" | "sight";
 // ---------------------------------------------------------------- арена
 
 /** Материалы арены. Клиент сам решает, какими чернилами рисовать каждый. */
-export const MATERIALS = ["stone", "floor", "roof", "grass", "edge", "gold"] as const;
+export const MATERIALS = ["stone", "floor", "roof", "grass", "edge", "gold", "clothA", "clothB", "lantern"] as const;
 export type Material = (typeof MATERIALS)[number];
 
 export interface RenderBox {

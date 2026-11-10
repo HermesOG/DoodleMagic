@@ -69,18 +69,101 @@ const BRIDGE_T = 0.6;
 /** Тонкие линии тушью по кромкам (только рисунок). */
 const LINE = { t: 0.15, h: 0.12 };
 
+// ---------------------------------------------------------------- декор (Р5): только рисунок, коллайдеры прежние
+
+/** Венец: верхние 0,3 м постройки выше 3 м — кровлей, с выносом 0,25 м; цоколь — тушью 0,3 м с выносом 3 см. */
+const CROWN = { h: 0.3, out: 0.25 };
+const PLINTH = { h: 0.3, out: 0.03 };
+/** Фонарь: столб камнем, окно чернилами `lantern` (не светит), шапка кровлей с выносом; высоты — от низа столба. */
+const LANTERN = { window: 1.75, cap: 2.3, out: 0.12 };
+/**
+ * Знамёна: 0,9 × 2,8 м, по 4 на половину на корпусе 7 м (x ±12…±22), висят от венца до 3,9 м; толщина 4 см,
+ * от стены 1 см. Западные — на x ±18,2, а не ±19 (05): там под ними венец кладовой.
+ */
+const BANNER = { w: 0.9, h: 2.8, t: 0.04, gap: 0.01, xs: [-18.2, -15, 15, 18.2] } as const;
+
+/** Свободные стороны постройки (в координатах половины A): туда выносятся венец и цоколь. */
+interface Free {
+  x0?: boolean;
+  x1?: boolean;
+  z0?: boolean;
+  z1?: boolean;
+}
+const ALL_FREE: Free = { x0: true, x1: true, z0: true, z1: true };
+
+/**
+ * Постройка выше 3 м: коллайдеры те же, что без декора (тело; с `roofLayer` — ещё слой кровли 0,3 м), но рисуются
+ * отдельно — тело камнем до венца, венец кровлей с выносом на свободные стороны, цоколь тушью от пола двора (y = 0).
+ * На занятых сторонах цоколь утоплен на 1 см в тело: без двух граней в одной плоскости.
+ */
+function building(
+  b: ArenaBuilder,
+  x0: number,
+  y0: number,
+  z0: number,
+  x1: number,
+  h: number,
+  z1: number,
+  free: Free,
+  o: { tag?: string; roofLayer?: boolean } = {},
+): void {
+  if (o.roofLayer) {
+    b.box(x0, y0, z0, x1, h - ROOF_T, z1, { render: false });
+    b.box(x0, h - ROOF_T, z0, x1, h, z1, { render: false });
+  } else {
+    b.box(x0, y0, z0, x1, h, z1, o.tag ? { tag: o.tag, render: false } : { render: false });
+  }
+  b.box(x0, y0, z0, x1, h - CROWN.h, z1, { collide: false });
+  const out = (side: boolean | undefined, d: number) => (side ? d : 0);
+  b.box(x0 - out(free.x0, CROWN.out), h - CROWN.h, z0 - out(free.z0, CROWN.out), x1 + out(free.x1, CROWN.out), h, z1 + out(free.z1, CROWN.out), {
+    material: "roof",
+    collide: false,
+  });
+  const p = (side: boolean | undefined) => (side ? PLINTH.out : -0.01);
+  b.box(x0 - p(free.x0), 0, z0 - p(free.z0), x1 + p(free.x1), PLINTH.h, z1 + p(free.z1), { material: "edge", collide: false });
+}
+
+/** Фонарь 2,6 м: коллайдер прежний (тег `lantern`), рисунок — столб, окно и шапка с выносом во все стороны. */
+function lantern(b: ArenaBuilder, x0: number, y0: number, z0: number, x1: number, z1: number): void {
+  b.box(x0, y0, z0, x1, y0 + COVER_H, z1, { tag: "lantern", render: false });
+  b.box(x0, y0, z0, x1, y0 + LANTERN.window, z1, { collide: false });
+  b.box(x0, y0 + LANTERN.window, z0, x1, y0 + LANTERN.cap, z1, { material: "lantern", collide: false });
+  const o = LANTERN.out;
+  b.box(x0 - o, y0 + LANTERN.cap, z0 - o, x1 + o, y0 + COVER_H, z1 + o, { material: "roof", collide: false });
+}
+
+/** Знамёна обеих половин: A (z < 0) — индиго `clothA`, B — охра `clothB`. Вне mirror(): у половин разные чернила. */
+function banners(b: ArenaBuilder): void {
+  const top = HALL_H - CROWN.h;
+  const zIn = BACK_Z + BANNER.gap;
+  const zOut = zIn + BANNER.t;
+  for (const [side, material] of [
+    [-1, "clothA"],
+    [1, "clothB"],
+  ] as const) {
+    for (const x of BANNER.xs) {
+      const [z0, z1] = side < 0 ? [zIn, zOut] : [-zOut, -zIn];
+      b.box(x - BANNER.w / 2, top - BANNER.h, z0, x + BANNER.w / 2, top, z1, { material, collide: false });
+    }
+  }
+}
+
 // ---------------------------------------------------------------- части
 
 /** Корпус, плиты пола и обрывы пустот. */
 function shell(b: ArenaBuilder, variant: ArenaVariant): void {
   b.mirror(() => {
     // корпус: 7 м там, где висят знамёна (x ±12…±22), иначе ограда 4 м; над плато — на парапет 1,4 м выше яруса
-    const seg = (x0: number, x1: number, h: number) => b.box(x0, FOUNDATION_Y, BACK_Z - SHELL_T, x1, h, BACK_Z, { tag: "shell" });
-    if (variant === "full") seg(-32, -22, TIER + PARAPET_H);
-    seg(-22, -12, HALL_H);
-    seg(-12, 12, FENCE_H);
-    seg(12, 22, HALL_H);
-    if (variant === "full") seg(22, 32, FENCE_H);
+    // (над плато он парапет, без венца и цоколя). Венец выносится во двор и за торец на соседний корпус ниже
+    const seg = (x0: number, x1: number, h: number, free: Free) =>
+      building(b, x0, FOUNDATION_Y, BACK_Z - SHELL_T, x1, h, BACK_Z, { ...free, z1: true }, { tag: "shell" });
+    if (variant === "full") b.box(-32, FOUNDATION_Y, BACK_Z - SHELL_T, -22, TIER + PARAPET_H, BACK_Z, { tag: "shell" });
+    // у компакта за торцами корпуса 7 м — стены компакта той же высоты: венцу туда выноситься некуда
+    const open = variant === "full";
+    seg(-22, -12, HALL_H, { x0: open, x1: true });
+    seg(-12, 12, FENCE_H, {});
+    seg(12, 22, HALL_H, { x0: true, x1: open });
+    if (variant === "full") seg(22, 32, FENCE_H, {});
     // плиты пола: двор до кромки колодца
     b.box(-22, FOUNDATION_Y, BACK_Z, 22, 0, V.well.z0, { material: "floor" });
     // обрыв колодца со стороны двора
@@ -140,13 +223,15 @@ function well(b: ArenaBuilder): void {
 
 /** Двор половины: зал, беседки, контрфорсы, пилон, кладовая, фонарные столбы, дровяники, фонари у колодца. */
 function courtyard(b: ArenaBuilder): void {
-  const cover = (x0: number, z0: number, x1: number, z1: number, h = COVER_H, tag?: string) =>
-    b.box(x0, 0, z0, x1, h, z1, tag ? { tag } : {});
-  /** Постройка с кровлей: тело камнем, сверху слой кровли; верх — на h. */
-  const roofed = (x0: number, z0: number, x1: number, z1: number, h: number) => {
+  const cover = (x0: number, z0: number, x1: number, z1: number) => b.box(x0, 0, z0, x1, COVER_H, z1);
+  /** Постройка с кровлей: тело камнем, сверху слой кровли; верх — на h. Выше 3 м кровля — венец с выносом. */
+  const roofed = (x0: number, z0: number, x1: number, z1: number, h: number, free: Free = ALL_FREE) => {
+    if (h > 3) return building(b, x0, 0, z0, x1, h, z1, free, { roofLayer: true });
     b.box(x0, 0, z0, x1, h - ROOF_T, z1);
     b.box(x0, h - ROOF_T, z0, x1, h, z1, { material: "roof" });
   };
+  /** Стенка у корпуса (контрфорс, пилон): венец и цоколь с трёх сторон, задняя — у корпуса. */
+  const buttress = (x0: number, x1: number, z1: number) => building(b, x0, 0, BACK_Z, x1, FENCE_H, z1, { x0: true, x1: true, z1: true });
   b.mirror(() => {
     // Против 05 двор поправлен по тестам Р13 (sedlovina.test.ts): проходы между зонами не уже 4 м и линии по
     // земле не длиннее 40 м держатся только вместе, поэтому сдвиги ниже согласованы между собой.
@@ -158,11 +243,11 @@ function courtyard(b: ArenaBuilder): void {
     roofed(-13, -16, -8, -13, COVER_H);
     roofed(9, -16, 14, -13, COVER_H);
     // у корпуса: контрфорсы и пилон; за ними и сбоку от них стоят спауны
-    cover(-12, BACK_Z, -10, -17.5, FENCE_H);
-    cover(10, BACK_Z, 12, -17.5, FENCE_H);
-    cover(-1, BACK_Z, 1, -19.5, FENCE_H);
-    // кладовая в западном углу, вплотную к плато (в компакте — к стене)
-    roofed(-22, BACK_Z, -19, -19, FENCE_H);
+    buttress(-12, -10, -17.5);
+    buttress(10, 12, -17.5);
+    buttress(-1, 1, -19.5);
+    // кладовая в западном углу, вплотную к плато (в компакте — к стене): венец и цоколь только во двор
+    roofed(-22, BACK_Z, -19, -19, FENCE_H, { x1: true, z1: true });
     // Фонарные столбы: укрытие во дворе не дальше 6 м, режут линии вдоль полосы перед залом. Западный 1,5 × 3,5
     // (в 05 — z −11,5…−8) стоял в устье прохода 5 м между лестницей плато и беседкой и делил его на 1,3 и 2,3 м —
     // сдвинут на север вплотную к дровянику. Восточный вытянут стенкой 1,5 × 6,2 от линии беседки до дровяника и
@@ -173,8 +258,8 @@ function courtyard(b: ArenaBuilder): void {
     cover(-20.8, -6.8, -12.5, -5.8);
     cover(12.5, -6.8, 20.8, -5.8);
     // фонари у углов колодца: вплотную к кромке перешейка
-    cover(V.well.x0 - 1, -9, V.well.x0, -6.8, COVER_H, "lantern");
-    cover(V.well.x1, -9, V.well.x1 + 1, -6.8, COVER_H, "lantern");
+    lantern(b, V.well.x0 - 1, 0, -9, V.well.x0, -6.8);
+    lantern(b, V.well.x1, 0, -9, V.well.x1 + 1, -6.8);
     // спауны у светлой стены: за контрфорсами и по сторонам пилона, лицом во двор
     for (const x of [-13, -2, 2, 13]) b.spawn(x, 0, -21.2, Math.PI);
   });
@@ -186,7 +271,7 @@ function courtyard(b: ArenaBuilder): void {
     [11.5, 12.5],
     [21, 22],
   ] as const) {
-    b.box(x0, 0, -0.5, x1, COVER_H, 0.5, { tag: "lantern" });
+    lantern(b, x0, 0, -0.5, x1, 0.5);
   }
   // «жадные» сферы за фонарём перешейка у разломов
   b.pickup("orb", -20.25, 0.5, 0);
@@ -228,8 +313,8 @@ function plateau(b: ArenaBuilder): void {
     b.stairs({ x0: V.west.x1, z0: -16, x1: -18, z1: -12, y0: 0, y1: TIER, dir: "-x", steps: STAIR_STEPS });
     updraft(b, V.west.x1, -18.5, -20, -16.5);
     // фонари у головы висячего моста, на плато
-    b.box(-30, TIER, -7.25, -29, TIER + COVER_H, V.west.z0, { tag: "lantern" });
-    b.box(-25, TIER, -7.25, -24, TIER + COVER_H, V.west.z0, { tag: "lantern" });
+    lantern(b, -30, TIER, -7.25, -29, V.west.z0);
+    lantern(b, -25, TIER, -7.25, -24, V.west.z0);
     // спаун A1 — на плато за павильоном, лицом на восток. В 05 он в (−30; −18,5): оттуда его видно с моста A
     // и садового моста мимо угла павильона; ближе к павильону и к краю мира угол павильона его закрывает
     b.spawn(-31, TIER, -17.8, -Math.PI / 2);
@@ -246,7 +331,7 @@ function garden(b: ArenaBuilder): void {
     b.box(V.east.x0, FOUNDATION_Y, BACK_Z, 32, 0, V.east.z0, { material: "floor" });
     b.box(V.east.x0, CLIFF_Y, V.east.z0 - 1, 32, FOUNDATION_Y, V.east.z0);
     // контрфорс сада: за ним спаун A6
-    b.box(22, 0, BACK_Z, 24, FENCE_H, -17.5);
+    building(b, 22, 0, BACK_Z, 24, FENCE_H, -17.5, { x0: true, x1: true, z1: true });
     // помост +2,8 у края мира; лестница с юга, поток с севера
     b.box(25, 0, -16, 32, TIER, -10, { tag: "tier" });
     b.stairs({ x0: 27.7, z0: -20, x1: 31.7, z1: -16, y0: 0, y1: TIER, dir: "+z", steps: STAIR_STEPS });
@@ -259,7 +344,7 @@ function garden(b: ArenaBuilder): void {
     b.box(px, TIER, -16, 32, TIER + PARAPET_H, -10, { tag: "parapet" });
     b.box(px, 0, -10, 32, PARAPET_H, V.east.z0, { tag: "parapet" });
     // фонарь у головы садового моста
-    b.box(27, 0, -7, 28, COVER_H, V.east.z0, { tag: "lantern" });
+    lantern(b, 27, 0, -7, 28, V.east.z0);
     grass(b, 22, -10, 25, -6);
     b.spawn(26, 0, -21.2, Math.PI);
     b.pickup("orb", 29, TIER + 0.5, -13);
@@ -303,6 +388,7 @@ export function buildSedlovina(variant: ArenaVariant = "full"): ArenaData {
   shell(b, variant);
   well(b);
   courtyard(b);
+  banners(b);
   b.mirror(() => grass(b, -20, -11, -18, -8));
   b.mirror(() => b.pickup("orb", -19, 0.5, -9.5));
   if (variant === "compact") {
