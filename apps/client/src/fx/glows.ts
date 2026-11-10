@@ -1,6 +1,7 @@
 import { DynamicDrawUsage, Frustum, InstancedBufferAttribute, InstancedMesh, Matrix4, PlaneGeometry, Sphere, type Camera, type ShaderMaterial } from "three";
 import type { Vec3 } from "@doodlemagic/sim";
-import { FX_ORDER, createFxMaterial, type FxGBuffer } from "./fxShader";
+import { glslFloat } from "../render/stylePass";
+import { FX_ORDER, GLAZE_TINT, createFxMaterial, type FxGBuffer } from "./fxShader";
 
 /**
  * Свечение магии: ореол вокруг ядра и свет на поверхности мира. Ореол — объёмное сияние вокруг точки,
@@ -109,8 +110,8 @@ void main() {
     float ndl = 0.3 + 0.7 * max(dot(fxNormalAt(p), L / max(dist, 1e-3)), 0.0);
     tinted += vCol * att * ndl * vG.z * LIGHT_GAIN;
   }
-  vec4 light = fxLight(tinted, 0.6);
-  gl_FragColor = vec4(light.rgb + col, light.a);
+  // ореол и свет — глазурью (V1), белое ядро — сложением под тем же потолком белого
+  gl_FragColor = fxLight(tinted + col, GLOW_TINT);
 }
 `;
 
@@ -148,7 +149,7 @@ export function createGlowMeshes(gbuffer: FxGBuffer, max = 48): GlowMeshes {
   geometry.setAttribute("aG0", a0);
   geometry.setAttribute("aG1", a1);
   geometry.setAttribute("aG2", a2);
-  const material = createFxMaterial({ name: "fx-glows", vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG, gbuffer });
+  const material = createFxMaterial({ name: "fx-glows", vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG, gbuffer, defines: { GLOW_TINT: glslFloat(GLAZE_TINT.glows) } });
   const mesh = new InstancedMesh(geometry, material, max);
   mesh.name = "fx-glows";
   mesh.frustumCulled = false;

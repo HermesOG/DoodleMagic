@@ -8,7 +8,7 @@ import { INK } from "../render/palette";
 import { glslFloat } from "../render/stylePass";
 import type { ElementVfx, ElementVfxFactory, ElementVfxFrame } from "./elementVfx";
 import { FX_ORDER, createFxMaterial } from "./fxShader";
-import { FX_COLOR, KIND, randomCone, type Kind, type ParticleSpec, type Rng } from "./particleKit";
+import { FX_COLOR, particle, randomCone, type ParticleSpec, type Rng } from "./particleKit";
 
 /*
  * Ульты Огня и Земли (фаза 5) поверх общих пулов эффектника:
@@ -49,10 +49,7 @@ export const SPIKE_GROW_TICKS = Math.round(0.1 * TICK_HZ);
 export const SPIKE_MELT_TICKS = Math.round(0.5 * TICK_HZ);
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
-const part = (kind: Kind, pos: Vec3, vel: Vec3, life: number, size0: number, size1: number, rng: Rng, gravity?: number): ParticleSpec => {
-  const k = KIND[kind];
-  return { pos, vel, gravity: gravity ?? k.gravity, life, size0, size1, color: k.color(rng), alpha: k.alpha(rng) };
-};
+const part = particle;
 
 /**
  * Частица потока от вершины apex по оси dir (единичной) при длине конуса len: рождается на первых 1,2 м оси, летит
@@ -149,6 +146,7 @@ uniform float uTime;
 uniform vec3 uFire;
 uniform vec3 uCore;
 uniform vec3 uEmber;
+uniform vec3 uShade;
 varying vec3 vRel;
 varying vec4 vInfo;
 void main() {
@@ -169,7 +167,8 @@ void main() {
   float dens = smoothstep(0.1, 0.45, flame) * tip * root * fade;
   if (dens <= 0.002) discard;
   float heat = clamp(flame, 0.0, 1.0) * (1.0 - 0.45 * a01);
-  vec3 col = mix(uEmber, uFire, smoothstep(0.05, 0.45, heat));
+  vec3 col = mix(uEmber, uShade, smoothstep(0.0, 0.18, heat));
+  col = mix(col, uFire, smoothstep(0.18, 0.5, heat));
   col = mix(col, uCore, smoothstep(0.62, 1.0, heat));
   float a = dens * (own ? 0.35 : 0.6) * fxDense(vis);
   vec3 glow = col * heat * 0.55 * dens * vis;
@@ -204,6 +203,7 @@ export const createUltVfx: ElementVfxFactory = ({ gbuffer, time }): ElementVfx =
       uFire: { value: new Vector3(...FX_COLOR.fire) },
       uCore: { value: new Vector3(...FX_COLOR.core) },
       uEmber: { value: new Vector3(...FX_COLOR.ember) },
+      uShade: { value: new Vector3(...FX_COLOR.fireShade) },
     },
   });
   const cones = new InstancedMesh<CylinderGeometry, ShaderMaterial>(coneGeom, coneMat, MAX_BREATH);

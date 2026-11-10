@@ -1,5 +1,6 @@
 import { DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, PlaneGeometry, type ShaderMaterial } from "three";
-import { FX_ORDER, createFxMaterial, type FxGBuffer, type TimeUniform } from "./fxShader";
+import { glslFloat } from "../render/stylePass";
+import { FX_ORDER, GLAZE_TINT, createFxMaterial, type FxGBuffer, type TimeUniform } from "./fxShader";
 import type { ParticleSpec } from "./presets";
 
 /**
@@ -18,8 +19,9 @@ export function allocateRing(head: number, cap: number, n: number): { head: numb
 
 /**
  * Квадрат-billboard на частицу. Положение p0 + v0·t − ½·g·t² считает вершинный шейдер по uTime; у плотных мягких
- * частиц (пыль, дым, тело пламени) скорость гаснет от сопротивления воздуха. Свет (альфа 0) вытянут шлейфом
- * по скорости на экране, осколки крутятся. Мёртвая частица уходит за кадр.
+ * частиц (пыль, дым, тело пламени) и штрихов скорость гаснет от сопротивления воздуха. Свет (альфа 0) вытянут шлейфом
+ * по скорости на экране, штрих кисти — тоже по скорости, длиной в размер и тонкий; осколки крутятся. Мёртвая частица
+ * уходит за кадр. Знаки полей без нового атрибута: aTime.z < 0 — штрих (ParticleSpec.stroke).
  */
 const PARTICLE_VERT = /* glsl */ `
 uniform float uTime;
@@ -35,6 +37,8 @@ varying float vSoft;
 varying float vNear;
 const float DRAG = 2.6;
 const float STREAK_S = 0.04;
+// ширина штриха — доля его длины
+const float STROKE_W = 0.16;
 // не больше этой доли высоты кадра на глубине частицы: вплотную к камере квадрат не заливает экран
 const float MAX_SCREEN = 0.35;
 
@@ -60,14 +64,14 @@ void main() {
     return;
   }
   float t = age / life;
-  // 0 — свет, 1 — мягкое облако, 2 — осколок
-  float kind = aColor.a <= 0.0 ? 0.0 : (aGrav >= 9.0 ? 2.0 : 1.0);
-  float drag = kind == 1.0 ? DRAG : 0.0;
+  // 0 — свет, 1 — мягкое облако, 2 — осколок, 3 — штрих кисти (ветер, удар тушью)
+  float kind = aColor.a <= 0.0 ? 0.0 : aTime.z < 0.0 ? 3.0 : (aGrav >= 9.0 ? 2.0 : 1.0);
+  float drag = kind == 1.0 || kind == 3.0 ? DRAG : 0.0;
   float e = exp(-drag * age);
   float tv = drag > 0.0 ? (1.0 - e) / drag : age;
   vec3 pos = aP0 + aV0 * tv - vec3(0.0, 0.5 * aGrav * age * age, 0.0);
   vec3 vel = aV0 * e - vec3(0.0, aGrav * age, 0.0);
-  float size = mix(aTime.z, aTime.w, t);
+  float size = mix(abs(aTime.z), abs(aTime.w), t);
   float seed = seedOf(uint(gl_InstanceID), aTime.x);
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   float depth = -mv.z;
@@ -85,21 +89,23 @@ void main() {
   size = min(size, maxSize);
   vec2 ax;
   float along = size;
-  if (kind == 0.0) {
+  float across = size;
+  if (kind == 0.0 || kind == 3.0) {
     vec2 sv = (mat3(modelViewMatrix) * vel).xy;
     float sp = length(sv);
     ax = sp > 1e-3 ? sv / sp : vec2(1.0, 0.0);
-    along = min(size + sp * STREAK_S, maxSize);
+    if (kind == 0.0) along = min(size + sp * STREAK_S, maxSize);
+    else across = size * STROKE_W;
   } else {
     float spin = kind == 2.0 ? (seed - 0.5) * 18.0 : (seed - 0.5) * 1.2;
     float a = seed * 6.2831853 + age * spin;
     ax = vec2(cos(a), sin(a));
   }
   vec2 ay = vec2(-ax.y, ax.x);
-  mv.xy += ax * (position.x * along) + ay * (position.y * size);
+  mv.xy += ax * (position.x * along) + ay * (position.y * across);
   gl_Position = projectionMatrix * mv;
   vInfo = vec3(t, seed, kind);
-  vSoft = max(0.04, size * 0.5);
+  vSoft = max(0.04, across * 0.5);
   vNear = nearK;
 }
 `;
@@ -115,8 +121,9 @@ void main() {
   float t = vInfo.x;
   float seed = vInfo.y;
   float kind = vInfo.z;
-  // все формы (пятно, облако, осколок) лежат в единичном круге: угол квадрата отбрасываем до выборок G-буфера
-  float r2 = dot(vUv, vUv);
+  // пятно, облако и осколок лежат в единичном круге: угол квадрата отбрасываем до выборок G-буфера; штрих — на весь
+  // квадрат
+  float r2 = kind > 2.5 ? max(vUv.x * vUv.x, vUv.y * vUv.y) : dot(vUv, vUv);
   if (r2 >= 1.0) discard;
   float vis = fxVisibility(vSoft) * vNear;
   if (vis <= 0.0) discard;
@@ -133,7 +140,22 @@ void main() {
     float sat = hi > 0.0 ? (hi - min(rgb.r, min(rgb.g, rgb.b))) / hi : 0.0;
     vec3 light = mix(rgb, vec3(1.0, 0.98, 0.92), 0.6 * f * f * f * (1.0 - 0.75 * sat)) * m;
     // свет частиц копится слоями (десяток ядер взрыва): над врагом он гаснет как плотное, иначе залил бы силуэт белым
-    gl_FragColor = fxLight(light * fxDense(vis), 0.35);
+    gl_FragColor = fxLight(light * fxDense(vis), PARTICLE_TINT);
+    return;
+  }
+  if (kind > 2.5) {
+    // штрих кисти: x — вдоль (к +1 голова, по скорости), y — поперёк; у хвоста толще и скруглён, к голове — остриё,
+    // край рвёт сухая кисть. Светлая тушь (Воздух) — с белым бликом вдоль, тёмная (удар) — без
+    float u = vUv.x * 0.5 + 0.5;
+    float n = fxNoise(vec2(vUv.x * 3.5 + seed * 23.0, seed * 7.0 + vUv.y * 0.8));
+    float w = mix(0.95, 0.2, u) * (0.8 + 0.4 * n) * sqrt(smoothstep(0.0, 0.16, u));
+    float m = (1.0 - smoothstep(w - 0.18, w, abs(vUv.y))) * (1.0 - smoothstep(0.86, 1.0, u)) * (1.0 - smoothstep(0.6, 1.0, t)) * fadeIn;
+    if (m <= 0.002) discard;
+    float lum = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    float hl = step(0.2, lum) * (1.0 - smoothstep(0.0, 0.16, abs(vUv.y - w * 0.4))) * smoothstep(0.15, 0.4, u) * (1.0 - smoothstep(0.6, 0.85, u));
+    rgb = mix(rgb, vec3(1.0, 0.99, 0.96), 0.75 * hl);
+    a *= m * fxDense(vis);
+    gl_FragColor = vec4(rgb * a, a);
     return;
   }
   if (kind < 1.5) {
@@ -145,7 +167,8 @@ void main() {
     float m = (1.0 - smoothstep(mix(0.45, 0.6, hot), mix(1.0, 0.8, hot), rr)) * (1.0 - smoothstep(0.55, 1.0, t)) * fadeIn;
     if (m <= 0.002) discard;
     // к концу жизни пламя остывает к углям и копоти
-    vec3 cooled = mix(rgb, vec3(0.5, 0.17, 0.06), 0.8 * smoothstep(0.35, 1.0, t));
+    // остывает к тёмной охре, а не к красному HP
+    vec3 cooled = mix(rgb, vec3(0.48, 0.22, 0.08), 0.8 * smoothstep(0.35, 1.0, t));
     rgb = mix(rgb, cooled, hot);
     rgb = mix(rgb, vec3(1.0, 0.89, 0.63), hot * (1.0 - smoothstep(0.0, 0.35, t)) * (1.0 - smoothstep(0.0, 0.6, rr)));
     a *= m * fxDense(vis);
@@ -210,6 +233,7 @@ export function createParticlePool(o: ParticlePoolOptions): ParticlePool {
     fragmentShader: PARTICLE_FRAG,
     gbuffer: o.gbuffer,
     uniforms: { uTime: o.time },
+    defines: { PARTICLE_TINT: glslFloat(GLAZE_TINT.particles) },
     noDepth: o.noDepth ?? false,
   });
   const mesh = new InstancedMesh(geometry, material, max);
@@ -249,7 +273,8 @@ export function createParticlePool(o: ParticlePoolOptions): ParticlePool {
           aV0.array[i * 3 + 2] = s.vel.z;
           aTime.array[i * 4] = tS;
           aTime.array[i * 4 + 1] = s.life;
-          aTime.array[i * 4 + 2] = s.size0;
+          // знак размера — вид без нового атрибута: штрих (size0 < 0)
+          aTime.array[i * 4 + 2] = s.stroke ? -Math.max(s.size0, 1e-3) : s.size0;
           aTime.array[i * 4 + 3] = s.size1;
           aColor.array[i * 4] = s.color[0];
           aColor.array[i * 4 + 1] = s.color[1];

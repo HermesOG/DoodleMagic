@@ -56,6 +56,7 @@ uniform float uTime;
 uniform vec3 uFire;
 uniform vec3 uCore;
 uniform vec3 uEmber;
+uniform vec3 uShade;
 varying vec2 vUV;
 varying vec4 vInfo;
 varying vec2 vAlong;
@@ -79,7 +80,9 @@ void main() {
   float smoke = smoothstep(-0.3, -0.04, flame) * (1.0 - dens) * 0.28;
   if (dens + smoke <= 0.002) discard;
   float heat = clamp(flame, 0.0, 1.0);
-  vec3 col = mix(uEmber, uFire, smoothstep(0.05, 0.45, heat));
+  // угли на концах языков → оранжевая тень → светлое тело → ядро у основания (V6)
+  vec3 col = mix(uEmber, uShade, smoothstep(0.0, 0.18, heat));
+  col = mix(col, uFire, smoothstep(0.18, 0.5, heat));
   col = mix(col, uCore, smoothstep(0.6, 1.05, heat));
   float a = dens * 0.95 * fade * fxDense(vis);
   float sa = smoke * fade * fxDense(vis);
@@ -112,7 +115,7 @@ export function createFireWallMeshes(gbuffer: FxGBuffer, time: TimeUniform, max 
     vertexShader: WALL_VERT,
     fragmentShader: WALL_FRAG,
     gbuffer,
-    uniforms: { uTime: time, uFire: { value: v3(FX_COLOR.fire) }, uCore: { value: v3(FX_COLOR.core) }, uEmber: { value: v3(FX_COLOR.ember) } },
+    uniforms: { uTime: time, uFire: { value: v3(FX_COLOR.fire) }, uCore: { value: v3(FX_COLOR.core) }, uEmber: { value: v3(FX_COLOR.ember) }, uShade: { value: v3(FX_COLOR.fireShade) } },
   });
   const mesh = new InstancedMesh(geometry, material, max);
   mesh.name = "fx-fire-walls";

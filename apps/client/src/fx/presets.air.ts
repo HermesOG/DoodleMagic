@@ -3,7 +3,7 @@ import type { AIR_BURST_PRESETS } from "../feel/airIds";
 import { FX_COLOR, L, UP, spawn, type Layer, type PalmLayers, type ProjectileLook, type TrailFn } from "./particleKit";
 
 /*
- * Частицы Воздуха (02-air, «Читается»): бледно-лавандовые штрихи ветра без тяжести, пыль цвета бумаги у пола.
+ * Частицы Воздуха (02-air, «Читается»; раунд 4 V6): штрихи кисти тёмной сиренью с белым бликом, без тяжести, пыль у пола.
  * Воздух не светит на мир — свет только у огненного смерча (пламя в столбе).
  */
 
