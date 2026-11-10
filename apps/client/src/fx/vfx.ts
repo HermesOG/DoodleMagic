@@ -258,6 +258,8 @@ export function createVfx(gbuffer: StyleRenderer["gbuffer"], preset: PresetId): 
   const debris = createDebris();
   // эффектники стихий фазы 4 (Воздух, Вода) и ульт Огня и Земли (фаза 5) — тем же интерфейсом
   const elements = [...ELEMENT_VFX, createUltVfx].map((make) => make({ gbuffer, time }));
+  // стартовый пресет — и эффектникам стихий (дешёвый шум конуса на «Низком» и «Среднем»), не только по смене
+  for (const el of elements) el.setPreset?.(preset);
 
   const worldGroup = new Group();
   worldGroup.name = "vfx";

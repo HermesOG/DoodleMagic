@@ -122,14 +122,14 @@ describe("Hurricane: events → effects", () => {
     expect(air(castX(ME, "tsunami"))).toBeNull();
   });
 
-  it("an ult hit stays with the shared map: the large hitmarker and hitstop for me, the large kick (every ult victim, shared map) and the knock whoosh for the target", () => {
+  it("an ult hit stays with the shared map: the large hitmarker and hitstop for me, the medium kick and the knock whoosh for the target", () => {
     expect(air(hit(ME, FOE, "hurricane"))).toBeNull();
     const shooter = effectsFor(hit(ME, FOE, "hurricane"), viewOf(state("air")));
     expect(shooter).toContainEqual({ kind: "hitmarker", kill: false, air: false, tier: "large" });
     expect(shooter).toContainEqual({ kind: "hitstop", ms: 90 });
     const victim = effectsFor(hit(FOE, ME, "hurricane"), viewOf(state("air")));
     expect(sounds(victim).map((s) => s.id)).toContain("knockWhoosh");
-    expect(victim.find((e) => e.kind === "trauma")).toMatchObject({ kind: "trauma", amount: 0.8 });
+    expect(victim).toContainEqual({ kind: "trauma", amount: 0.5, profile: "fire" });
   });
 
   it("a kill by the Hurricane: the wind burst for everyone, the kill sound and the «Ураган!» toast for the killer", () => {

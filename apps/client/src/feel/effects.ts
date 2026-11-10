@@ -41,8 +41,8 @@ export type Effect =
   | { kind: "gesture"; ability: AbilityId }
   // pos null — у слушателя; floor — громкость не ниже этой после расстояния (своё попадание слышно и с 20 м)
   | { kind: "sound"; id: SoundId; pos: Vec3 | null; gain: number; floor?: number }
-  // profile — шум тряски: Огонь (по умолчанию) или Земля
-  | { kind: "trauma"; amount: number; profile?: "fire" | "earth" }
+  // profile — шум тряски: Огонь (по умолчанию) или Земля; floor — не прибавка, а пол: trauma не ниже amount
+  | { kind: "trauma"; amount: number; profile?: "fire" | "earth"; floor?: true }
   // dropM — камера вниз в мире на столько метров (удары ладонями в землю)
   | { kind: "kick"; pitchDeg: number; yawDeg: number; rollDeg: number; dropM?: number }
   // FOV-удар — импульс с пиком deg через ≈ 33 мс (round3/01, M3); holdS больше не читается — для старых таблиц

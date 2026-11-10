@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NOBODY, createDummyUnit, createMageUnit, createMatchState, type MatchEvent, type MatchState, type UltId, type Unit, type Zone } from "@doodlemagic/sim";
 import { RECIPES, SOUND_ELEMENT, bandOf, recipeLength } from "../audio/recipes";
 import { MAX_BURST, burstParticles } from "../fx/presets";
-import { SHAKE } from "./camera";
+import { SHAKE, addFeel, createCameraFeel, stepCameraFeel } from "./camera";
 import type { Effect } from "./effects";
 import { BREATH_TRAUMA, RIFT_BURSTS, RIFT_NEAR_TRAUMA, ROAR_GRAIN_S, createUltFrame, effectsFor, hitTier } from "./eventMap";
 
@@ -181,7 +181,7 @@ describe("Fire and Earth ults: frame", () => {
     return out;
   };
 
-  it("roars in grains of 0.4 s no more often than every 0.3 s while my stream lasts, and holds my 0.3 shake by topping up its decay", () => {
+  it("roars in grains of 0.4 s no more often than every 0.3 s while my stream lasts, and keeps a 0.3 floor under my shake", () => {
     const frame = createUltFrame();
     const out = run(frame, (i) => breathState(ME, 136 + i), 180);
     const roars = sounds(out).filter((e) => e.id === "breathRoar");
@@ -189,8 +189,28 @@ describe("Fire and Earth ults: frame", () => {
     expect(roars.length).toBeGreaterThanOrEqual(Math.floor(3 / ROAR_GRAIN_S));
     expect(roars.every((e) => e.pos === null)).toBe(true);
     expect(recipeLength(RECIPES.breathRoar)).toBeCloseTo(0.4);
-    const top = out.filter((e): e is Extract<Effect, { kind: "trauma" }> => e.kind === "trauma").reduce((a, e) => a + e.amount, 0);
-    expect(top).toBeCloseTo(SHAKE.decayPerS * 3);
+    const floors = out.filter((e): e is Extract<Effect, { kind: "trauma" }> => e.kind === "trauma");
+    expect(floors.length).toBe(180);
+    expect(floors.every((e) => e.floor === true && Math.abs(e.amount - (BREATH_TRAUMA + SHAKE.decayPerS / 60)) < 1e-9)).toBe(true);
+  });
+
+  it("a 0.5 hit during my stream decays back to the 0.3 floor instead of freezing; after the stream the shake dies out", () => {
+    const frame = createUltFrame();
+    let cam = createCameraFeel();
+    const step = (s: MatchState, i: number, extra: Effect[] = []) => {
+      for (const e of [...extra, ...frame({ prev: s, cur: s, alpha: 1, localId: ME, nowS: i / 60, dtS: 1 / 60 })]) cam = addFeel(cam, e);
+      cam = stepCameraFeel(cam, 1 / 60, 1).feel;
+    };
+    for (let i = 0; i < 30; i++) step(breathState(ME, 136 + i), i);
+    expect(cam.trauma).toBeCloseTo(BREATH_TRAUMA, 6);
+    // удар поверх потока (шар +0,5): сначала 0,8, потом гаснет как обычно — до пола, а не замерзает
+    step(breathState(ME, 166), 30, [{ kind: "trauma", amount: 0.5 }]);
+    expect(cam.trauma).toBeGreaterThan(0.75);
+    for (let i = 31; i < 60; i++) step(breathState(ME, 136 + i), i);
+    expect(cam.trauma).toBeCloseTo(BREATH_TRAUMA, 6);
+    // поток кончился: пола больше нет
+    for (let i = 60; i < 90; i++) step(at(world("fire", "fire"), 400 + i), i);
+    expect(cam.trauma).toBe(0);
   });
 
   it("stops the moment ult.cast is gone, even without an end event; an inhale only warms my palms", () => {

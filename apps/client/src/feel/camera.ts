@@ -70,13 +70,15 @@ export function createCameraFeel(): CameraFeel {
 const push = (s: Spring, amount: number, omega: number): Spring => ({ x: s.x, v: s.v + finite(amount) * omega * Math.E });
 
 /**
- * trauma — складывается до 1 в своём профиле; kick — импульс толчка, а dropM — камера вниз на столько метров;
- * fov — импульс FOV-удара на deg. Остальные эффекты камеру не трогают.
+ * trauma — складывается до 1 в своём профиле, а с floor — поднимает trauma профиля до amount (тряска, которую держат
+ * весь поток, не замораживает чужие удары: они гаснут как обычно, но не ниже пола); kick — импульс толчка, а dropM —
+ * камера вниз на столько метров; fov — импульс FOV-удара на deg. Остальные эффекты камеру не трогают.
  */
 export function addFeel(f: CameraFeel, e: Effect): CameraFeel {
   if (e.kind === "trauma") {
     const a = Math.max(0, finite(e.amount));
-    return e.profile === "earth" ? { ...f, traumaEarth: clamp01(f.traumaEarth + a) } : { ...f, trauma: clamp01(f.trauma + a) };
+    const add = (t: number): number => clamp01(e.floor ? Math.max(t, a) : t + a);
+    return e.profile === "earth" ? { ...f, traumaEarth: add(f.traumaEarth) } : { ...f, trauma: add(f.trauma) };
   }
   if (e.kind === "kick") {
     const k = SHAKE.kickOmega * DEG;

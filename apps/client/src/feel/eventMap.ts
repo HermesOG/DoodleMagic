@@ -104,7 +104,10 @@ export function breathStreaming(c: UltCast | null | undefined, tick: number): c 
 export const ROAR_GRAIN_S = 0.3;
 /** Свои ладони разгораются на вдохе: заряд у рук раз в столько секунд. */
 const INHALE_PALM_S = 0.2;
-/** Своя тряска на весь поток: 0,3 на выдохе, дальше кадр доливает ровно свой спад (SHAKE.decayPerS × dt). */
+/**
+ * Своя тряска на весь поток: 0,3 на выдохе, дальше кадр держит пол 0,3 (trauma с floor, с запасом на спад кадра
+ * SHAKE.decayPerS × dt): удар поверх потока гаснет до пола, а не замерзает.
+ */
 export const BREATH_TRAUMA = 0.3;
 /** FOV-удар своего выдоха (+4°) и крупной ступени — удар Разлома у кастующего и задетых (+10°, round3/01, 2.1). */
 const BREATH_FOV_DEG = 4;
@@ -259,8 +262,9 @@ function hitEffects(ev: Extract<MatchEvent, { type: "hit" }>, view: EventView, m
   }
   if (ev.target === view.localId && ev.source !== view.localId && !overTime(ev)) {
     // жертве — ступень самого удара, а не «крупная» за убийство: экран смерти и так всё скажет. Часть trauma уже
-    // дало событие области (зона, взрыв, линия Разлома) — здесь только остаток
-    const own: FeelTier = hitTier({ ...ev, killed: false });
+    // дало событие области (зона, взрыв, линия Разлома) — здесь только остаток. Ураган бьёт всех в 10 м — жертве
+    // средняя ступень (бриф задачи 6), у кастующего он остаётся крупным
+    const own: FeelTier = ev.ability === "hurricane" ? "medium" : hitTier({ ...ev, killed: false });
     const k = tempo(ev.ability);
     const strike = own === "large" && ev.ability === "tectonicRift";
     const area = strike ? RIFT_NEAR_TRAUMA : ev.ability in AREA_TRAUMA ? AREA_TRAUMA[ev.ability as keyof typeof AREA_TRAUMA] : 0;
@@ -319,7 +323,8 @@ function zoneEffects(ev: Extract<MatchEvent, { type: "zone" }>, view: EventView,
  * у уха и крупная ступень по профилю Земли (вниз), чужому — из ближней точки линии; кто ближе 4 м к линии — тряска.
  */
 function riftEffects(ev: Extract<MatchEvent, { type: "zone" }>, z: Zone, view: EventView, me: Unit | undefined, near: boolean): Effect[] {
-  if (z.shape.type !== "segment") return [];
+  // конец зоны — шипы тают сами (ultVfx по состоянию), удара второй раз нет
+  if (ev.phase === "end" || z.shape.type !== "segment") return [];
   const { a, b } = z.shape;
   if (ev.phase === "telegraph") return [burst("riftCrack", { ...a })];
   const out: Effect[] = [];
@@ -520,7 +525,8 @@ export function createUltFrame(): (f: FrameView) => Effect[] {
   let inhaleCast = -1;
   let inhaleAt = 0;
   return (f) => {
-    const out: Effect[] = [];
+    // без ульт кадр ничего не создаёт: массив — только когда есть что сказать
+    let out: Effect[] | null = null;
     const s = f.cur;
     const me = unitById(s, f.localId);
     seen.clear();
@@ -536,24 +542,27 @@ export function createUltFrame(): (f: FrameView) => Effect[] {
           inhaleAt = f.nowS;
         } else if (f.nowS - inhaleAt >= INHALE_PALM_S || f.nowS < inhaleAt) {
           inhaleAt = f.nowS;
-          out.push({ kind: "palm", hand: "both", element: "fire", preset: "charge" });
+          (out ??= []).push({ kind: "palm", hand: "both", element: "fire", preset: "charge" });
         }
         continue;
       }
       if (!breathStreaming(c, s.tick)) continue;
       seen.add(u.id);
-      if (own) out.push({ kind: "trauma", amount: SHAKE.decayPerS * Math.max(0, f.dtS) });
+      // пол тряски 0,3 на весь поток: с запасом на спад этого кадра; чужой удар поверх гаснет как обычно — до пола
+      if (own) (out ??= []).push({ kind: "trauma", amount: BREATH_TRAUMA + SHAKE.decayPerS * Math.max(0, f.dtS), floor: true });
       const last = roarAt.get(u.id);
       if (last === undefined || f.nowS - last >= ROAR_GRAIN_S || f.nowS < last) {
         roarAt.set(u.id, f.nowS);
-        if (own) out.push(sound("breathRoar", null, 0.8), { kind: "palm", hand: "both", element: "fire", preset: "flash" });
-        else out.push(sound("breathRoar", breathEar(u, me)));
+        if (own) (out ??= []).push(sound("breathRoar", null, 0.8), { kind: "palm", hand: "both", element: "fire", preset: "flash" });
+        else (out ??= []).push(sound("breathRoar", breathEar(u, me)));
       }
     }
     for (const id of roarAt.keys()) if (!seen.has(id)) roarAt.delete(id);
-    return out;
+    return out ?? NO_FRAME_EFFECTS;
   };
 }
+/** Пустой ответ кадра — один на всё время (заморожен: его не дополнить по ошибке). */
+const NO_FRAME_EFFECTS = Object.freeze([]) as unknown as Effect[];
 
 /** Раз в кадр: непрерывное у ульт Огня и Земли (зовёт elementFrameEffects). */
 export const ultFrame: (f: FrameView) => Effect[] = createUltFrame();
