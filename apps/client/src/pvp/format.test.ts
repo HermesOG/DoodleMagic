@@ -4,7 +4,7 @@ import {
   type DamageSource, type Element, type GameState, type MatchEvent, type UnitId,
 } from "@doodlemagic/sim";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, formatClock, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedElement, feedLine, formatClock, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
   withKnownNames,
 } from "./format";
 
@@ -135,6 +135,28 @@ describe("feedLine", () => {
 
   it("an unknown victim still gets a line", () => {
     expect(feedLine(fall(NOBODY, 9), NAMES, 1)).toEqual({ text: "Маг · в ущелье", mine: false });
+  });
+});
+
+describe("feedElement", () => {
+  const g = game("live", [{ id: 1, el: "air" }, { id: 2, el: "water" }, { id: 3, el: "earth", alive: false }, { id: 9, el: "fire" }]);
+
+  it("the element of whoever the line starts with: killer, pusher, rune taker, the one who slew the carrier", () => {
+    expect(feedElement({ type: "death", target: 2, killer: 1, ability: "airSickle", pos }, g, NAMES)).toBe("air");
+    expect(feedElement({ type: "death", target: 1, killer: 3, ability: "burning", pos }, g, NAMES)).toBe("earth");
+    expect(feedElement({ type: "fall", target: 1, credit: 2, pos }, g, NAMES)).toBe("water");
+    expect(feedElement({ type: "pickup", kind: "rune", index: 0, phase: "take", unit: 2, pos }, g, NAMES)).toBe("water");
+    expect(feedElement({ type: "fury", unit: 2, phase: "slain", by: 1, pos }, g, NAMES)).toBe("air");
+  });
+
+  it("no mark when the line starts with the victim or there is no line", () => {
+    expect(feedElement({ type: "death", target: 2, killer: 9, ability: "burning", pos }, g, NAMES)).toBeNull();
+    expect(feedElement({ type: "death", target: 2, killer: NOBODY, ability: "burning", pos }, g, NAMES)).toBeNull();
+    expect(feedElement({ type: "fall", target: 2, credit: NOBODY, pos }, g, NAMES)).toBeNull();
+    expect(feedElement({ type: "fall", target: 2, credit: 9, pos }, g, NAMES)).toBeNull();
+    expect(feedElement({ type: "fury", unit: 2, phase: "end", by: NOBODY, pos }, g, NAMES)).toBeNull();
+    expect(feedElement({ type: "pickup", kind: "rune", index: 0, phase: "spawn", unit: NOBODY, pos }, g, NAMES)).toBeNull();
+    expect(feedElement({ type: "respawn", target: 1, pos, yaw: 0 }, g, NAMES)).toBeNull();
   });
 });
 

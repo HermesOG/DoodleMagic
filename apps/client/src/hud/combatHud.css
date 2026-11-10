@@ -1,7 +1,7 @@
 /*
  * Боевой HUD и выбор стихии: «кисть и печать» (GDD 6, round1/05 п. 7). Бумага, тушь и одна краска — киноварь, только
- * для HP и урона. Цвета стихий — лишь у готовых способностей и на карточках выбора. DOM поверх холста; кадр двигает
- * только transform и opacity.
+ * для HP и урона. Цвета стихий — лишь у готовых способностей, на полосках карточек выбора и на печатях со знаком
+ * стихии (имя над HP, карточки выбора). DOM поверх холста; кадр двигает только transform и opacity.
  */
 .ch,
 .es {
@@ -10,6 +10,8 @@
   --ch-ink: #1d1b16;
   --ch-ink-soft: rgba(29, 27, 22, 0.28);
   --ch-muted: #6b665a;
+  /* серый для цифр на промывке поверх мира (ячейки): над тёмным миром --ch-muted дал бы 3,2 : 1, этот — от 4,9 */
+  --ch-muted-wash: #4f4b41;
   --ch-red: #c8322a;
   --ch-red-dry: rgba(200, 50, 42, 0.32);
   --ch-fire: #ff7a1a;
@@ -244,9 +246,48 @@
   }
 }
 .ch-elem {
-  margin: 0 0 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 4px 2px;
   font: 700 22px/1 var(--ch-head);
   text-shadow: var(--ch-halo);
+}
+/*
+ * Печать стихии (Р10): круг цветом стихии со знаком тушью (hud/glyphs.ts) — цвет стихии не бывает один, Воздух и Вода
+ * различимы по форме. Кайма бумаги отделяет печать от тёмного мира. Тушь на любом из четырёх цветов — от 5,3 : 1;
+ * знак — 72 % печати (от 14 px).
+ */
+.ch-seal {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 48% 52% 50% 50% / 52% 48% 52% 48%;
+  background: var(--ch-seal, var(--ch-ink-soft));
+  box-shadow: 0 0 0 1.5px rgba(246, 243, 234, 0.85);
+  color: var(--ch-ink);
+}
+/* стихия ещё не известна — печати нет */
+.ch-seal:empty {
+  display: none;
+}
+.ch-seal svg {
+  width: 72%;
+  height: 72%;
+}
+.ch-seal[data-element="fire"] {
+  --ch-seal: var(--ch-fire);
+}
+.ch-seal[data-element="earth"] {
+  --ch-seal: var(--ch-earth);
+}
+.ch-seal[data-element="air"] {
+  --ch-seal: var(--ch-air);
+}
+.ch-seal[data-element="water"] {
+  --ch-seal: var(--ch-water);
 }
 .ch-hp {
   position: relative;
@@ -406,7 +447,7 @@
 .ch-glyph.is-count {
   font: 700 19px/1 var(--ch-ui);
   font-variant-numeric: tabular-nums;
-  color: var(--ch-muted);
+  color: var(--ch-muted-wash);
 }
 .ch-name {
   margin-top: 3px;
@@ -435,7 +476,7 @@
   padding: 0 4px;
   border-radius: 3px;
   background: var(--ch-paper-wash);
-  color: var(--ch-muted);
+  color: var(--ch-muted-wash);
   font: 700 10px/1.25 var(--ch-ui);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -674,9 +715,10 @@
   from { transform: scaleX(1); }
   to { transform: scaleX(0); }
 }
+/* подсказка лежит на промывке поверх мира, а не на карточке: тушь мягче, как девиз (даже над чёрным — 5,2 : 1) */
 .es-hint {
   margin: 16px 0 0;
-  color: var(--ch-muted);
+  color: #3a372f;
   font-size: 14px;
 }
 @media (prefers-reduced-motion: reduce) {

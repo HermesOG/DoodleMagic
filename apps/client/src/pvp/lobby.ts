@@ -1,4 +1,5 @@
 import { ELEMENTS, ELEMENT_INFO, PVP, type Element } from "@doodlemagic/sim";
+import { glyphSvg } from "../hud/glyphs";
 import { NAME_MAX, cleanName } from "../net/protocol";
 import type { JoinError, JoinStatus } from "./clientDriver";
 import "./pvp.css";
@@ -52,6 +53,11 @@ export function saveName(name: string, store: NameStore | null = browserStore())
   } catch {
     // приватный режим: имя просто не запомнится
   }
+}
+
+/** Строка под названием игры: хост собирает друзей, игрока по ссылке позвали (без имени: хоста ещё не знаем). */
+export function taglineText(host: boolean): string {
+  return host ? "Дуэль магов с друзьями" : "Тебя зовут на дуэль магов";
 }
 
 /** «В комнате: Искра 42, Валун 17»; пусто — «В комнате пока никого». */
@@ -125,15 +131,20 @@ function el<T extends HTMLElement>(root: HTMLElement, selector: string): T {
 }
 
 /**
- * Лобби комнаты: имя, четыре карточки стихий и «Войти». У хоста сверху «Комната ABCD», ссылка и «Скопировать ссылку»
- * (буфер обмена; отказал — ссылка выделяется для Ctrl+C), ниже — кто уже в комнате. Текст из данных — только через
- * textContent и value.
+ * Лобби комнаты: сверху — полоса неба с названием игры, ниже имя, четыре карточки стихий (печать со знаком, имя, девиз)
+ * и «Войти» тушью со знаком выбранной стихии. У хоста ещё «Комната ABCD», ссылка и «Скопировать ссылку» (буфер обмена;
+ * отказал — ссылка выделяется для Ctrl+C) и кто уже в комнате. Текст из данных — только через textContent и value.
  */
 export function createLobby(o: LobbyOptions): Lobby {
   const card = (e: Element): string => `<button class="pvp-el" type="button" data-element="${e}" aria-pressed="false">
-      <span class="pvp-el-name"></span><span class="pvp-el-motto"></span></button>`;
+      <span class="pvp-seal pvp-el-seal" data-element="${e}" aria-hidden="true">${glyphSvg(e)}</span>
+      <span class="pvp-el-text"><span class="pvp-el-name"></span><span class="pvp-el-motto"></span></span></button>`;
   o.root.innerHTML = `
     <section class="card pvp-lobby">
+      <header class="pvp-sky">
+        <p class="pvp-game">DoodleMagic</p>
+        <p class="pvp-tagline"></p>
+      </header>
       <h1 class="pvp-title"></h1>
       <div class="pvp-room" hidden>
         <div class="pvp-link-row">
@@ -146,7 +157,7 @@ export function createLobby(o: LobbyOptions): Lobby {
         <label>Имя <input class="pvp-name" type="text" maxlength="${NAME_MAX}" autocomplete="nickname" spellcheck="false" /></label>
         <span class="pvp-label">Стихия</span>
         <div class="pvp-els">${ELEMENTS.map(card).join("")}</div>
-        <button class="btn pvp-enter" type="submit">Войти</button>
+        <button class="btn pvp-enter" type="submit"><span class="pvp-seal pvp-enter-seal" aria-hidden="true"></span>Войти</button>
         <p class="pvp-status muted" role="status"></p>
         <p class="pvp-error bad" role="alert" hidden></p>
         <div class="actions pvp-retry" hidden>
@@ -164,10 +175,12 @@ export function createLobby(o: LobbyOptions): Lobby {
   const form = el<HTMLFormElement>(o.root, ".pvp-form");
   const name = el<HTMLInputElement>(o.root, ".pvp-name");
   const enter = el<HTMLButtonElement>(o.root, ".pvp-enter");
+  const enterSeal = el(o.root, ".pvp-enter-seal");
   const status = el(o.root, ".pvp-status");
   const error = el(o.root, ".pvp-error");
   const retry = el(o.root, ".pvp-retry");
 
+  el(o.root, ".pvp-tagline").textContent = taglineText(o.host);
   title.textContent = o.host ? "Бой с друзьями" : `Комната ${o.code ?? ""}`;
   name.value = o.name;
   roster.textContent = rosterText([]);
@@ -180,6 +193,9 @@ export function createLobby(o: LobbyOptions): Lobby {
       b.classList.toggle("is-on", on);
       b.setAttribute("aria-pressed", String(on));
     }
+    // на «Войти» — печать выбранной стихии: кнопка тушью, цвет стихии — только у печати рядом со знаком
+    enterSeal.dataset.element = element;
+    enterSeal.innerHTML = glyphSvg(element);
   };
   for (const b of cards) {
     const e: Element = ELEMENTS.find((x) => x === b.dataset.element) ?? "fire";

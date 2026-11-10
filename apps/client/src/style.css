@@ -1,5 +1,9 @@
+/*
+ * Обычные страницы: лобби /play, «Нет такой комнаты», тест связи. Всегда бумага, как меню полигона (раунд 4, Р10):
+ * у игры один язык, тёмной темы ОС нет. Киноварь (--accent) — только опасность и ошибки, кнопки — тушью.
+ */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #f6f3ea;
   --fg: #1d1b16;
   --muted: #6b665a;
@@ -7,19 +11,6 @@
   --line: #d9d3c3;
   --accent: #c8322a;
   --good: #2f8a4a;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #15140f;
-    --fg: #eeeae0;
-    --muted: #a39d8f;
-    --card: #1f1d17;
-    --line: #38352c;
-    --accent: #ff6b5e;
-    --good: #5fbf7a;
-  }
-  /* светлый акцент как фон кнопки: белый текст на нём даёт 2.8:1, тёмный — 6.6:1 */
-  .btn:not(.secondary) { color: var(--bg); }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -33,9 +24,10 @@ input, select {
   display: block; width: 100%; margin-top: 6px; padding: 10px 12px; font: inherit;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
 }
+/* кнопка тушью, текст бумагой (15,5 : 1) */
 .btn {
-  display: inline-block; padding: 12px 20px; border: 0; border-radius: 8px; background: var(--accent);
-  color: #fff; font: inherit; font-weight: 700; cursor: pointer; text-decoration: none;
+  display: inline-block; padding: 12px 20px; border: 0; border-radius: 8px; background: var(--fg);
+  color: var(--bg); font: inherit; font-weight: 700; cursor: pointer; text-decoration: none;
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }

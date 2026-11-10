@@ -1,9 +1,10 @@
 import { ELEMENT_INFO, PVP, TICK_HZ, statusFlags, unitById, type Element, type GameState, type UnitId } from "@doodlemagic/sim";
 import type { Frame } from "../game/driver";
 import type { GameView } from "../game/view";
+import { glyphSvg } from "../hud/glyphs";
 import {
-  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine, withKnownNames,
-  type ScoreRow,
+  ELEMENT_KEYS, boardTitle, countdownDigit, deathLine, feedElement, feedLine, resultsHint, resultsTitle, respawnLine, scoreRows, topLine,
+  withKnownNames, type ScoreRow,
 } from "./format";
 import type { PvpDriver } from "./hostDriver";
 import "./pvp.css";
@@ -20,6 +21,8 @@ const FEED_FADE_S = 0.5;
 /** Таблица (Tab, итоги) пересобирается не чаще: пинги меняются раз в секунду, счёт — по снапшотам. */
 const BOARD_EVERY_S = 0.25;
 const COLUMNS = ["№", "Маг", "Стихия", "Очки", "Убийства", "Сбросы", "Смерти", "Пинг"] as const;
+/** Столбец «Стихия»: в ячейке печать со знаком и имя стихии. */
+const ELEMENT_COL = 2;
 const EASE_OUT = "cubic-bezier(0.2, 0.8, 0.2, 1)";
 
 /** Пишет в DOM, только когда значение изменилось: интерфейс обновляется каждый кадр, а меняется редко. */
@@ -34,10 +37,26 @@ function div(className: string): HTMLDivElement {
   d.className = className;
   return d;
 }
+function span(className = ""): HTMLSpanElement {
+  const s = document.createElement("span");
+  if (className) s.className = className;
+  return s;
+}
+/** Печать стихии (pvp.css .pvp-seal): круг цветом стихии со знаком; e — сразу со знаком, null — пустая. */
+function seal(e: Element | null): HTMLSpanElement {
+  const s = span("pvp-seal");
+  s.setAttribute("aria-hidden", "true");
+  if (e) setSeal(s, e);
+  return s;
+}
+function setSeal(s: HTMLElement, e: Element): void {
+  s.dataset.element = e;
+  s.innerHTML = glyphSvg(e);
+}
 
 interface Table {
   el: HTMLTableElement;
-  rows: { tr: HTMLTableRowElement; cells: HTMLTableCellElement[] }[];
+  rows: { tr: HTMLTableRowElement; cells: HTMLTableCellElement[]; seal: HTMLSpanElement; elName: HTMLSpanElement }[];
 }
 /** Таблица магов: шапка и PVP.maxPlayers строк, лишние скрыты. */
 function createTable(): Table {
@@ -54,29 +73,43 @@ function createTable(): Table {
   const rows = Array.from({ length: PVP.maxPlayers }, () => {
     const tr = body.insertRow();
     tr.hidden = true;
-    return { tr, cells: COLUMNS.map(() => tr.insertCell()) };
+    const cells = COLUMNS.map(() => tr.insertCell());
+    const s = seal(null);
+    s.hidden = true;
+    const elName = span();
+    cells[ELEMENT_COL]!.append(s, elName);
+    return { tr, cells, seal: s, elName };
   });
   return { el, rows };
 }
-/** Строки — в ячейки; текст только через textContent: имена набирают игроки. */
+/** Строки — в ячейки; текст только через textContent: имена набирают игроки. Печать стихии пишется со сменой стихии. */
 function fillTable(t: Table, rows: readonly ScoreRow[]): void {
   for (let k = 0; k < t.rows.length; k++) {
-    const { tr, cells } = t.rows[k]!;
+    const { tr, cells, seal: s, elName } = t.rows[k]!;
     const r = rows[k];
     setHidden(tr, !r);
     if (!r) continue;
     tr.classList.toggle("is-mine", r.mine);
-    const el = cells[2]!;
-    const element = r.element ?? "";
-    if (el.dataset.element !== element) el.dataset.element = element;
-    const values = [String(r.place), r.name, r.element ? ELEMENT_INFO[r.element].name : "—", String(r.score), String(r.kills), String(r.falls), String(r.deaths), r.ping];
-    for (let i = 0; i < values.length; i++) setText(cells[i]!, values[i]!);
+    // вышедший маг — без печати, «—»
+    if (s.dataset.element !== (r.element ?? "")) {
+      if (r.element) setSeal(s, r.element);
+      else s.dataset.element = "";
+      setHidden(s, !r.element);
+    }
+    setText(elName, r.element ? ELEMENT_INFO[r.element].name : "—");
+    const values = [String(r.place), r.name, null, String(r.score), String(r.kills), String(r.falls), String(r.deaths), r.ping];
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v != null) setText(cells[i]!, v);
+    }
   }
 }
 
 interface FeedItem {
   text: string;
   mine: boolean;
+  /** Стихия того, с чьего имени начинается строка (feedElement); null — строка без печати. */
+  element: Element | null;
   at: number;
 }
 
@@ -102,11 +135,17 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
   const feedEls = Array.from({ length: FEED_LINES }, () => {
     const d = div("mh-feed-line");
     d.hidden = true;
+    const s = seal(null);
+    s.hidden = true;
+    const text = span();
+    d.append(s, text);
     feedBox.append(d);
-    return d;
+    return { el: d, seal: s, text };
   });
   /** Последняя записанная прозрачность строки килфида ("" — без угасания). */
   const feedOpacity = feedEls.map(() => "");
+  /** Последняя записанная стихия печати строки ("" — без печати): разметку знака пишем только при смене. */
+  const feedSeal = feedEls.map(() => "");
   const death = div("mh-death");
   death.hidden = true;
   const cause = div("mh-death-cause");
@@ -119,10 +158,11 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       dot.textContent = "·";
       choice.append(dot);
     }
-    const s = document.createElement("span");
-    s.className = "mh-chip";
+    const s = span("mh-chip");
     s.dataset.element = k.element;
-    s.textContent = k.label;
+    const label = span();
+    label.textContent = k.label;
+    s.append(seal(k.element), label);
     choice.append(s);
     return { el: s, element: k.element };
   });
@@ -221,12 +261,18 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
     // новые — сверху: просроченные в хвосте
     while (feed.length > 0 && nowS - feed[feed.length - 1]!.at >= FEED_S) feed.pop();
     for (let k = 0; k < FEED_LINES; k++) {
-      const el = feedEls[k]!;
+      const { el, seal: s, text } = feedEls[k]!;
       const item = feed[k];
       setHidden(el, !item);
       if (!item) continue;
-      setText(el, item.text);
+      setText(text, item.text);
       el.classList.toggle("is-mine", item.mine);
+      const element = item.element ?? "";
+      if (feedSeal[k] !== element) {
+        feedSeal[k] = element;
+        if (item.element) setSeal(s, item.element);
+        setHidden(s, !item.element);
+      }
       const left = FEED_S - (nowS - item.at);
       const opacity = left < FEED_FADE_S ? (Math.max(0, left) / FEED_FADE_S).toFixed(2) : "";
       // сравниваем с записанным, а не с el.style: браузер нормализует «0.50» в «0.5», и запись шла бы каждый кадр
@@ -271,13 +317,13 @@ export function createMatchHud(root: HTMLElement, driver: PvpDriver, view: GameV
       for (const ev of f.confirmed) {
         const line = feedLine(ev, names, id);
         if (!line) continue;
-        feed.unshift({ text: line.text, mine: line.mine, at: nowS });
+        feed.unshift({ text: line.text, mine: line.mine, element: feedElement(ev, c, names), at: nowS });
         fresh = true;
         if ((ev.type === "death" || ev.type === "fall") && ev.target === id) deathText = deathLine(ev, c, names);
       }
       if (feed.length > FEED_LINES) feed.length = FEED_LINES;
       renderFeed(nowS);
-      if (fresh && locked) stamp(feedEls[0]!, [{ opacity: 0, transform: "translateX(14px)" }, { opacity: 1, transform: "none" }], 180);
+      if (fresh && locked) stamp(feedEls[0]!.el, [{ opacity: 0, transform: "translateX(14px)" }, { opacity: 1, transform: "none" }], 180);
 
       renderTop(c, now, names);
 

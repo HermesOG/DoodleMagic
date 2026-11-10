@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NAME_MAX } from "../net/protocol";
 import {
-  NAME_KEY, enteredName, initialName, joinErrorText, joinStatusText, loadName, rosterText, saveName, type NameStore,
+  NAME_KEY, enteredName, initialName, joinErrorText, joinStatusText, loadName, rosterText, saveName, taglineText, type NameStore,
 } from "./lobby";
 
 /** Хранилище в памяти; broken — каждое обращение бросает (приватный режим). */
@@ -70,6 +70,11 @@ describe("loadName / saveName", () => {
 });
 
 describe("lobby texts", () => {
+  it("invites under the game title: the host gathers friends, the guest was called", () => {
+    expect(taglineText(true)).toBe("Дуэль магов с друзьями");
+    expect(taglineText(false)).toBe("Тебя зовут на дуэль магов");
+  });
+
   it("lists who is in the room", () => {
     expect(rosterText(["Искра 42", "Валун 17"])).toBe("В комнате: Искра 42, Валун 17");
     expect(rosterText([])).toBe("В комнате пока никого");
