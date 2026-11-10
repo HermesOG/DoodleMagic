@@ -75,7 +75,10 @@ function stonePillar(s: MatchState, t: TickCtx, u: Unit, inp: MatchInput): Rejec
   const at = aimGround(s, t, u.id, c.yaw, c.pitch, P.rangeM);
   if (!at) return "noTarget";
   const pos = u.move.body.pos;
-  const self = Math.hypot(at.x - pos.x, at.z - pos.z) < P.selfRadiusM;
+  // Math.hypot в sim не используем: его результат разный в разных JS-движках (см. vec.ts)
+  const sx = at.x - pos.x;
+  const sz = at.z - pos.z;
+  const self = Math.sqrt(sx * sx + sz * sz) < P.selfRadiusM;
   const cx = self ? pos.x : at.x;
   const cz = self ? pos.z : at.z;
   const base = self ? pos.y : at.y;
